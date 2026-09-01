@@ -26,7 +26,7 @@ externals:
   Elmira/Libs/LibCustomGlow-1.0: https://github.com/Stanzilla/LibCustomGlow
   Elmira/Libs/LibSerialize: https://github.com/rossnichols/LibSerialize
   Elmira/Libs/LibDeflate: https://github.com/SafeteeWoW/LibDeflate
-  Elmira/Libs/LibClassicSwingTimerAPI: https://github.com/WeakAuras/LibClassicSwingTimerAPI
+  Elmira/Libs/LibClassicSwingTimerAPI: https://github.com/Ralgathor/LibClassicSwingTimerAPI
 ignore:
   - tests
   - docs

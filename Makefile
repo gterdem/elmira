@@ -2,6 +2,10 @@ LUA         ?= lua5.1
 WOW_ADDONS  ?= /mnt/d/Blizzard/World of Warcraft/_classic_era_/Interface/AddOns
 BUILDS_DIR  ?= /mnt/d/Addon-Testing/Elmira/builds
 REPORTS_DIR ?= /mnt/d/Addon-Testing/Elmira/reports
+# The packager's move-folders step (.pkgmeta) collapses the checkout's Elmira/ core folder onto
+# .release/Elmira directly, as a sibling of .release/Elmira_Paladin, .release/Elmira_ElvUI, etc —
+# confirmed empirically via a full dry run, not assumed. The release zip lands at this same
+# top level.
 PKGDIR      := .release
 ADDONS      := $(notdir $(wildcard Elmira*))
 
@@ -17,22 +21,17 @@ lint:
 	@# docs/staging/README.md. Exercised live once that data is restored.
 	@! grep -rn "UNVERIFIED(" Elmira_*/ 2>/dev/null || (echo "ERROR: unverified IDs remain" && exit 1)
 
+# -d skips uploading (this is always a local dry run); no -z, so a zip IS produced (that flag means
+# "skip zip creation", the opposite of what its letter suggests) — release-zip depends on it existing.
 package:
-	curl -s https://raw.githubusercontent.com/BigWigsMods/packager/master/release.sh | bash -s -- -d -z
+	curl -s https://raw.githubusercontent.com/BigWigsMods/packager/master/release.sh | bash -s -- -d
 
 # Populates Elmira/Libs/ (gitignored) from a packager dry-run, for the dev-tree edit/reload loop.
-# Probes both candidate paths since .pkgmeta's move-folders behaviour for a self-named move
-# (Elmira/Elmira: Elmira) was unverified until the first `make package` dry run confirmed it.
 libs: package
 	@rm -rf Elmira/Libs
-	@if [ -d "$(PKGDIR)/Elmira/Libs" ]; then \
-		cp -r "$(PKGDIR)/Elmira/Libs" Elmira/Libs; \
-	elif [ -d "$(PKGDIR)/Elmira/Elmira/Libs" ]; then \
-		cp -r "$(PKGDIR)/Elmira/Elmira/Libs" Elmira/Libs; \
-	else \
-		echo "ERROR: no Libs/ found under $(PKGDIR)/Elmira — inspect the packager output" && exit 1; \
-	fi
-	@echo "Elmira/Libs/ populated from $(PKGDIR)."
+	@[ -d "$(PKGDIR)/Elmira/Libs" ] || (echo "ERROR: $(PKGDIR)/Elmira/Libs missing — inspect the packager output" && exit 1)
+	@cp -r "$(PKGDIR)/Elmira/Libs" Elmira/Libs
+	@echo "Elmira/Libs/ populated from $(PKGDIR)/Elmira/Libs."
 
 # Day-to-day /reload loop: copies the DEV TREE (not the packaged output) into the live AddOns
 # folder. Requires `make libs` at least once, or embeds.xml references libraries that don't exist
