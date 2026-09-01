@@ -1,0 +1,17 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Package and upload to CurseForge
+        uses: BigWigsMods/packager@v2
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}   # also attaches the zip to the GitHub release
+        with:
+          args: -w 0 -o 0   # disable WoWInterface and Wago uploads (CurseForge only)

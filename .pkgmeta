@@ -1,0 +1,39 @@
+package-as: Elmira
+enable-nolib-creation: no
+# Multi-addon repo: the packager copies every top-level addon folder; libraries are fetched into the core.
+move-folders:
+  Elmira/Elmira: Elmira
+  Elmira/Elmira_Paladin: Elmira_Paladin
+  Elmira/Elmira_ElvUI: Elmira_ElvUI
+  Elmira/Elmira_ItemRack: Elmira_ItemRack
+  Elmira/Elmira_WoWSims: Elmira_WoWSims
+  Elmira/Elmira_Insights: Elmira_Insights
+externals:
+  Elmira/Libs/LibStub: https://repos.wowace.com/wow/libstub/trunk
+  Elmira/Libs/CallbackHandler-1.0: https://repos.wowace.com/wow/callbackhandler/trunk/CallbackHandler-1.0
+  Elmira/Libs/AceAddon-3.0: https://repos.wowace.com/wow/ace3/trunk/AceAddon-3.0
+  Elmira/Libs/AceEvent-3.0: https://repos.wowace.com/wow/ace3/trunk/AceEvent-3.0
+  Elmira/Libs/AceTimer-3.0: https://repos.wowace.com/wow/ace3/trunk/AceTimer-3.0
+  Elmira/Libs/AceConsole-3.0: https://repos.wowace.com/wow/ace3/trunk/AceConsole-3.0
+  Elmira/Libs/AceDB-3.0: https://repos.wowace.com/wow/ace3/trunk/AceDB-3.0
+  Elmira/Libs/AceDBOptions-3.0: https://repos.wowace.com/wow/ace3/trunk/AceDBOptions-3.0
+  Elmira/Libs/AceGUI-3.0: https://repos.wowace.com/wow/ace3/trunk/AceGUI-3.0
+  Elmira/Libs/AceConfig-3.0: https://repos.wowace.com/wow/ace3/trunk/AceConfig-3.0
+  Elmira/Libs/AceLocale-3.0: https://repos.wowace.com/wow/ace3/trunk/AceLocale-3.0
+  Elmira/Libs/LibSharedMedia-3.0: https://repos.wowace.com/wow/libsharedmedia-3-0/trunk/LibSharedMedia-3.0
+  Elmira/Libs/LibDataBroker-1.1: https://github.com/tekkub/libdatabroker-1-1
+  Elmira/Libs/LibDBIcon-1.0: https://repos.wowace.com/wow/libdbicon-1-0/trunk/LibDBIcon-1.0
+  Elmira/Libs/LibCustomGlow-1.0: https://github.com/Stanzilla/LibCustomGlow
+  Elmira/Libs/LibSerialize: https://github.com/rossnichols/LibSerialize
+  Elmira/Libs/LibDeflate: https://github.com/SafeteeWoW/LibDeflate
+  Elmira/Libs/LibClassicSwingTimerAPI: https://github.com/WeakAuras/LibClassicSwingTimerAPI
+ignore:
+  - tests
+  - docs
+  - .claude
+  - .github
+  - Makefile
+  - .luacheckrc
+  - .editorconfig
+  - README.md
+  - collected
