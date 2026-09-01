@@ -1,0 +1,15 @@
+.release/
+Elmira/Libs/
+*.zip
+.DS_Store
+luacov.*
+.luacheckcache
+collected/
+# Private development material lives in the parent workspace, never here.
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+docs/
+research/
+README-WORKSPACE.md
+*.private.*
