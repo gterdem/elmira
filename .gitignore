@@ -5,6 +5,8 @@ Elmira/Libs/
 luacov.*
 .luacheckcache
 collected/
+# Personal scratch notes / checklists — never meant to be public, not build output either.
+.local/
 # Private development material lives in the parent workspace, never here.
 CLAUDE.md
 CLAUDE.local.md
