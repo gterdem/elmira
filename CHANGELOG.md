@@ -10,6 +10,11 @@
   (`Engine.pick`), `Core/Simulation.lua` (`Simulation.queue` with a pluggable time step). Added
   `level`, `rune` and `sealLinger` to the State contract so every documented condition has something
   to read. Headless: no in-game behaviour changes yet.
+- Overlay reworked before any of it was built (ADR-0009): screen-edge flares are opt-in peripheral
+  cues, off by default, firing when the now-slot *changes to* an opted-in spell — not a third mirror
+  of "what do I press" alongside the queue and bar glow. `db.profile.overlay` reshaped to
+  `{ cues = {} }` accordingly; no migration needed, since the old keys equalled their defaults and
+  AceDB never wrote them.
 - Fixed: `Elmira_ElvUI` and `Elmira_ItemRack` registered nothing on login. `## LoadWith:` loaded
   them alongside ElvUI/ItemRack, ahead of their own `## Dependencies: Elmira`, so their file
   scope saw a nil `Elmira` global and their guard returned. Both TOCs now rely on hard

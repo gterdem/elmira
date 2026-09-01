@@ -24,7 +24,14 @@ DB.defaults = {
     activeBuild = false,
     anchor = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },
     glow = { enabled = true, style = "PIXEL", barGlow = true },
-    overlay = { enabled = false, intensity = 0.5 },
+    -- ADR-0009: the overlay has no global "on" switch. `cues` maps a cue id to the user's settings
+    -- for it, so an empty table is a quiet default install, and a cue only ever exists because the
+    -- user opted it in. Reshaped at M1 with no dbVersion migration: the previous
+    -- `{enabled=false, intensity=0.5}` both equalled their defaults, so AceDB never wrote either key
+    -- to disk, and no UI existed yet that could have changed them.
+    overlay = { cues = {} },
+    -- Master mute only. A cue carries its own sound name, on the same opt-in set and the same
+    -- change-to trigger as its flare.
     sounds = { enabled = false },
     dbVersion = 0,
   },
