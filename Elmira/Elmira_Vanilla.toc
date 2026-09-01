@@ -1,0 +1,23 @@
+## Interface: 11509
+## Title: Elmira
+## Notes: Your next cast, in order. Rotation queue with glow effects, gear-aware builds, setup wizard. Displays suggestions only — never automates casting.
+## Author: Valermus
+## Version: @project-version@
+## SavedVariables: ElmiraDB
+## OptionalDeps: ElvUI, ItemRack, Details, LibStub, CallbackHandler-1.0, Ace3, LibSharedMedia-3.0, LibDBIcon-1.0, LibCustomGlow-1.0, LibSerialize, LibDeflate, LibClassicSwingTimerAPI
+## X-License: MIT
+## X-Category: Combat
+
+embeds.xml
+
+# Adapters (State contract first) — Adapters\Vanilla.lua is the only file in Elmira/ that names a WoW global
+Adapters\Interface.lua
+Adapters\Vanilla.lua
+
+# Core — pure Lua, no WoW API (hard rule 3)
+Core\API.lua
+Core\DB.lua
+Core\Slash.lua
+
+# Entry point last
+Core\Init.lua
