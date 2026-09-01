@@ -1,0 +1,12 @@
+## Interface: 11509
+## Title: Elmira |cff00ff00[Paladin]|r
+## Notes: Paladin data pack for Elmira (builds, sets, souls, advice, catalog, leveling).
+## Author: Valermus
+## Dependencies: Elmira
+## LoadOnDemand: 1
+## X-Elmira-Class: PALADIN
+## Version: @project-version@
+
+# Data\*.lua are staged in the private workspace (docs/staging/data/Elmira_Paladin/) pending
+# id verification at M2 — see Elmira_Paladin/README.md. Register.lua guards against their absence.
+Register.lua

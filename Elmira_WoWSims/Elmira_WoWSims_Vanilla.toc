@@ -1,0 +1,10 @@
+## Interface: 11509
+## Title: Elmira |cff00ff00[WoWSims]|r
+## Notes: Export your character to WoWSims and import simulated rotations/gear back.
+## Author: Valermus
+## Dependencies: Elmira
+## OptionalDeps: WowSimsExporter
+## Version: @project-version@
+
+Exporter.lua
+APLImport.lua
