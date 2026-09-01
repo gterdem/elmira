@@ -17,7 +17,8 @@ Protection; seal twisting experimental) plus a Mage build to prove the engine is
 ## Features (v1.0 scope)
 - Queue of 1–5 upcoming actions with cooldown sweeps and keybind hints
 - Glow on the queue icon and on your action bar (ElvUI, default bars; more bar addons later)
-- Colour-keyed screen-edge flares and optional sounds per skill
+- Optional peripheral cues, off by default: opt individual spells or events into a screen-edge
+  flare or sound, for the moments you're watching the boss and not the UI
 - First-run setup wizard: detects your class, spec, weapon, runes and gear; offers current playstyles
 - Gear-aware builds: bonuses from set pieces *and* shoulder souls switch rotation lines on automatically
 - Gear advisor: which shoulder soul, runes and weapon type fit the build you're playing
