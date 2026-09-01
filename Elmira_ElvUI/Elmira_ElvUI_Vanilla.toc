@@ -3,7 +3,6 @@
 ## Notes: Glows the ElvUI action-bar button for the suggested spell.
 ## Author: Valermus
 ## Dependencies: Elmira, ElvUI
-## LoadWith: ElvUI
 ## Version: @project-version@
 
 Provider.lua

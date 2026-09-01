@@ -3,7 +3,6 @@
 ## Notes: Switches the active Elmira build when an ItemRack set is equipped.
 ## Author: Valermus
 ## Dependencies: Elmira, ItemRack
-## LoadWith: ItemRack
 ## Version: @project-version@
 
 Override.lua

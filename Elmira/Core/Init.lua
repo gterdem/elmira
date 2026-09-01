@@ -12,9 +12,11 @@ ns = ns or _G.__ELM_NS or {}
 local NA = LibStub("AceAddon-3.0"):NewAddon(ADDON, "AceEvent-3.0", "AceTimer-3.0", "AceConsole-3.0")
 ns.addon = NA
 
--- Published at FILE LOAD TIME, not inside OnInitialize. LoadWith/Dependencies modules run their own
--- file scope before anyone's ADDON_LOADED fires, and Elmira_Paladin/Register.lua reads Elmira.API at
--- file scope too — publishing inside OnInitialize would make that a nil index and crash on login.
+-- Published at FILE LOAD TIME, not inside OnInitialize. Dependency modules run their own file scope
+-- before anyone's ADDON_LOADED fires, and Elmira_Paladin/Register.lua reads Elmira.API at file scope
+-- too — publishing inside OnInitialize would make that a nil index and crash on login. This only
+-- helps modules the TOC actually orders after core: see docs/08-MODULE-API.md on why no module may
+-- use `## LoadWith:`.
 Elmira = NA
 Elmira.API = ns.API
 
