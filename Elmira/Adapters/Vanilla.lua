@@ -68,7 +68,7 @@ function Vanilla.describe()
     version = string.format("%s/%s", d.build or "?", d.revision or "?"),
     interface = d.interface,
     caps = Vanilla.capabilities(),
-    state = "null (M1)",
+    state = "null (M2)",
   }
 end
 

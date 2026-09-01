@@ -17,6 +17,9 @@ Adapters\Vanilla.lua
 # Core — pure Lua, no WoW API (hard rule 3)
 Core\API.lua
 Core\DB.lua
+Core\Schema.lua
+Core\Engine.lua
+Core\Simulation.lua
 Core\Slash.lua
 
 # Entry point last

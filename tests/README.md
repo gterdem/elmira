@@ -29,4 +29,11 @@ describe("...", function()
 end)
 ```
 
-Fixtures under `tests/fixtures/` mirror `Data/` with plain numeric IDs.
+Fixtures under `tests/fixtures/` mirror `Data/` in SHAPE only. Their numeric IDs are **synthetic**
+(sequential from 1000/2000) and deliberately not real game IDs — Core keys off the symbolic name and
+never reads `id`. Never copy an ID out of a fixture into `Data/`: every ID there needs a fetched
+Wowhead source (hard rule 2), and `make lint`'s `UNVERIFIED(` gate is scoped to `Elmira_*/`,
+so it cannot catch a fake ID that escapes from here.
+
+Current fixtures: `spells.lua` (spell records incl. `cost`, `cooldown`, `castTime`, `proc`,
+`cdVolatile`), `sets.lua` (returns `{sets=…, bonuses=…}`), `paladin_exodin.lua` (a build).

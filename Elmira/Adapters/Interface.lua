@@ -14,6 +14,15 @@ Interface.CONTRACT = {
   "targetType", "targetHPPct", "targetExists", "inCombat", "moving", "weapon", "setCount",
   "enchant", "bonus", "itemCooldown", "itemUsable", "seal", "swingRemaining", "ttd",
   "enemies", "mode", "latency",
+  -- Added at M1: docs/02-CONDITION-SCHEMA.md lists `level`, `rune`/`no_rune` and `seal_linger` as v1
+  -- condition types, but nothing in the contract could answer them. Adapters fill these in later
+  -- (runes M2, sealLinger M3b); until then newNullState()'s safe zeros mean such a condition reads
+  -- false rather than erroring.
+  "level", "rune", "sealLinger",
+  -- Also M1: the client knows a spell's real cooldown and cost better than any shipped table can,
+  -- because both track the rank the character actually has and neither goes stale on a tuning pass.
+  -- GetSpellBaseCooldown / GetSpellPowerCost are both present on Classic Era 1.15.9 (M2 wires them).
+  "baseCooldown", "powerCost",
 }
 
 Interface.CAPABILITIES = { "runes", "setAPI", "swing", "inspect", "nameplates", "engraving" }
@@ -65,6 +74,11 @@ function Interface.newNullState()
     enemies = function() return 1 end,
     mode = function() return "Single" end,
     latency = function() return 0 end,
+    level = function() return 0 end,
+    rune = function() return false end,
+    sealLinger = function() return nil end,
+    baseCooldown = function() return 0 end,
+    powerCost = function() return 0, nil end,
   }
 end
 

@@ -16,6 +16,8 @@ describe("Adapters.Interface (State contract)", function()
       "targetType", "targetHPPct", "targetExists", "inCombat", "moving", "weapon", "setCount",
       "enchant", "bonus", "itemCooldown", "itemUsable", "seal", "swingRemaining", "ttd",
       "enemies", "mode", "latency",
+      "level", "rune", "sealLinger",
+      "baseCooldown", "powerCost",
     }
     assert.same(expected, Interface.CONTRACT)
   end)
@@ -53,5 +55,44 @@ describe("Adapters.Interface (State contract)", function()
     assert.equal(0, cur); assert.equal(0, max)
     assert.equal("Single", s.mode())
     assert.equal(1, s.enemies())
+    assert.equal(0, s.level())
+    assert.is_false(s.rune())
+    assert.is_nil(s.sealLinger())
+    assert.equal(0, s.baseCooldown())
+    local amount, kind = s.powerCost()
+    assert.equal(0, amount); assert.is_nil(kind)
+  end)
+
+  -- The three M1 additions exist so a docs/02 condition has something to read. Guard the fixture
+  -- defects that made two older members untestable: castTime was pinned to 0, and enchant() read a
+  -- table new() never created.
+  it("lets fake_state carry cast times, enchants, runes, level and seal linger", function()
+    local s = FakeState.new{ castTime = { CONSECRATION = 2.5 }, enchants = { [16] = "SOUL_OF_THE_EXILE" },
+                             runes = { RUNE_ART_OF_WAR = true }, level = 42, sealLinger = "SEAL_OF_MARTYRDOM" }
+    assert.equal(2.5, s:castTime("CONSECRATION"))
+    assert.equal(0, s:castTime("JUDGEMENT"))
+    assert.equal("SOUL_OF_THE_EXILE", s:enchant(16))
+    assert.is_true(s:rune("RUNE_ART_OF_WAR"))
+    assert.is_false(s:rune("RUNE_CRUSADER_STRIKE"))
+    assert.equal(42, s:level())
+    assert.equal("SEAL_OF_MARTYRDOM", s:sealLinger())
+  end)
+
+  it("lets fake_state carry base cooldowns and power costs", function()
+    local s = FakeState.new{ baseCooldown = { EXORCISM = 15 },
+                             powerCost = { EXORCISM = 180, HOLY_WRATH = { 400, "MANA" } } }
+    assert.equal(15, s:baseCooldown("EXORCISM"))
+    assert.equal(0, s:baseCooldown("JUDGEMENT"))
+    local amount, kind = s:powerCost("EXORCISM")
+    assert.equal(180, amount); assert.equal("MANA", kind)
+    local a2, k2 = s:powerCost("HOLY_WRATH")
+    assert.equal(400, a2); assert.equal("MANA", k2)
+    assert.equal(0, (s:powerCost("JUDGEMENT")))
+  end)
+
+  it("defaults level to 60 and leaves seal linger empty", function()
+    local s = FakeState.new{}
+    assert.equal(60, s:level())
+    assert.is_nil(s:sealLinger())
   end)
 end)

@@ -51,3 +51,47 @@ describe("module TOCs", function()
     assert.is_not_nil(modules()["Elmira_Paladin"]:match("##%s*LoadOnDemand:%s*1"))
   end)
 end)
+
+-- A Core file missing from the TOC is invisible to every other test here: busted loads modules by
+-- path, so the suite stays green while the addon breaks in game. That is the same shape as the M0
+-- LoadWith bug — correct code, never loaded — so it gets the same treatment: a test that reads the
+-- real .toc bytes.
+describe("core TOC", function()
+  local function tocBody()
+    local f = assert(io.open("Elmira/Elmira_Vanilla.toc", "r"), "missing core TOC")
+    local s = f:read("*a"); f:close()
+    return s
+  end
+
+  local function sourceFiles()
+    local pipe = assert(io.popen("ls Elmira/Core/*.lua Elmira/Adapters/*.lua 2>/dev/null"))
+    local found = {}
+    for path in pipe:lines() do found[#found + 1] = path end
+    pipe:close()
+    assert.is_true(#found >= 6, "expected to discover Core/ and Adapters/ sources, found " .. #found)
+    return found
+  end
+
+  it("lists every Core and Adapters source file", function()
+    local body = tocBody()
+    for _, path in ipairs(sourceFiles()) do
+      -- TOC paths use backslashes: Elmira/Core/Engine.lua -> Core\Engine.lua
+      local entry = path:gsub("^Elmira/", ""):gsub("/", "\\")
+      assert.is_not_nil(body:match(entry:gsub("([%.%-\\])", "%%%1")),
+        entry .. " is missing from Elmira_Vanilla.toc; it would never load in game")
+    end
+  end)
+
+  it("loads Core/Init.lua last, since it publishes the Elmira global", function()
+    local body = tocBody()
+    local initAt = body:find("Core\\Init%.lua")
+    assert.is_not_nil(initAt, "Core\\Init.lua missing from the TOC")
+    for _, path in ipairs(sourceFiles()) do
+      local entry = path:gsub("^Elmira/", ""):gsub("/", "\\")
+      if entry ~= "Core\\Init.lua" then
+        local at = body:find(entry:gsub("([%.%-\\])", "%%%1"))
+        assert.is_true(at < initAt, entry .. " must load before Core\\Init.lua")
+      end
+    end
+  end)
+end)
