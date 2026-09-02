@@ -539,6 +539,13 @@ Slash.register{
 
 -- Not-yet-available verbs, in the order the project documents them, each honest about its milestone
 -- so `/elm` never claims a command it can't run.
+Slash.register{
+  key = "config", args = "", desc = ns.L["Open the options"], order = 99,
+  run = function()
+    if ns.Options and ns.Options.Open() then return { "Opening options." } end
+    return { "config: options are not loaded" }
+  end,
+}
 Slash.register{ key = "setup", desc = ns.L["Run the setup wizard"], order = 100, run = unavailableNamed("setup", 4) }
 Slash.register{
   key = "lock", desc = ns.L["Lock/unlock frames"], order = 101,

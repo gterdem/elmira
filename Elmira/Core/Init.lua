@@ -21,6 +21,23 @@ Elmira = NA
 Elmira.API = ns.API
 
 -- Overrides the no-op set in Core/API.lua, so a rejected registration is now visible in chat.
+-- AceConsole hardcodes `|cff33ff99<name>|r:` as its prefix (Libs/AceConsole-3.0:37), which is the
+-- colour every Ace addon prints in — Elmira looked like six other addons in the same chat frame.
+-- Overriding here rather than editing the library keeps the vendored copy pristine for the packager.
+-- `print` rather than DEFAULT_CHAT_FRAME:AddMessage: print is a standard Lua global that WoW routes
+-- to the default chat frame, so this needs no WoW-API exception. Naming a real frame here would have
+-- meant widening .luacheckrc's empty read_globals for Elmira/Core/, and that empty list IS hard
+-- rule 3 — worth more than the two characters it would have saved.
+function NA:Print(...)
+  local parts = {}
+  for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+  print(ns.Colors.prefix() .. ": " .. table.concat(parts, " "))
+end
+
+function NA:Printf(fmt, ...)
+  print(ns.Colors.prefix() .. ": " .. string.format(tostring(fmt), ...))
+end
+
 ns.log = function(fmt, ...) NA:Printf(fmt, ...) end
 
 -- Overrides the no-op in Core/Slash.lua. Only ONE snapshot is kept: the dump is a diagnostic, and
@@ -255,9 +272,49 @@ function NA:StartDisplay()
   ns.Queue.Create()
   ns.Queue.SetLocked(self.db.profile.locked)
   ns.Display.register("queue", ns.Queue.Render)
+  -- Registered even though every cue is off by default: the renderer costs one comparison per
+  -- render when nothing is opted in, and wiring it conditionally would mean the first opt-in
+  -- silently does nothing until a reload.
+  if ns.Overlay then
+    ns.Overlay.Create()
+    ns.Display.register("overlay", ns.Overlay.Render)
+  end
   if self.db.profile.enabled then
     ns.Display.Enable()
   end
+
+  if ns.Options then ns.Options.Register() end
+  self:SetupMinimapButton()
+end
+
+-- LibDataBroker object + LibDBIcon button. Both are already vendored. The icon is our own TGA
+-- rather than an `Interface\\Icons\\...` path: Classic Era ships a subset of retail's icons and a
+-- missing one renders as a green question mark, which is a silly way to discover a typo.
+function NA:SetupMinimapButton()
+  local LDB = LibStub and LibStub("LibDataBroker-1.1", true)
+  local DBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
+  if not (LDB and DBIcon) then return end
+
+  local obj = LDB:NewDataObject("Elmira", {
+    type = "launcher",
+    icon = "Interface\\AddOns\\Elmira\\media\\icon",
+    OnClick = function(_, button)
+      if button == "RightButton" then
+        if ns.Queue then ns.Queue.SetLocked(not ns.Queue.isLocked()) end
+      elseif ns.Options then
+        ns.Options.Open()
+      end
+    end,
+    OnTooltipShow = function(tt)
+      if not tt then return end
+      tt:AddLine(ns.Colors.prefix())
+      tt:AddLine(ns.L["Left-click: options"], 1, 1, 1)
+      tt:AddLine(ns.L["Right-click: lock/unlock the queue"], 1, 1, 1)
+    end,
+  })
+
+  self.db.global.minimap = self.db.global.minimap or {}
+  DBIcon:Register("Elmira", obj, self.db.global.minimap)
 end
 
 function NA:OnSlash(input)

@@ -54,7 +54,10 @@ files["Elmira_Paladin/"] = { read_globals = {} }
 -- applies to Register.lua and to any real code in a class pack — this exempts Data/ only.
 files["Elmira_Paladin/Data/"] = { read_globals = {}, max_line_length = false }
 
-files["Elmira_ElvUI/"] = { read_globals = { "ElvUI", "GetActionInfo", "GetMacroSpell", "CreateFrame" } }
+files["Elmira_ElvUI/"] = { read_globals = { "ElvUI", "GetActionInfo", "GetMacroSpell", "CreateFrame",
+  -- Blizzard parks an unbound button's hotkey text at this sentinel instead of clearing it, so a
+  -- provider that does not compare against it reports the range dot as a keybind.
+  "RANGE_INDICATOR" } }
 files["Elmira_ItemRack/"] = { read_globals = { "ItemRack", "ItemRackUser", "hooksecurefunc" } }
 files["Elmira_WoWSims/"] = { read_globals = { "C_AddOns" } }
 files["Elmira_Insights/"] = { read_globals = { "Details" } }

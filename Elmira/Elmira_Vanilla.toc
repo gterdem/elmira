@@ -32,6 +32,10 @@ Display\Driver.lua
 Display\Glow.lua
 Display\BarGlow.lua
 Display\Queue.lua
+Display\Overlay.lua
+
+# Options
+Options\Options.lua
 
 # Entry point last
 Core\Init.lua

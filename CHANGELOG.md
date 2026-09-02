@@ -1,5 +1,12 @@
 # Changelog
 ## Unreleased
+- Options at `/elm config` or the minimap button: how many icons, scale, lock, glow style, and
+  whether to glow your action bars too.
+- Screen-edge cues for the moments you are not looking at the UI. **Off unless you turn one on**,
+  one at a time — the build suggests a short list and you pick from it. A cue that cannot fire yet
+  is shown greyed out with the reason rather than quietly missing.
+- Elmira now glows the button on your ElvUI bars, not just its own icon.
+- The addon has its own icon and colour, so its messages no longer look like every other addon's.
 - **Elmira now shows you something.** A queue of your next casts appears on screen, largest first,
   with cooldown sweeps and your keybinds. Drag it with `/elm lock`; hover an icon to see why it is
   being suggested. Set how many icons to show, and the scale, in the options.
