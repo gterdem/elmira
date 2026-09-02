@@ -13,6 +13,7 @@ embeds.xml
 # Adapters (State contract first) — Adapters\Vanilla.lua is the only file in Elmira/ that names a WoW global
 Adapters\Interface.lua
 Adapters\Vanilla.lua
+Adapters\Collector.lua
 
 # Core — pure Lua, no WoW API (hard rule 3)
 Core\API.lua

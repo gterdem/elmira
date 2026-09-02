@@ -1,6 +1,5 @@
 -- Elmira_ElvUI/Provider.lua — registers a bar provider stub. Deliberately does NOT call
 -- LibStub("LibActionButton-1.0-ElvUI") yet: real button scanning is M3
--- (the ElvUI glow notes have the scan design).
 local ADDON = ...
 local API = Elmira and Elmira.API
 -- `## Dependencies: Elmira` makes core's presence an invariant, so reaching this branch means the

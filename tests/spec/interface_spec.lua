@@ -95,4 +95,22 @@ describe("Adapters.Interface (State contract)", function()
     assert.equal(60, s:level())
     assert.is_nil(s:sealLinger())
   end)
+
+  -- A capability the contract declares but no adapter answers reads as nil, which is
+  -- indistinguishable from "not supported" — the guard silently disables a feature instead of
+  -- erroring. Pin both directions so adding to one list and not the other fails here.
+  it("has every declared capability answered by the Vanilla adapter", function()
+    local Vanilla = helper.load("Elmira/Adapters/Vanilla.lua")
+    local caps = Vanilla.capabilities()
+    for _, name in ipairs(Interface.CAPABILITIES) do
+      assert.equal("boolean", type(caps[name]), "capability not declared by adapter: " .. name)
+    end
+    for name in pairs(caps) do
+      local known = false
+      for _, declared in ipairs(Interface.CAPABILITIES) do
+        if declared == name then known = true; break end
+      end
+      assert.is_true(known, "adapter declares a capability the contract does not list: " .. name)
+    end
+  end)
 end)

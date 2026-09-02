@@ -21,11 +21,16 @@ Interface.CONTRACT = {
   "level", "rune", "sealLinger",
   -- Also M1: the client knows a spell's real cooldown and cost better than any shipped table can,
   -- because both track the rank the character actually has and neither goes stale on a tuning pass.
-  -- GetSpellBaseCooldown / GetSpellPowerCost are both present on Classic Era 1.15.9 (M2 wires them).
+  -- GetSpellPowerCost delivers on that and tracks runes (345 -> 69 measured). GetSpellBaseCooldown
+  -- does NOT: it returned 15000 in all three gear states while Exorcism's real cooldown was 6.0 s,
+  -- so baseCooldown is fed by observing GetSpellCooldown and caching (docs/07 §9.1, §9.4). No
+  -- static fallback is safe, and a reading taken during the GCD must never be cached as a duration.
   "baseCooldown", "powerCost",
 }
 
-Interface.CAPABILITIES = { "runes", "setAPI", "swing", "inspect", "nameplates", "engraving" }
+-- docs/01 §2: class-specific accessors are optional members guarded by a capability flag, so Core
+-- can ask before calling rather than relying on a nil return. `seal` is the paladin case.
+Interface.CAPABILITIES = { "runes", "setAPI", "swing", "inspect", "nameplates", "engraving", "seal" }
 
 -- Checks that `state` implements every contract member as a callable. Both dot-style
 -- (state.now(state)) and colon-style (state:now()) implementations satisfy this, since both put a

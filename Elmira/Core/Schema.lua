@@ -377,6 +377,23 @@ function Schema.validate(build, ctx)
       if entry.spell and ctx.spells and ctx.spells[entry.spell] == nil then
         add(i, "spell '" .. entry.spell .. "' is not in the spells data pack")
       end
+      -- Simulation debits `spent[kind] = spent[kind] + amount`, so a non-numeric cost raises a Lua
+      -- error mid-queue instead of failing here. Wowhead states several paladin costs as a
+      -- percentage of base mana ("6% of base mana"), which is exactly the shape that slips in.
+      local costData = entry.spell and ctx.spells and ctx.spells[entry.spell]
+      if costData and costData.cost ~= nil then
+        if type(costData.cost) ~= "table" then
+          add(i, "spell '" .. entry.spell .. "' has a non-table cost")
+        else
+          for kind, amount in pairs(costData.cost) do
+            if type(amount) ~= "number" then
+              add(i, "spell '" .. entry.spell .. "' has a non-numeric " .. tostring(kind) ..
+                     " cost (" .. tostring(amount) .. "); costs are numbers, use state.powerCost() " ..
+                     "for values the client must supply")
+            end
+          end
+        end
+      end
       compileList(entry.when, ctx, function(msg) add(i, msg) end)
     end
   end

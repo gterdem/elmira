@@ -23,6 +23,18 @@ Elmira.API = ns.API
 -- Overrides the no-op set in Core/API.lua, so a rejected registration is now visible in chat.
 ns.log = function(fmt, ...) NA:Printf(fmt, ...) end
 
+-- Overrides the no-op in Core/Slash.lua. Only ONE snapshot is kept: the dump is a diagnostic, and
+-- docs/12 budgets SavedVariables size — an append-forever history would quietly grow the SV file
+-- every time the command is run. `global` scope, not `profile`: the snapshot describes the
+-- character, not a set of user preferences, and must survive a profile switch.
+-- Returns whether it actually saved. A silent `return` here while Slash prints "saved to ..." makes
+-- failure indistinguishable from success — the pattern this codebase keeps getting caught by.
+ns.saveDump = function(snapshot)
+  if not (NA.db and NA.db.global) then return false end
+  NA.db.global.dump = snapshot
+  return true
+end
+
 -- AceDB profile scope is deliberately character-specific (no third `true` argument to :New, unlike
 -- the wow-addon-dev skill's generic skeleton): profile.activeBuild is class-specific, so a paladin
 -- and a mage sharing one "Default" profile would fight over the same key.
@@ -45,8 +57,23 @@ function NA:OnProfileChanged()
   ns.DB.migrateProfile(self.db.profile)
 end
 
+-- Order matters: loadClassPack() triggers the pack's Register.lua at file scope, which is what calls
+-- API.RegisterDataPack. Only after that has run can the adapter be given real data, so attaching
+-- earlier would silently bind an empty pack and every symbolic key would resolve to nil forever.
 function NA:OnEnable()
-  ns.Adapter.loadClassPack(ns.Adapter.playerClass())
+  local class = ns.Adapter.playerClass()
+  ns.Adapter.loadClassPack(class)
+
+  local pack = class and ns.API.GetProviders("dataPacks")[class]
+  if not pack then
+    ns.log("Elmira: no data pack registered for %s; running with a null state.", tostring(class))
+  elseif not ns.Adapter.attachPack then
+    -- Distinct from "no pack": the data arrived but the adapter is too old to take it. Reporting
+    -- both as "no data pack" would send the next reader hunting the wrong problem.
+    ns.log("Elmira: adapter cannot accept a data pack (no attachPack); running with a null state.")
+  else
+    ns.Adapter.attachPack(pack)
+  end
 end
 
 function NA:OnSlash(input)

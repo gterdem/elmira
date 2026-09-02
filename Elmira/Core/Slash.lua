@@ -8,6 +8,9 @@ local ADDON, ns = ...
 ns = ns or _G.__ELM_NS or {}
 -- Defensive: normally Core/API.lua sets this first, but Slash.lua stays testable in isolation too.
 ns.L = ns.L or setmetatable({}, { __index = function(_, k) return k end })
+-- Core/Init.lua owns the AceDB handle and replaces this; the no-op keeps `debug dump` callable in a
+-- spec (and harmless before OnInitialize) instead of erroring on a nil global.
+ns.saveDump = ns.saveDump or function() end
 
 local Slash = {}
 local entries = {}
@@ -38,7 +41,7 @@ end
 Slash.register{ key = "help", desc = ns.L["Show this help"], order = 0, run = helpLines }
 
 Slash.register{
-  key = "debug", args = "state|bars|perf", desc = ns.L["Diagnostics"], order = 10,
+  key = "debug", args = "state|bars|perf|dump", desc = ns.L["Diagnostics"], order = 10,
   run = function(rest)
     local sub = rest and rest:match("^(%S+)")
     if sub == "state" then
@@ -66,8 +69,37 @@ Slash.register{
         "updates: 0", -- nothing ticks before M3
         "allocations/frame: n/a (M3)",
       }
+    elseif sub == "dump" then
+      -- Writes a full character snapshot to SavedVariables for offline analysis (docs/01 §4a).
+      -- Slash stays WoW-API-free: Collector does every client read, exactly as `state` delegates
+      -- to ns.Adapter.describe().
+      local Collector = ns.Collector
+      if not Collector then return { "dump: collector not loaded" } end
+      local packs = ns.API and ns.API.GetProviders("dataPacks") or {}
+      local class = ns.Adapter and ns.Adapter.playerClass and ns.Adapter.playerClass()
+      local pack = class and packs[class] or nil
+      if not pack then
+        return { string.format("dump: no data pack registered for %s", tostring(class)) }
+      end
+      local snapshot = Collector.snapshot(pack)
+      local saved = ns.saveDump(snapshot)
+      local lines = Collector.format(snapshot)
+      local mismatches = Collector.mismatchCount(snapshot)
+      lines[#lines + 1] = ""
+      -- Name the actual file. WoW names a SavedVariables file after the ADDON (Elmira.lua); ElmiraDB
+      -- is only the variable inside it, and looking for ElmiraDB.lua finds nothing. Chat also
+      -- truncates a full dump, so the file is the real transport, not the copy buffer.
+      lines[#lines + 1] = string.format("%d rune slot(s) disagree with our data.", mismatches)
+      if saved then
+        lines[#lines + 1] = "Chat truncates this; the full snapshot is saved to "
+          .. "WTF/Account/<ACCOUNT>/SavedVariables/Elmira.lua -- /reload or log out to flush it."
+      else
+        lines[#lines + 1] = "WARNING: could not save the snapshot (no database yet). "
+          .. "What you see above is all there is."
+      end
+      return lines
     end
-    return { "Usage: /elm debug state|bars|perf" }
+    return { "Usage: /elm debug state|bars|perf|dump" }
   end,
 }
 

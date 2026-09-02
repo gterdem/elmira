@@ -901,4 +901,25 @@ describe("Core.Schema (docs/02-CONDITION-SCHEMA.md, ADR-0002)", function()
       assert.is_not_nil(out.entries[2].when)
     end)
   end)
+
+  -- A percentage string ("6% of base mana") is what Wowhead gives for several paladin abilities, and
+  -- Simulation's `spent[kind] + amount` turns it into a Lua error mid-queue rather than a load-time
+  -- failure. ADR-0002's rule is that bad data fails at validation, so pin it here.
+  it("rejects a non-numeric spell cost with a useful message", function()
+    local build = { schema = 1, key = "TEST", name = "Test", class = "PALADIN",
+                    entries = { { spell = "JUDGEMENT", when = {} } } }
+    local c = ctx(); c.spells.JUDGEMENT = { id = 1, cost = { mana = "6% of base mana" } }
+    local ok, errors = Schema.validate(build, c)
+    assert.is_false(ok)
+    local text = table.concat(Schema.errorLines(errors), "\n")
+    assert.truthy(text:find("non%-numeric"), text)
+    assert.truthy(text:find("mana"), text)
+  end)
+
+  it("accepts a numeric spell cost", function()
+    local build = { schema = 1, key = "TEST", name = "Test", class = "PALADIN",
+                    entries = { { spell = "EXORCISM", when = {} } } }
+    local c = ctx(); c.spells.EXORCISM = { id = 1, cost = { mana = 345 } }
+    assert.is_true((Schema.validate(build, c)))
+  end)
 end)

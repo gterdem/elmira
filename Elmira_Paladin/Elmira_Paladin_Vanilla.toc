@@ -7,6 +7,15 @@
 ## X-Elmira-Class: PALADIN
 ## Version: @project-version@
 
-# Data\*.lua are staged in the private workspace (docs/staging/data/Elmira_Paladin/) pending
-# id verification at M2 — see Elmira_Paladin/README.md. Register.lua guards against their absence.
+# Data before Register.lua: Register.lua reads ns.Data.SoD at file scope and returns early if it is
+# absent, so any file listed after it would be loaded but never handed to core.
+# Spells before Sets/Souls: nothing enforces that ordering today, but the bonus tables reference
+# spell keys and reading them in dependency order keeps a future guard honest.
+Data\Spells.lua
+Data\Sets.lua
+Data\Souls.lua
+Data\Catalog.lua
+Data\Advice\Paladin.lua
+Data\Builds\Paladin_Exodin.lua
+
 Register.lua

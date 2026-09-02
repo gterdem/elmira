@@ -16,9 +16,10 @@ test:
 
 lint:
 	luacheck . --no-color
-	@# Armed against Elmira_*/ (data packs and builds). Currently matches nothing because
-	@# Elmira_Paladin/Data/ is staged in the private workspace pending id verification at M2 — see
-	@# docs/staging/README.md. Exercised live once that data is restored.
+	@# Armed against Elmira_*/ (data packs and builds). Live since M2 restored Elmira_Paladin/Data/,
+	@# so this now guards real shipped ids rather than an empty directory. Note it also fires on the
+	@# `local function UNVERIFIED` scaffold and on prose mentioning the marker, which is why both are
+	@# stripped on restore rather than left in place.
 	@! grep -rn "UNVERIFIED(" Elmira_*/ 2>/dev/null || (echo "ERROR: unverified IDs remain" && exit 1)
 
 # -d skips uploading (this is always a local dry run); no -z, so a zip IS produced (that flag means

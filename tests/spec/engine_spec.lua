@@ -1,7 +1,7 @@
 -- tests/spec/engine_spec.lua — Core/Engine.lua (docs/01-ARCHITECTURE.md §3, docs/02-CONDITION-SCHEMA.md,
 -- ADR-0006). Headless: no WoW globals, tests/fake_state.lua stands in for the adapter.
 --
--- Restored from docs/staging/tests/engine_spec.lua (docs/staging/README.md) with its two documented
+-- Restored from the pre-M1 sketch, with its two documented
 -- defects fixed:
 --   1. `package.path` munging + `require("fake_state")` + a hand-set `_G.__ELM_NS` -> tests/helper.lua.
 --   2. The proc test asserted on ART_OF_WAR_BUFF, which tests/fixtures/spells.lua does NOT flag
