@@ -21,6 +21,16 @@ ns.Data.SoD.Spells = {
 
   -- Seals (castable) — used by `seal`/`no_seal` conditions via the active-seal buff
   SEAL_OF_MARTYRDOM   = { id = 407798, src = "https://www.wowhead.com/classic/spell=407798", seal = true },
+  -- 407798 and 407799 are BOTH named "Seal of Martyrdom" with the same icon (135961) on Wowhead,
+  -- which is why id verification came back ambiguous. The live client separates them and Wowhead
+  -- cannot: GetSpellInfo maxRange is 0 for 407798 (self-cast -- the seal you press) and 100 for
+  -- 407799 (lands on the target). 407799 is the melee-triggered damage component: in the 2026-09-02
+  -- recording it fired 13x at 1.43-1.93 s intervals (swing cadence on a 2.10 weapon) and never once
+  -- before the first seal cast. `triggered` marks it as something the client reports on the player's
+  -- behalf, NOT a button press -- without that flag it is 13 rows of noise in any "did the player
+  -- follow the suggestion?" comparison. No build references it; it exists so the cast log can name
+  -- it. Client dumped 2026-09-02 (docs/07); Wowhead src satisfies the docs/03 sourcing rule.
+  SEAL_OF_MARTYRDOM_HIT = { id = 407799, src = "https://www.wowhead.com/classic/spell=407799", triggered = true },
   SEAL_OF_COMMAND     = { id = 20920,  src = "https://www.wowhead.com/classic/spell=20920",  seal = true },
 
   -- Auras / procs (buff IDs differ from ability IDs — verify via the skill)

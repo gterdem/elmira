@@ -1,5 +1,7 @@
 # Changelog
 ## Unreleased
+- The recording now names Seal of Martyrdom's damage effect instead of logging an unrecognised spell
+  id, and marks it as something the game casts for you rather than something you pressed.
 - Recording now captures **what you actually cast**, next to what Elmira was suggesting a moment
   earlier. Until the display lands there is no way to see a suggestion mid-fight and no way to type a
   command during one, so this is the only way to check whether the rotation advice is any good.
