@@ -109,5 +109,24 @@ function Recorder.status()
     state.dropped > 0 and string.format(" (%d dropped, oldest first)", state.dropped) or "")
 end
 
+-- PURE. The fingerprint that decides whether an automatic mark carries new information. It lived in
+-- Core/Init.lua, which no spec loads (it needs AceAddon), so breaking it was provably invisible —
+-- removing combat state from it changed no test. Anything worth getting right belongs somewhere a
+-- test can reach.
+function Recorder.fingerprint(mark)
+  if type(mark) ~= "table" then return nil end
+  local parts = {
+    tostring(mark.inCombat),
+    tostring(mark.soul),
+    mark.weapon and tostring(mark.weapon.itemID) or "-",
+  }
+  local keys = {}
+  for key in pairs(mark.sets or {}) do keys[#keys + 1] = key end
+  table.sort(keys) -- pairs() order is undefined; an unsorted key list would make the fingerprint
+                   -- unstable and defeat the dedupe at random.
+  for _, key in ipairs(keys) do parts[#parts + 1] = key .. "=" .. tostring(mark.sets[key]) end
+  return table.concat(parts, "|")
+end
+
 ns.Recorder = Recorder
 return Recorder

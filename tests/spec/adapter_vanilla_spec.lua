@@ -339,6 +339,24 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
     end)
   end)
 
+  -- Two recordings reported combat=false on every mark, including ones taken at combat start.
+  -- InCombatLockdown answers a different question and is not set when PLAYER_REGEN_DISABLED fires.
+  describe("inCombat() — the player's combat state, not UI lockdown", function()
+    it("reports combat from UnitAffectingCombat", function()
+      mock.affectingCombat = true
+      mock.inCombat = false -- lockdown not yet set, as at the instant combat begins
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_true(state:inCombat(),
+        "must read UnitAffectingCombat; lockdown lags the start of combat")
+    end)
+
+    it("reports out of combat when the player is not fighting", function()
+      mock.affectingCombat = false
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_false(state:inCombat())
+    end)
+  end)
+
   -- ============================================================ 7. weapon() — base/item speed only
   describe("weapon() — the base/item speed used for build selection (docs/01 §2, §4)", function()
     it("reports a 2H weapon's item speed and id from the main-hand slot (16)", function()
@@ -596,12 +614,15 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
   end)
 
   describe("inCombat() / moving()", function()
-    it("forwards InCombatLockdown()", function()
-      mock.inCombat = true
+    -- Was "forwards InCombatLockdown()", written from docs/01 §2 back when it named no API. Two live
+    -- recordings then reported combat=false at combat start, because lockdown answers a different
+    -- question. docs/01 now names UnitAffectingCombat explicitly.
+    it("forwards UnitAffectingCombat(player)", function()
+      mock.affectingCombat = true
       local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
       assert.is_true(state:inCombat())
-      mock.inCombat = false
-      assert.is_false(Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture()).inCombat())
+      mock.affectingCombat = false
+      assert.is_false(Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture()):inCombat())
     end)
 
     it("is moving when GetUnitSpeed(player) is above zero", function()

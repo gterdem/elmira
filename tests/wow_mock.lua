@@ -39,6 +39,7 @@ local function defaults()
     speed = 0,
     health = { 100, 100 },
     inCombat = false,
+    affectingCombat = false,   -- UnitAffectingCombat: the real "is the player fighting" answer
     targetExists = true,       -- was hardcoded true, so "no target" could never be tested
     itemCooldowns = {},        -- [slot] = { start, duration }; was hardcoded (0,0)
     -- Weapon tooltips live in tooltipLines too; base speed is only readable there.
@@ -140,6 +141,10 @@ function GetInventoryItemCooldown(u, slot)
 end
 function IsUsableItem(id) return true end
 function InCombatLockdown() return M.inCombat end
+-- Distinct from lockdown on purpose: the adapter must use this one, and a mock that aliased them
+-- would let the wrong API keep passing. `combatLockdown` defaults to inCombat unless a spec splits
+-- them, which is the case that reproduces PLAYER_REGEN_DISABLED firing before lockdown is set.
+function UnitAffectingCombat(unit) return M.affectingCombat end
 
 function GetItemInfo(id)
   local info = M.itemInfo[id]

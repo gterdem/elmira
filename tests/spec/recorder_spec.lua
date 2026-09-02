@@ -156,6 +156,56 @@ describe("Core.Recorder", function()
       assert.is_false(called)
     end)
 
+    -- The dedupe was added to strip repeated combat pairs, and promptly stripped the combat
+    -- transitions themselves because the fingerprint only described gear.
+    it("does not dedupe across a combat transition", function()
+      Recorder.start(0)
+      Recorder.mark("combat-start", 1, capture(), "true|gearA")
+      assert.is_true(Recorder.mark("combat-end", 2, capture(), "false|gearA"),
+        "combat state is part of what makes a mark worth keeping")
+      assert.equal(2, Recorder.count())
+    end)
+
+    describe("fingerprint", function()
+      -- Each of these is a state the acceptance run has to be able to tell apart.
+      it("changes when combat state changes", function()
+        local a = Recorder.fingerprint({ inCombat = true, sets = { T3 = 4 } })
+        local b = Recorder.fingerprint({ inCombat = false, sets = { T3 = 4 } })
+        assert.is_not.equal(a, b, "a combat transition must not be deduped away")
+      end)
+
+      it("changes when a set count changes", function()
+        assert.is_not.equal(Recorder.fingerprint({ sets = { T3 = 4 } }),
+                            Recorder.fingerprint({ sets = { T3 = 3 } }))
+      end)
+
+      it("changes when the soul changes", function()
+        assert.is_not.equal(Recorder.fingerprint({ soul = "EXILE" }),
+                            Recorder.fingerprint({ soul = nil }))
+      end)
+
+      it("changes when the weapon changes", function()
+        assert.is_not.equal(Recorder.fingerprint({ weapon = { itemID = 1 } }),
+                            Recorder.fingerprint({ weapon = { itemID = 2 } }))
+      end)
+
+      it("is identical for two genuinely identical states", function()
+        assert.equal(Recorder.fingerprint({ inCombat = false, soul = "EXILE", sets = { T3 = 4, T2 = 1 } }),
+                     Recorder.fingerprint({ inCombat = false, soul = "EXILE", sets = { T2 = 1, T3 = 4 } }))
+      end)
+
+    -- pairs() order is undefined, so an unsorted key list would dedupe at random. Building the same
+    -- literal repeatedly does NOT test this — Lua hashes it the same way every time — so assert the
+    -- property directly: the set section must come out in sorted order.
+      it("emits set keys in sorted order, so the fingerprint is stable", function()
+        local fp = Recorder.fingerprint({ sets = { ZEBRA = 1, ALPHA = 2, MIKE = 3 } })
+        local order = {}
+        for key in fp:gmatch("(%u+)=%d") do order[#order + 1] = key end
+        assert.same({ "ALPHA", "MIKE", "ZEBRA" }, order,
+          "unsorted keys would make the fingerprint depend on pairs() order")
+      end)
+    end)
+
     it("reports deduped count in the payload", function()
       Recorder.start(0)
       Recorder.mark("a", 1, capture(), "gearA")

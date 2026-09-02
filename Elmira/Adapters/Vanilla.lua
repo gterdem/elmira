@@ -256,7 +256,15 @@ function Vanilla.newState(spells, sets, souls, bonusDefs)
     return (UnitHealth("target") / max) * 100
   end
 
-  function S:inCombat() return InCombatLockdown() == true end
+  -- UnitAffectingCombat, NOT InCombatLockdown. The latter reports whether the UI is in protected-
+  -- function lockdown — related, but not the same question, and it is not yet set at the instant
+  -- PLAYER_REGEN_DISABLED fires. Every mark in the first two recordings reported combat=false,
+  -- including the ones taken at combat start (docs/07 §9.16). Lockdown remains the right check
+  -- before touching a secure frame; it is the wrong answer for "is the player fighting".
+  function S:inCombat()
+    if UnitAffectingCombat then return UnitAffectingCombat("player") == true end
+    return InCombatLockdown() == true
+  end
   function S:moving() return (GetUnitSpeed("player") or 0) > 0 end
 
   -- Takes a SLOT and returns a table, matching Schema.lua's `C.weapon`: it calls state:weapon(slot)

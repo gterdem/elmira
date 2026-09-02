@@ -88,14 +88,8 @@ function NA:RecordAuto(label)
   -- dummy otherwise buries the gear states in identical combat snapshots.
   local mark = ns.captureMark(pack)
   if not mark then return end
-  local parts = { tostring(mark.soul), mark.weapon and tostring(mark.weapon.itemID) or "-" }
-  local setKeys = {}
-  for key in pairs(mark.sets or {}) do setKeys[#setKeys + 1] = key end
-  table.sort(setKeys)
-  for _, key in ipairs(setKeys) do parts[#parts + 1] = key .. "=" .. tostring(mark.sets[key]) end
-  local fingerprint = table.concat(parts, "|")
-
-  ns.Recorder.mark(label, ns.now and ns.now() or 0, function() return mark end, fingerprint)
+  ns.Recorder.mark(label, ns.now and ns.now() or 0, function() return mark end,
+    ns.Recorder.fingerprint(mark))
 end
 
 function NA:OnCombatStart() self:RecordAuto("combat-start") end

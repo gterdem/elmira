@@ -21,7 +21,7 @@ local WOW_API = {
   "UnitAura", "UnitPower", "UnitPowerMax", "UnitCreatureType", "UnitExists", "UnitHealth",
   "UnitHealthMax", "GetUnitSpeed", "GetInventoryItemID", "GetInventoryItemLink",
   "GetInventoryItemCooldown", "IsUsableItem", "GetItemInfo", "UnitAttackSpeed", "GetTalentTabInfo",
-  "GetActiveTalentGroup", "GetActionInfo", "GetMacroSpell", "InCombatLockdown", "WOW_PROJECT_ID",
+  "GetActiveTalentGroup", "GetActionInfo", "GetMacroSpell", "InCombatLockdown", "UnitAffectingCombat", "WOW_PROJECT_ID",
   "WOW_PROJECT_CLASSIC", "GetBuildInfo", "GetAddOnMetadata", "C_Engraving", "C_AddOns", "UnitClass", "UnitLevel",
   "UnitName", "GetRealmName", "hooksecurefunc", "Enum", "strsplit", "strjoin", "unpack", "bit",
   "UIParent", "GameTooltip", "CreateFrame", "PlaySoundFile",
@@ -72,6 +72,6 @@ files["tests/"] = {
     -- M2 additions, for the adapter surface.
     "IsPlayerSpell", "IsSpellKnown", "GetSpellPowerCost", "AuraUtil", "UnitHealth", "UnitHealthMax",
     "UnitLevel", "UnitClass", "GetUnitSpeed", "GetInventoryItemLink", "GetItemInfo",
-    "GetTalentTabInfo", "C_Engraving", "UIParent",
+    "GetTalentTabInfo", "C_Engraving", "UIParent", "UnitAffectingCombat",
   },
 }
