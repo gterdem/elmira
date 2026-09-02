@@ -112,6 +112,22 @@ local function newVirtualState(real)
     return left, cap
   end
 
+  -- M3b. Without this the delegation loop below hands back the LIVE seconds-to-next-swing at every
+  -- simulated slot, so a `swing` condition three casts into the future is evaluated against the
+  -- present — the same class of error as the cooldown that did not tick down, and just as invisible.
+  --
+  -- Time passing brings the swing closer. Once the simulated clock passes it, this answers nil: the
+  -- State contract has no member for the swing PERIOD, so we genuinely do not know when the one
+  -- after it lands, and docs/02 makes nil the honest answer rather than a guess. A twist build is
+  -- therefore reachable in slot 1 and in any slot before the swing, and never on invented timing.
+  function v:swingRemaining()
+    local live = real:swingRemaining()
+    if live == nil then return nil end
+    local left = live - self.elapsed
+    if left < 0 then return nil end
+    return left
+  end
+
   -- Everything not overridden above delegates. Written as an explicit loop over the contract rather
   -- than __index so the proxy stays a plain table with plain methods — an __index metatable here
   -- would put a metamethod call on the hot path for every condition evaluated in every slot.
@@ -211,6 +227,11 @@ function Simulation.queue(build, state, depth)
   end
   return out
 end
+
+-- Exposed for specs. The virtual state is where the simulation's subtle bugs live — a cooldown that
+-- did not tick down, a seal that never changed, a swing time frozen at "now" — and each of those was
+-- found only after it reached the game. Asserting on it directly is worth one line of surface.
+Simulation.newVirtualState = newVirtualState
 
 ns.Simulation = Simulation
 return Simulation

@@ -28,6 +28,9 @@ local WOW_API = {
   -- M2: GetSpellPowerCost tracks runes (345 -> 69 verified in game, docs/07 §9.3), unlike
   -- GetSpellBaseCooldown which is unusable and deliberately absent from this list.
   "GetSpellPowerCost", "AuraUtil",
+  -- M3b: GetNetStats gives the world-server round trip, which is the reaction lead subtracted from
+  -- swing timing. LibStub is named here because Adapters/Swing.lua fetches the swing library.
+  "GetNetStats", "LibStub",
 }
 
 -- Core is pure Lua: naming a WoW global anywhere under Elmira/Core/ is a lint ERROR, by omission.
@@ -85,5 +88,7 @@ files["tests/"] = {
     "IsPlayerSpell", "IsSpellKnown", "GetSpellPowerCost", "AuraUtil", "UnitHealth", "UnitHealthMax",
     "UnitLevel", "UnitClass", "GetUnitSpeed", "GetInventoryItemLink", "GetItemInfo",
     "GetTalentTabInfo", "C_Engraving", "UIParent", "UnitAffectingCombat",
+    -- M3b: the swing adapter reads GetNetStats and reaches its library through LibStub.
+    "GetNetStats",
   },
 }

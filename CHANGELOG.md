@@ -1,5 +1,15 @@
 # Changelog
 ## Unreleased
+- Elmira can now read your **swing timer** (via LibClassicSwingTimerAPI), which is what seal-twisting
+  builds need. Nothing shipped uses it yet — the twist and stacking builds arrive later — but
+  `/elm debug swing` shows what it can see, and says why when it cannot see anything: no library, no
+  swing observed yet, or a stale reading because you are standing still.
+- Suggestions projected a few casts ahead now age the swing timer with them, instead of asking "how
+  long until my next swing" and getting the answer for right now.
+- The seal-twist window ships as a **sourced** number rather than a remembered one. Blizzard's hotfix
+  note says the replaced seal lasts "a short time" and gives no figure, so the 0.4s Elmira uses is
+  taken from the wowsims simulator and labelled as such. If it is ever removed, twisting goes inert
+  rather than falling back to a guess.
 - Fixed: the bar glow missed any spell whose **rank** on your bar differs from the one Elmira ships.
   Classic gives every rank its own spell id, so a bar holding Exorcism (Rank 5) never matched — for
   that spell the glow simply never appeared, with no error anywhere. Buttons are now matched by name

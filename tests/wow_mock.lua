@@ -48,6 +48,9 @@ local function defaults()
     targetExists = true,       -- was hardcoded true, so "no target" could never be tested
     itemCooldowns = {},        -- [slot] = { start, duration }; was hardcoded (0,0)
     -- Weapon tooltips live in tooltipLines too; base speed is only readable there.
+    -- World-server round trip in ms, what GetNetStats reports 4th. Non-zero by default would make
+    -- every swing spec depend on it silently, so it starts at 0 and a spec that cares sets it.
+    latency = 0,
     actionInfo = {},           -- [slot] = { kind, id }, e.g. {"spell", 415073} or {"macro", 3}
     macroSpells = {},          -- [macroIndex] = spellID; nil means the macro resolves to nothing
   }
@@ -223,6 +226,10 @@ function CreateFrame(frameType, name, parent, template)
   end
   return setmetatable(frame, { __index = function() return function() end end })
 end
+
+-- down, up, lagHome, lagWorld. Only the 4th is ever read: home latency is the chat/realm server and
+-- has nothing to do with when a swing lands.
+function GetNetStats() return 0, 0, 0, M.latency end
 
 UIParent = {}
 Enum = { PowerType = { Mana = 0, Rage = 1, Energy = 3 } }

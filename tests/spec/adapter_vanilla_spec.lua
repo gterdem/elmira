@@ -720,4 +720,117 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.equal(0, amount); assert.is_nil(kind)
     end)
   end)
+
+  -- M3b. `swingRemaining` and `sealLinger` were `return nil` stubs from M1 to M3 while Schema
+  -- happily compiled conditions against them — correct code reading a dead accessor, which is this
+  -- codebase's signature defect. These pin the wiring AND, more importantly, the cases that must
+  -- keep answering nil.
+  describe("swing timing (M3b)", function()
+    local function withSwing(remaining)
+      helper.ns().Swing = {
+        available = function() return true end,
+        remaining = function(_, latency) return remaining, latency end,
+      }
+    end
+
+    it("delegates swingRemaining to the swing adapter", function()
+      withSwing(1.25)
+      local state = Vanilla.newState(spellsFixture())
+      assert.equal(1.25, state:swingRemaining())
+    end)
+
+    it("answers nil when no swing adapter is loaded at all", function()
+      helper.ns().Swing = nil
+      local state = Vanilla.newState(spellsFixture())
+      assert.is_nil(state:swingRemaining())
+    end)
+
+    it("reports the swing capability from the library, not from a constant", function()
+      helper.ns().Swing = { available = function() return true end }
+      assert.is_true(Vanilla.capabilities().swing)
+      helper.ns().Swing = { available = function() return false end }
+      assert.is_false(Vanilla.capabilities().swing)
+      helper.ns().Swing = nil
+      assert.is_false(Vanilla.capabilities().swing)
+    end)
+
+    it("reads world latency, never home latency", function()
+      mock.latency = 120
+      local state = Vanilla.newState(spellsFixture())
+      assert.equal(120, state:latency())
+    end)
+  end)
+
+  describe("seal linger (M3b)", function()
+    local SEALS = {
+      SEAL_OF_MARTYRDOM = { id = 407798, seal = true },
+      SEAL_OF_RIGHTEOUSNESS = { id = 21084, seal = true },
+    }
+
+    local function sealUp(name)
+      mock.auras.player = name and { { name = name, spellID = name == "SoM" and 407798 or 21084 } } or {}
+    end
+
+    -- The adapter matches auras by the pack's spell name, so give the mock matching names.
+    local function stateWithWindow(window)
+      mock.spellNames[407798] = "SoM"
+      mock.spellNames[21084] = "SoR"
+      mock.knownSpells[407798], mock.knownSpells[21084] = true, true
+      return Vanilla.newState(SEALS, nil, nil, nil, window)
+    end
+
+    it("answers nil when the data pack ships no sourced window", function()
+      -- Deliberate: a guessed timing constant would mis-time every twist silently. No source, no
+      -- window, no linger — and the condition simply reads false.
+      local state = stateWithWindow(nil)
+      mock.time = 10
+      sealUp("SoM")
+      state:seal()
+      mock.time = 11
+      sealUp("SoR")
+      assert.is_nil(state:sealLinger())
+    end)
+
+    it("names the OUTGOING seal while the window is open", function()
+      local state = stateWithWindow(0.4)
+      mock.time = 10
+      sealUp("SoM")
+      assert.equal("SEAL_OF_MARTYRDOM", state:seal())
+      mock.time = 10.1
+      sealUp("SoR")
+      assert.equal("SEAL_OF_RIGHTEOUSNESS", state:seal())
+      assert.equal("SEAL_OF_MARTYRDOM", state:sealLinger())
+    end)
+
+    it("forgets it once the window closes", function()
+      local state = stateWithWindow(0.4)
+      mock.time = 10
+      sealUp("SoM")
+      state:seal()
+      mock.time = 10.1
+      sealUp("SoR")
+      state:seal()
+      mock.time = 10.6
+      assert.is_nil(state:sealLinger())
+    end)
+
+    it("an expiry is not a twist: a seal falling off with nothing replacing it never lingers", function()
+      local state = stateWithWindow(0.4)
+      mock.time = 10
+      sealUp("SoM")
+      state:seal()
+      mock.time = 10.1
+      sealUp(nil)
+      assert.is_nil(state:seal())
+      assert.is_nil(state:sealLinger())
+    end)
+
+    it("the first seal of a fight does not linger, because nothing was replaced", function()
+      local state = stateWithWindow(0.4)
+      mock.time = 10
+      sealUp("SoM")
+      assert.equal("SEAL_OF_MARTYRDOM", state:seal())
+      assert.is_nil(state:sealLinger())
+    end)
+  end)
 end)

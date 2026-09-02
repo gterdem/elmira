@@ -304,7 +304,7 @@ end
 Slash.register{ key = "help", desc = ns.L["Show this help"], order = 0, run = helpLines }
 
 Slash.register{
-  key = "debug", args = "state|bars|perf|dump|queue", desc = ns.L["Diagnostics"], order = 10,
+  key = "debug", args = "state|bars|swing|perf|dump|queue", desc = ns.L["Diagnostics"], order = 10,
   run = function(rest)
     local sub = rest and rest:match("^(%S+)")
     if sub == "state" then
@@ -376,6 +376,43 @@ Slash.register{
             and string.format("%d button(s) via %s (%s)%s", row.count, tostring(row.source),
                   row.button or "unnamed", row.bind and (" key=" .. row.bind) or "")
             or "NO VISIBLE BUTTON")
+      end
+      return lines
+    elseif sub == "swing" then
+      -- M3b has no UI of its own until M5d's twist readout, so this command IS the feature's only
+      -- visible surface. It names why there is no number rather than printing a blank, because
+      -- "no swing timer" and "swing timer that has not seen a swing" need different fixes.
+      if not ns.Swing then return { "swing: adapter not loaded" } end
+      local state = ns.API and ns.API.GetState()
+      local latency = 0
+      if state and state.latency then
+        local ok, ms = pcall(function() return state:latency() end)
+        if ok then latency = ms or 0 end
+      end
+      local d = ns.Swing.describe(ns.now(), latency)
+      local caps = ns.Adapter and ns.Adapter.capabilities and ns.Adapter.capabilities() or {}
+      local lines = {
+        string.format("%s: available=%s  capability swing=%s", d.library, tostring(d.available),
+          tostring(caps.swing)),
+        string.format("latency: %d ms (world)", latency),
+      }
+      if d.why then
+        lines[#lines + 1] = "no reading: " .. d.why
+      else
+        lines[#lines + 1] = string.format("swing: %.2fs speed, %.2fs remaining (latency-adjusted)",
+          d.speed or 0, d.remaining or 0)
+      end
+      -- The seal side of M3b. A window of nil is the shipped state until the twist research lands,
+      -- and saying so is the point: otherwise `seal_linger` reads false forever with no explanation.
+      local pack = ns.Display and ns.Display.currentPack()
+      local window = pack and pack.sealLingerWindow
+      if window then
+        lines[#lines + 1] = string.format("seal linger window: %.2fs (from the data pack)", window)
+        local linger = state and state.sealLinger and state:sealLinger()
+        lines[#lines + 1] = "lingering seal: " .. tostring(linger)
+      else
+        lines[#lines + 1] = "seal linger window: not set — the pack ships no sourced value, so every"
+        lines[#lines + 1] = "  seal_linger condition reads false (docs/02, deliberate)"
       end
       return lines
     elseif sub == "perf" then
@@ -494,7 +531,7 @@ Slash.register{
       end
       return lines
     end
-    return { "Usage: /elm debug state|bars|perf|dump|queue [build] [depth]" }
+    return { "Usage: /elm debug state|bars|swing|perf|dump|queue [build] [depth]" }
   end,
 }
 

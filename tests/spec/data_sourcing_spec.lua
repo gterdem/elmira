@@ -231,4 +231,55 @@ describe("Data sourcing policy (docs/03)", function()
     table.sort(dangling)
     assert.same({}, dangling)
   end)
+
+  -- A server-side TIMING constant is held to the same bar as an id, for the same reason: it is a
+  -- number the server owns, it changes on a tuning pass, and a remembered one is indistinguishable
+  -- from a verified one once it is in the file. The seal-twist window in particular is NOT
+  -- Blizzard-published — the hotfix note says "a short time" and gives no figure — so the file must
+  -- carry where 0.4 actually came from, or the next person to read it will assume Blizzard said so.
+  describe("timing constants", function()
+    local TIMING = DATA .. "Timing.lua"
+
+    local function timingSource()
+      local f = io.open(TIMING, "r")
+      if not f then return nil end
+      local text = f:read("*a")
+      f:close()
+      return text
+    end
+
+    it("ships a Timing.lua that loads and exposes only sourced numbers", function()
+      local text = timingSource()
+      assert.is_string(text, "Elmira_Paladin/Data/Timing.lua is missing")
+      local ns = { Data = { SoD = {} } }
+      local chunk = assert(loadfile(TIMING), TIMING .. " does not load")
+      chunk("Elmira_Paladin", ns)
+      local timing = ns.Data.SoD.Timing
+      assert.is_table(timing)
+      for key, value in pairs(timing) do
+        assert.equal("number", type(value), key .. " must be a number")
+        assert.is_true(value > 0, key .. " must be positive")
+      end
+    end)
+
+    it("carries a src line for every constant, and says the window is not Blizzard-published", function()
+      local text = timingSource()
+      assert.truthy(text:find("-- src:", 1, true), "Timing.lua carries no src line")
+      -- The provenance sentence is load-bearing, not decoration: 0.4 is sim-derived, and a reader who
+      -- thinks Blizzard published it will not re-measure when it drifts.
+      assert.truthy(text:lower():find("not blizzard%-confirmed")
+        or text:lower():find("no number"),
+        "Timing.lua must state that the linger window is not a published Blizzard figure")
+    end)
+
+    it("leaves the window inert rather than guessed if it is ever removed", function()
+      -- Documents the contract the adapter relies on: absent constant -> sealLinger() answers nil ->
+      -- seal_linger reads false. Nothing may substitute a default.
+      local ns = { Data = { SoD = {} } }
+      assert(loadfile(TIMING))("Elmira_Paladin", ns)
+      local window = ns.Data.SoD.Timing.sealLingerWindow
+      assert.is_number(window)
+      assert.is_true(window > 0 and window < 5, "a linger window outside 0-5s is a typo, not a tuning")
+    end)
+  end)
 end)

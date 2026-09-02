@@ -33,7 +33,10 @@ function Vanilla.capabilities()
     runes = hasEngravingAPI,   -- can we ASK about runes?
     engraving = engravingOn,   -- is engraving actually enabled for this character?
     setAPI = false,
-    swing = false,             -- Adapters/Swing.lua, M3b
+    -- Follows the library's REAL presence, not a hardcoded answer. A capability that cannot vary is
+    -- not a capability -- `runes`/`engraving` were derived from one expression until docs/07 §9.5
+    -- showed they genuinely disagree, and this flag was `false` in a file that shipped the wrapper.
+    swing = ns.Swing ~= nil and ns.Swing.available() == true,
     inspect = false,
     nameplates = false,
     seal = true,               -- paladin seal accessor; class-gated at M5 when other classes land
@@ -128,7 +131,7 @@ end
 
 -- Builds a fresh State over a data pack. Returning a new table rather than mutating a singleton
 -- keeps specs independent and means a profile/class switch cannot leave stale cached ids behind.
-function Vanilla.newState(spells, sets, souls, bonusDefs)
+function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   spells, sets, souls = spells or {}, sets or {}, souls or {}
 
   local S = {}
@@ -366,13 +369,39 @@ function Vanilla.newState(spells, sets, souls, bonusDefs)
 
   -- Which seal is currently up, as a symbolic key. Class-specific, so it is guarded by the `seal`
   -- capability flag (docs/01 §2).
-  function S:seal()
+  local function activeSeal()
     for key, record in pairs(spells) do
       if type(record) == "table" and record.seal then
         if findAura("player", key, "HELPFUL") then return key end
       end
     end
     return nil
+  end
+
+  -- Remembers the seal that was active last time anyone looked, and when it stopped being active, so
+  -- `sealLinger()` can name the OUTGOING seal. Updated from both accessors, because a twist build
+  -- reads `seal` on essentially every tick and there is no separate event that means "a seal was
+  -- replaced" — UNIT_AURA fires for everything.
+  --
+  -- Resolution is therefore bounded by how often the state is read (the display ticks at 10 Hz).
+  -- That is finer than any plausible linger window, but it is a real limit and not a hidden one:
+  -- a build that never evaluates a seal condition gets a memo that only updates when it asks.
+  local sealMemo = { key = nil, previous = nil, changedAt = nil }
+
+  local function pollSeal(now)
+    local current = activeSeal()
+    if current ~= sealMemo.key then
+      -- Only a REPLACEMENT lingers. A seal falling off with nothing taking its place is an expiry,
+      -- and docs/02 is explicit that expiry is not a twist.
+      sealMemo.previous = (sealMemo.key ~= nil and current ~= nil) and sealMemo.key or nil
+      sealMemo.changedAt = sealMemo.previous and now or nil
+      sealMemo.key = current
+    end
+    return sealMemo
+  end
+
+  function S:seal()
+    return pollSeal(GetTime()).key
   end
 
   function S:level() return UnitLevel("player") or 0 end
@@ -393,14 +422,39 @@ function Vanilla.newState(spells, sets, souls, bonusDefs)
     return false
   end
 
-  -- M3b (Adapters/Swing.lua). Documented safe zeros until then, so a condition reads false rather
-  -- than erroring.
-  function S:sealLinger() return nil end
-  function S:swingRemaining() return nil end
+  -- Seconds to the next main-hand swing, latency-compensated, or nil when unknown. All the judgement
+  -- about what "unknown" means lives in Adapters/Swing.lua; this is the seam Core sees.
+  function S:swingRemaining()
+    if not ns.Swing then return nil end
+    return ns.Swing.remaining(GetTime(), S:latency())
+  end
+
+  -- docs/02: the OUTGOING seal, while it can still proc — not the active one, and never a seal that
+  -- merely expired. The window length is a flavor constant the DATA PACK supplies with a `-- src:`
+  -- line; with no sourced value there is no window, so this answers nil and every `seal_linger`
+  -- condition reads false. That is deliberate: a guessed timing constant would silently mis-time
+  -- every twist, and hard rule 2's reasoning applies to server-side timings as much as to ids.
+  function S:sealLinger()
+    local window = tonumber(sealLingerWindow)
+    if not (window and window > 0) then return nil end
+    local memo = pollSeal(GetTime())
+    if not (memo.previous and memo.changedAt) then return nil end
+    if GetTime() - memo.changedAt > window then return nil end
+    return memo.previous
+  end
+
   function S:ttd() return nil end
   function S:enemies() return 1 end
   function S:mode() return "Single" end
-  function S:latency() return 0 end
+
+  -- Round-trip to the world server, in ms. Used as the reaction lead on swing timing: the player
+  -- needs to know when to PRESS, which is earlier than when the server swings. GetNetStats is
+  -- refreshed by the client every ~30s, so this is cheap to call per read.
+  function S:latency()
+    if not GetNetStats then return 0 end
+    local ok, _, _, _, world = pcall(GetNetStats)
+    return (ok and tonumber(world)) or 0
+  end
 
   return S
 end
@@ -408,7 +462,10 @@ end
 -- Rebuilt whenever the registered pack changes; Core reaches it through Elmira.API.GetState().
 function Vanilla.attachPack(pack)
   pack = pack or {}
-  Vanilla.state = Vanilla.newState(pack.spells, pack.sets, pack.souls, pack.bonuses)
+  -- `sealLingerWindow` is optional and usually absent: it is a sourced server-side timing constant,
+  -- and a pack that has not sourced one leaves seal twisting inert rather than mis-timed.
+  Vanilla.state = Vanilla.newState(pack.spells, pack.sets, pack.souls, pack.bonuses,
+                                   pack.sealLingerWindow)
   return Vanilla.state
 end
 

@@ -11,4 +11,6 @@ if not D then
   return
 end
 API.RegisterDataPack{ class = "PALADIN", flavor = "SoD", spells = D.Spells, sets = D.Sets, souls = D.Souls,
-                      bonuses = D.Bonuses, builds = D.Builds, catalog = D.Catalog, advice = D.Advice }
+                      bonuses = D.Bonuses, builds = D.Builds, catalog = D.Catalog, advice = D.Advice,
+                      -- Absent constant = feature inert, never a default guess (Data/Timing.lua).
+                      sealLingerWindow = D.Timing and D.Timing.sealLingerWindow }

@@ -407,4 +407,32 @@ describe("Simulation dependency and normalisation guards", function()
     assert.equal(2, #Simulation.queue(build, state, 4))
   end)
 
+
+  -- M3b. The virtual state models cooldowns and resources; before this it delegated swing timing
+  -- straight through, so every projected slot asked "how long until the swing" and got the answer
+  -- for RIGHT NOW. Same shape as the cooldown that did not tick down (docs/07 §9.15).
+  describe("swing timing advances with the simulated clock", function()
+    it("brings the swing closer as simulated time passes", function()
+      local state = FakeState.new{ gcd = 1.5, gcdDuration = 1.5, swing = 3.0 }
+      local v = Simulation.newVirtualState(state)
+      assert.equal(3.0, v:swingRemaining())
+      v.elapsed = 1.5
+      assert.equal(1.5, v:swingRemaining())
+    end)
+
+    it("answers nil once the simulated clock passes the swing, rather than a negative or a guess", function()
+      -- The contract carries no swing PERIOD, so the next swing's time is genuinely unknown.
+      local state = FakeState.new{ swing = 1.0 }
+      local v = Simulation.newVirtualState(state)
+      v.elapsed = 2.0
+      assert.is_nil(v:swingRemaining())
+    end)
+
+    it("stays nil when the real state has no swing data at all", function()
+      local v = Simulation.newVirtualState(FakeState.new{})
+      assert.is_nil(v:swingRemaining())
+      v.elapsed = 1.0
+      assert.is_nil(v:swingRemaining())
+    end)
+  end)
 end)
