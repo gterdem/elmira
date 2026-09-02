@@ -43,6 +43,8 @@ local function defaults()
     targetExists = true,       -- was hardcoded true, so "no target" could never be tested
     itemCooldowns = {},        -- [slot] = { start, duration }; was hardcoded (0,0)
     -- Weapon tooltips live in tooltipLines too; base speed is only readable there.
+    actionInfo = {},           -- [slot] = { kind, id }, e.g. {"spell", 415073} or {"macro", 3}
+    macroSpells = {},          -- [macroIndex] = spellID; nil means the macro resolves to nothing
   }
 end
 
@@ -140,6 +142,28 @@ function GetInventoryItemCooldown(u, slot)
   return 0, 0
 end
 function IsUsableItem(id) return true end
+
+-- BarGlow's Blizzard-scan fallback (Elmira/Display/BarGlow.lua): `type, id = GetActionInfo(slot)`.
+-- Only "spell" and "macro" kinds matter to the addon; the mock does not model the rest (item, etc.).
+-- Written through `_G.` rather than as a bare global function: these three are not in the
+-- `tests/` luacheck globals allowlist (.luacheckrc lives outside tests/, out of bounds for this
+-- change), and an explicit `_G.` field assignment is not a "setting non-standard global variable"
+-- warning the way an implicit bare assignment is.
+_G.GetActionInfo = function(slot)
+  local info = M.actionInfo[slot]
+  if not info then return nil end
+  return info[1], info[2]
+end
+
+-- A `#showtooltip` macro's resolved spell id, or nil if it casts nothing this addon recognises.
+_G.GetMacroSpell = function(index)
+  return M.macroSpells[index]
+end
+
+-- Blizzard parks an unbound button's hotkey text at this sentinel string instead of clearing it
+-- (docs/07 verified equivalent, see BarGlow.lua's own comment). Any plain non-empty placeholder
+-- serves the mock; the real client's exact glyph is not something a headless spec can compare.
+_G.RANGE_INDICATOR = "RANGE_INDICATOR_SENTINEL"
 function InCombatLockdown() return M.inCombat end
 -- Distinct from lockdown on purpose: the adapter must use this one, and a mock that aliased them
 -- would let the wrong API keep passing. `combatLockdown` defaults to inCombat unless a spec splits

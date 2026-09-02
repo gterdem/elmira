@@ -104,6 +104,23 @@ function Options.table()
             get = function() return profile().scale end,
             set = function(_, v) profile().scale = v; redraw() end,
           },
+          learning = {
+            type = "toggle", order = 5, width = "full", name = L["Learning mode"],
+            desc = L["Shows one suggestion at a time, larger, with the name of the rule that chose "
+                  .. "it. Sets icons to 1 and scale to 140% — both remain yours to change afterwards. "
+                  .. "Does not turn on any screen-edge cues; those stay your choice."],
+            get = function() return profile().learning end,
+            set = function(_, v)
+              local applied = ns.Queue.ApplyLearningPreset(v)
+              redraw()
+              -- Say what a preset changed. A toggle that silently rewrites two other settings the
+              -- user can see in the same panel is how a settings screen loses trust.
+              if applied then
+                ns.log("Learning mode on: icons set to %d, scale to %d%%.",
+                       applied.depth, math.floor(applied.scale * 100))
+              end
+            end,
+          },
           locked = {
             type = "toggle", order = 4, name = L["Lock position"],
             desc = L["Unlock to drag the queue. Same as /elm lock."],

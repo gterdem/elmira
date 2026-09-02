@@ -100,6 +100,14 @@ local function makeButton(index, parent)
   b.keybind:SetPoint("TOPRIGHT", 1, -1)
   b.keybind:SetTextColor(ns.Colors.MUTED.r, ns.Colors.MUTED.g, ns.Colors.MUTED.b)
 
+  -- Learning mode only (PRD F15): the name of the RULE that produced this suggestion, under the
+  -- icon. Says "Seal expiring" rather than just showing a Judgement icon, which is the difference
+  -- between memorising a sequence and learning why the sequence is what it is.
+  b.reason = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  b.reason:SetPoint("TOP", b, "BOTTOM", 0, -2)
+  b.reason:SetTextColor(ns.Colors.HIGHLIGHT.r, ns.Colors.HIGHLIGHT.g, ns.Colors.HIGHLIGHT.b)
+  b.reason:Hide()
+
   b:EnableMouse(true)   -- for the tooltip only; there is no OnClick and there must never be one
   b:SetScript("OnEnter", showWhy)
   b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -134,6 +142,18 @@ function Queue.Create()
   for i = 1, MAX_SLOTS do buttons[i] = makeButton(i, container) end
   Queue.Layout()
   return container
+end
+
+-- PRD F15. A preset, deliberately not a mode: it writes depth and scale as real settings the user
+-- can go on to change, rather than overriding them invisibly while the options still show the old
+-- values. Returns what it changed so the caller can say so out loud.
+function Queue.ApplyLearningPreset(on)
+  local p = profile()
+  p.learning = on and true or false
+  if not on then return nil end
+  p.depth = 1          -- one answer at a time; a queue teaches sequence, not reasoning
+  p.scale = 1.4
+  return { depth = 1, scale = 1.4 }
 end
 
 function Queue.Layout()
@@ -184,6 +204,7 @@ function Queue.Render(queue)
     if not slot then
       b.icon:SetTexture(nil)
       b.keybind:SetText("")
+      b.reason:Hide()
       b.cd:Clear()
       b:SetAlpha(0)
     else
@@ -207,6 +228,14 @@ function Queue.Render(queue)
 
       local bind = slot.spell and ns.BarGlow and ns.BarGlow.keybindFor(slot.spell)
       b.keybind:SetText(bind or "")
+
+      -- Only slot 1, and only while learning: a reason under every icon is a wall of text.
+      if p.learning and i == 1 and slot.label then
+        b.reason:SetText(slot.label)
+        b.reason:Show()
+      else
+        b.reason:Hide()
+      end
     end
   end
   for i = depth + 1, MAX_SLOTS do buttons[i].slot = nil end

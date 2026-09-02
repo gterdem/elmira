@@ -1,5 +1,7 @@
 # Changelog
 ## Unreleased
+- Learning mode: one suggestion at a time, larger, with the name of the rule that chose it underneath.
+  It sets icons to 1 and scale to 140% and says so, and both stay yours to change afterwards.
 - Options at `/elm config` or the minimap button: how many icons, scale, lock, glow style, and
   whether to glow your action bars too.
 - Screen-edge cues for the moments you are not looking at the UI. **Off unless you turn one on**,
