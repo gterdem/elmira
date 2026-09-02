@@ -50,31 +50,56 @@ end
 -- Hover "why" (PRD F18). Consumes the per-condition list Schema attaches to every compiled entry —
 -- built at M2 so a recording could explain a rejected suggestion, and it turns out to be exactly what
 -- this tooltip needs. Passing conditions in the palette's OK colour, failing ones in BAD.
+--
+-- The entry comes off the SLOT, not from a lookup into the compiled build. Simulation.queue already
+-- carries the entry it picked (`slot.entry`); the previous version indexed `compiled.entries` by
+-- `slot.index`, a field nothing has ever set, so the Why block was unreachable in every build and
+-- the tooltip silently degraded to the plain spell tooltip.
 local function showWhy(button)
   local slot = button.slot
-  if not (slot and slot.spell) or not GameTooltip then return end
-  local id = spellIDFor(slot.spell)
+  if not (slot and (slot.spell or slot.item)) or not GameTooltip then return end
+  local L = ns.L or {}
   GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+
+  local id = slot.spell and spellIDFor(slot.spell)
   if id and GameTooltip.SetSpellByID then
     GameTooltip:SetSpellByID(id)
+  elseif slot.item and GameTooltip.SetInventoryItem then
+    GameTooltip:SetInventoryItem("player", slot.item)
   else
-    GameTooltip:SetText(tostring(slot.spell))
-  end
-  if slot.label then
-    GameTooltip:AddLine(ns.Colors.wrap(ns.Colors.MUTED, slot.label))
+    GameTooltip:SetText(tostring(slot.spell or slot.item))
   end
 
-  local compiled = ns.Display and select(1, ns.Display.activeBuild())
-  local entry = compiled and slot.index and compiled.entries and compiled.entries[slot.index]
-  if entry and entry.conditions and #entry.conditions > 0 then
-    GameTooltip:AddLine(" ")
-    GameTooltip:AddLine(ns.L and ns.L["Why"] or "Why")
-    local state = ns.API.GetState()
-    for _, cond in ipairs(entry.conditions) do
-      local ok = cond.test and cond.test(state)
+  -- Which rule fired. An entry with no label still gets a line: "this is Elmira talking, and it had
+  -- no special reason" is information, and a tooltip that adds nothing at all reads as broken.
+  -- Not `local _, buildKey = ns.Display and ns.Display.activeBuild()`: `and` truncates a call to its
+  -- first return value, so the build key would silently always be nil. The same shape as the guards
+  -- that hid `ns.now` and the drag registration.
+  local buildKey
+  if ns.Display and ns.Display.activeBuild then
+    local _, key = ns.Display.activeBuild()
+    buildKey = key
+  end
+  GameTooltip:AddLine(ns.Colors.wrap(ns.Colors.MUTED,
+    slot.label or (L["Baseline"] or "Baseline")) ..
+    (buildKey and ns.Colors.wrap(ns.Colors.MUTED, "  ·  " .. buildKey) or ""))
+
+  GameTooltip:AddLine(" ")
+  GameTooltip:AddLine(L["Why"] or "Why")
+  local entry = slot.entry
+  local conditions = entry and entry.conditions
+  if conditions and #conditions > 0 then
+    local state = ns.API and ns.API.GetState()
+    for _, cond in ipairs(conditions) do
+      local ok = cond.test and state and cond.test(state)
       local color = ok and ns.Colors.OK or ns.Colors.BAD
       GameTooltip:AddLine("  " .. ns.Colors.wrap(color, cond.label or "?"))
     end
+  else
+    -- An unconditional entry is not unexplained: it is showing because everything ranked above it
+    -- was rejected or on cooldown. That is the whole answer, so say it.
+    GameTooltip:AddLine("  " .. ns.Colors.wrap(ns.Colors.MUTED,
+      L["No conditions — nothing above it was ready."] or "No conditions — nothing above it was ready."))
   end
   GameTooltip:Show()
 end
@@ -108,15 +133,37 @@ local function makeButton(index, parent)
   b.reason:SetTextColor(ns.Colors.HIGHLIGHT.r, ns.Colors.HIGHLIGHT.g, ns.Colors.HIGHLIGHT.b)
   b.reason:Hide()
 
-  b:EnableMouse(true)   -- for the tooltip only; there is no OnClick and there must never be one
+  b:EnableMouse(true)   -- for the tooltip and the drag; there is no OnClick and never must be one
   b:SetScript("OnEnter", showWhy)
   b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+
+  -- The icons cover the container completely, and a mouse-enabled child consumes the drag before
+  -- the parent ever sees it — so registering the drag on the container alone made the strip
+  -- immovable while looking, in code, exactly like a movable frame. Every button forwards instead.
+  b:RegisterForDrag("LeftButton")
+  b:SetScript("OnDragStart", function() Queue.StartMoving() end)
+  b:SetScript("OnDragStop", function() Queue.StopMoving() end)
 
   b.index = index
   return b
 end
 
 function Queue.frame() return container end
+
+-- Public because every icon forwards its drag here. Both guard on `locked` rather than the caller
+-- doing it: one place decides whether the strip may move.
+function Queue.StartMoving()
+  if not container or profile().locked then return false end
+  container:StartMoving()
+  return true
+end
+
+function Queue.StopMoving()
+  if not container then return false end
+  container:StopMovingOrSizing()
+  saveAnchor()
+  return true
+end
 
 function Queue.Create()
   if container then return container end
@@ -128,16 +175,19 @@ function Queue.Create()
   container:SetScale(p.scale or 1.0)
   container:SetMovable(true)
   container:SetClampedToScreen(true)
+  container:EnableMouse(true)   -- without this the frame receives no drag events at all
   container:RegisterForDrag("LeftButton")
-  container:SetScript("OnDragStart", function(self) if not profile().locked then self:StartMoving() end end)
-  container:SetScript("OnDragStop", function(self) self:StopMovingOrSizing(); saveAnchor() end)
+  container:SetScript("OnDragStart", Queue.StartMoving)
+  container:SetScript("OnDragStop", Queue.StopMoving)
 
   -- Only visible while unlocked: something has to be draggable, and an always-on backdrop is clutter.
   container.grip = container:CreateTexture(nil, "BACKGROUND")
   container.grip:SetPoint("TOPLEFT", -2, 2)
   container.grip:SetPoint("BOTTOMRIGHT", 2, -2)
   container.grip:SetColorTexture(ns.Colors.BRAND.r, ns.Colors.BRAND.g, ns.Colors.BRAND.b, 0.25)
-  container.grip:Hide()
+  -- Reflects the SAVED state: reloading while unlocked used to bring the strip back with no grip,
+  -- so `/elm lock` had to be pressed twice to get it visible again.
+  if p.locked then container.grip:Hide() else container.grip:Show() end
 
   for i = 1, MAX_SLOTS do buttons[i] = makeButton(i, container) end
   Queue.Layout()

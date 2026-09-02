@@ -1,5 +1,16 @@
 # Changelog
 ## Unreleased
+- The suggestion strip can now actually be moved. `/elm lock` showed the drag panel, but the icons
+  sitting on top of the frame swallowed every drag, so the strip could not be moved at all.
+- Choosing the **Autocast** glow style no longer breaks the display. It passed Elmira's name into a
+  position the glow library expected a number in, and the whole strip stopped updating.
+- Hovering an icon now explains the suggestion. The rule's name, the build it came from, and each
+  condition in green or red — and for a rule with no conditions, it says so rather than showing you
+  the plain spell tooltip and nothing else.
+- The strip keeps its unlocked state across a `/reload`, instead of needing `/elm lock` twice to get
+  the drag panel back.
+- A display error is now reported once instead of on every queue change, so one bug can no longer
+  bury a fight in chat.
 - Learning mode: one suggestion at a time, larger, with the name of the rule that chose it underneath.
   It sets icons to 1 and scale to 140% and says so, and both stay yours to change afterwards.
 - Options at `/elm config` or the minimap button: how many icons, scale, lock, glow style, and

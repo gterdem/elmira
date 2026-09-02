@@ -23,6 +23,7 @@ local ticker
 local frame
 local lastQueue           -- the queue as rendered, for the change test
 local lastBuildKey
+local lastError = {}      -- renderer name -> the last error text reported, so it is said once
 
 -- Renderers subscribe rather than the driver naming them: the queue strip, the bar glow and the
 -- overlay all want the same queue and must never each run their own loop.
@@ -100,7 +101,16 @@ function Display.tick(now)
     -- characteristic failure shape.
     local ok, err = pcall(r.render, queue, key)
     if not ok then
-      ns.log("Elmira: display renderer '%s' errored: %s", r.name, tostring(err))
+      -- Once per distinct message. A renderer that errors does so on every queue change, which in
+      -- combat is several times a second: the first report is a bug, the next two hundred are noise
+      -- that buries it and the fight both.
+      err = tostring(err)
+      if lastError[r.name] ~= err then
+        lastError[r.name] = err
+        ns.log("Elmira: display renderer '%s' errored: %s", r.name, err)
+      end
+    else
+      lastError[r.name] = nil
     end
   end
   return "rendered"
