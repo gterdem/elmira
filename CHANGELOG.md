@@ -1,5 +1,8 @@
 # Changelog
 ## Unreleased
+- Weapon speed is now the base item speed read from the tooltip, not the haste-modified attack speed.
+  A weapon with an attack-speed proc previously reported a different speed mid-fight, which could
+  flip a build's speed requirement while you were playing.
 - M2 gear matrix: every shipped build is now exercised across 11 gear states (no runes, runes only,
   each tier threshold, soul-granted bonuses, best-in-slot), asserting the actual suggestion queue. A
   build that ships without scenarios fails the suite.

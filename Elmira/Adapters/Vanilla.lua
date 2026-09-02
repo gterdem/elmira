@@ -109,6 +109,17 @@ local function tooltipLines(slot)
   return lines
 end
 
+-- Base weapon speed from the item tooltip. Classic exposes it nowhere else: GetItemInfo returns the
+-- equip location but no speed, and UnitAttackSpeed is already hasted. Falls back to nil (not to a
+-- plausible-looking number) when the line is absent, so the caller can tell "unknown" from "2.10".
+local function baseWeaponSpeed(slot)
+  for _, line in ipairs(tooltipLines(slot)) do
+    local speed = line:match("[Ss]peed%s+([%d%.]+)")
+    if speed then return tonumber(speed) end
+  end
+  return nil
+end
+
 -- Builds a fresh State over a data pack. Returning a new table rather than mutating a singleton
 -- keeps specs independent and means a profile/class switch cannot leave stale cached ids behind.
 function Vanilla.newState(spells, sets, souls, bonusDefs)
@@ -231,11 +242,12 @@ function Vanilla.newState(spells, sets, souls, bonusDefs)
   -- Takes a SLOT and returns a table, matching Schema.lua's `C.weapon`: it calls state:weapon(slot)
   -- with 16 for 2H/1H and 17 for Shield, then reads `w.type` and `w.speed`.
   --
-  -- KNOWN GAP: `speed` is UnitAttackSpeed, which is HASTE-MODIFIED. docs/01 wants the base
-  -- ITEM speed for build selection, and the two diverge under haste — a hasted 3.6 weapon can read
-  -- under a build's `maxSpeed = 3.0` and wrongly qualify. Classic exposes base speed only via the
-  -- item tooltip ("Speed 3.60"), the same scan souls use; wiring that is deliberately not done here
-  -- so the gap stays visible rather than being papered over with a number that looks right.
+  -- `speed` is the BASE item speed, parsed from the item tooltip's "Speed 2.10" line — NOT
+  -- UnitAttackSpeed, which is haste-modified. The two genuinely diverge: Truthbearer (229749, the
+  -- Exodin weapon) is a 2.10 speed 2H carrying a chance-on-hit that grants +30% attack speed for 8 s,
+  -- so UnitAttackSpeed reads ~1.6 while the proc is up. A build gating on a speed range would flip
+  -- its answer mid-fight on a proc. UnitAttackSpeed is kept as `hastedSpeed` for callers that
+  -- genuinely want it (M3b's swing timer), so the two can never be confused for one another.
   function S:weapon(slot)
     slot = slot or 16
     local id = GetInventoryItemID("player", slot)
@@ -247,7 +259,8 @@ function Vanilla.newState(spells, sets, souls, bonusDefs)
     elseif equipLoc then kind = "1H" end
     if not kind then return nil end
     local main, off = UnitAttackSpeed("player")
-    return { type = kind, itemID = id, speed = (slot == 17 and off) or main }
+    local hasted = (slot == 17 and off) or main
+    return { type = kind, itemID = id, speed = baseWeaponSpeed(slot) or hasted, hastedSpeed = hasted }
   end
 
   function S:setCount(setKey)

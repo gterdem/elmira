@@ -372,6 +372,28 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.is_nil(state:weapon(16))
     end)
 
+    -- Demonstrated in game on Truthbearer (229749): a 2.10 speed two-hander whose chance-on-hit
+    -- grants +30% attack speed for 8s. UnitAttackSpeed reads ~1.6 while that proc is up, so a build
+    -- gating on a speed range would flip its answer mid-fight. Base speed must come from the tooltip.
+    it("reports the BASE item speed from the tooltip, not the hasted attack speed", function()
+      mock.inventory[16] = 229749
+      mock.itemInfo[229749] = { name = "Truthbearer", equipLoc = "INVTYPE_2HWEAPON" }
+      mock.tooltipLines[16] = { "Truthbearer", "Two-Hand", "132 - 199 Damage", "Speed 2.10" }
+      mock.attackSpeed = { 1.61, nil } -- as if Crusader's Zeal were up
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      local w = state:weapon(16)
+      assert.equal(2.10, w.speed, "speed must be the item's, unaffected by a haste proc")
+      assert.equal(1.61, w.hastedSpeed, "the hasted value stays available, under its own name")
+    end)
+
+    it("falls back to the hasted value only when the tooltip has no speed line", function()
+      mock.inventory[16] = 900401
+      mock.itemInfo[900401] = { name = "Fixture Greatsword", equipLoc = "INVTYPE_2HWEAPON" }
+      mock.attackSpeed = { 3.6, nil }
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(3.6, state:weapon(16).speed)
+    end)
+
     -- The distinction the task calls out: weapon() must answer with the ITEM's speed, and must not
     -- be the same accessor swingRemaining() (M3b, haste-aware "time to next swing") will use.
     it("does not fold in the M3b swing-timer concern: swingRemaining stays the null-state safe value", function()

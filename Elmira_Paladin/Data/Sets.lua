@@ -58,8 +58,15 @@ ns.Data.SoD.Sets = {
               236129, 236125, 236127, 236131, 236130 },
     bonuses = {
       [2] = { spell = 1219189, src = "https://www.wowhead.com/classic/item-set=1896", spec = "RETRIBUTION", kind = "passive", note = "Divine Storm damage bonus (S1/S6)" },
-      [4] = { spell = 1219191, src = "https://www.wowhead.com/classic/item-set=1896", spec = "RETRIBUTION", kind = "passive", note = "Holy Wrath instant-cast + shorter cooldown (S1)" },
-      [6] = { spell = 1219193, src = "https://www.wowhead.com/classic/item-set=1896", spec = "RETRIBUTION", kind = "passive", note = "Undead-only bonus (Naxx)" },
+      -- Exact in-game text 2026-09-02 (docs/07 §9.14): "Reduces the cast time of your Holy Wrath
+      -- ability by 100%, reduces its cooldown by 25%, and reduces its mana cost by 75%." The mana
+      -- reduction was not recorded before and shows up live as Holy Wrath costing 201 vs a shipped
+      -- fallback of 805 — another reason the shipped cost is a fallback only.
+      [4] = { spell = 1219191, src = "https://www.wowhead.com/classic/item-set=1896", spec = "RETRIBUTION", kind = "passive", note = "Holy Wrath: instant cast, -25% cooldown, -75% mana" },
+      -- Exact in-game text: the Undead bonus applies only "while Righteous Fury is not active and
+      -- Hand of Reckoning is not engraved" — i.e. it is silently off for a tanking paladin. Those
+      -- conditions were not in the dossier's summary.
+      [6] = { spell = 1219193, src = "https://www.wowhead.com/classic/item-set=1896", spec = "RETRIBUTION", kind = "passive", note = "vs Undead only, and only while Righteous Fury is inactive and Hand of Reckoning is not engraved" },
     },
   },
   PALADIN_T35_INQUISITION = {

@@ -40,6 +40,7 @@ local function defaults()
     inCombat = false,
     targetExists = true,       -- was hardcoded true, so "no target" could never be tested
     itemCooldowns = {},        -- [slot] = { start, duration }; was hardcoded (0,0)
+    -- Weapon tooltips live in tooltipLines too; base speed is only readable there.
   }
 end
 
