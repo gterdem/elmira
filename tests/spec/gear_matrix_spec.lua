@@ -123,7 +123,7 @@ end)
 
 -- ---------------------------------------------------------------- the matrix itself
 describe("Gear matrix: PALADIN_EXODIN", function()
-  local Schema, Simulation, FakeState, pack, build
+  local Schema, Simulation, Advisor, FakeState, pack, build
 
   local function compileBuild(raw, ctx)
     local compiled, errors = Schema.compile(raw, ctx)
@@ -177,25 +177,13 @@ describe("Gear matrix: PALADIN_EXODIN", function()
     return counts
   end
 
-  -- Stand-in for Core/Advisor.lua, which does not exist yet (see the report — this is flagged there
-  -- as a gap, not patched here per the task brief's "do not edit Core/"). Data/Advice/<Class>.lua's
-  -- own header says "First matching soul rule wins"; PALADIN_EXODIN's only rule carries no `when`, so
-  -- this only needs to walk the list and return the first unconditional pick. It deliberately does
-  -- NOT evaluate `when` (that needs Schema's private condition compiler, which is not exported) — a
-  -- future build whose advice depends on gear would need Core/Advisor.lua itself, not this stand-in.
-  local function recommendedSoul(adviceForBuild)
-    for _, rule in ipairs(adviceForBuild.soul or {}) do
-      if rule.when == nil then return rule.pick end
-    end
-    return nil
-  end
-
   before_each(function()
     helper.reset()
     helper.load("Elmira/Adapters/Interface.lua")
     Schema = helper.load("Elmira/Core/Schema.lua")
     helper.load("Elmira/Core/Engine.lua")
     Simulation = helper.load("Elmira/Core/Simulation.lua")
+    Advisor = helper.load("Elmira/Core/Advisor.lua")
     FakeState = dofile("tests/fake_state.lua")
 
     pack = loadClassPack("Elmira_Paladin", "Paladin")
@@ -261,12 +249,19 @@ describe("Gear matrix: PALADIN_EXODIN", function()
       it(scenario.name .. ": advisor recommendation", function()
         local advice = pack.Advice and pack.Advice.PALADIN and pack.Advice.PALADIN[scenario.build]
         assert.is_not_nil(advice, "no Data/Advice/Paladin.lua entry for " .. tostring(scenario.build))
-        local pick = recommendedSoul(advice)
-        assert.equal(scenario.adviseExpected.soul, pick)
-        -- The scenario's own equipped soul must actually differ, or this isn't a "wrong soul" case.
+        -- Real Core/Advisor.lua now, not the stand-in that could not evaluate `when`. It goes
+        -- through the scenario's actual state, so a gear-conditional soul rule is genuinely
+        -- exercised rather than assumed away.
         local wearing = scenario.souls and scenario.souls[1]
         assert.is_not_nil(wearing, "advisor_wrong_soul scenario needs `souls`")
-        assert.is_not.equal(pick, wearing)
+        local rec = Advisor.recommend(advice, stateFromScenario(scenario),
+          { spells = pack.Spells, sets = pack.Sets, souls = pack.Souls, bonuses = pack.Bonuses },
+          { soul = wearing, build = scenario.build })
+        assert.equal(scenario.adviseExpected.soul, rec.soul.pick)
+        -- The scenario's own equipped soul must actually differ, or this isn't a "wrong soul" case.
+        assert.is_not.equal(rec.soul.pick, wearing)
+        -- And the advisor must SAY it is wrong, which is the half the stand-in could not check.
+        assert.is_false(rec.soul.ok)
       end)
     end
   end

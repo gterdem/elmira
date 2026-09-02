@@ -1,5 +1,16 @@
 # Changelog
 ## Unreleased
+- Elmira can now tell you what to **change**: which shoulder soul your build wants, which runes it
+  expects, and whether the weapon you are holding suits it. Recommendations are conditional on the
+  gear you actually have, and they are advice — nothing here changes what the rotation suggests.
+- When Elmira cannot read something, it now says so instead of guessing. An unreadable shoulder
+  enchant or weapon speed shows as "could not tell", never as "wrong" — so you are never sent to fix
+  something that is already fine.
+- **Switching your ItemRack set can switch your build.** Map a set name to a playstyle and Elmira
+  follows your gear. ItemRack's own internal sets are ignored, so restoring gear after a fight does
+  not change anything.
+- Elmira now picks a starting build by what your character can actually play, rather than always
+  taking the first one in the list — and still falls back gracefully when it cannot tell.
 - Elmira can now read your **swing timer** (via LibClassicSwingTimerAPI), which is what seal-twisting
   builds need. Nothing shipped uses it yet — the twist and stacking builds arrive later — but
   `/elm debug swing` shows what it can see, and says why when it cannot see anything: no library, no

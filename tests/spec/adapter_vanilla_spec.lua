@@ -833,4 +833,40 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.is_nil(state:sealLinger())
     end)
   end)
+
+  -- M4. This function exists BECAUSE the call shape is counter-intuitive, so leaving it untested
+  -- would be leaving the one thing that can go wrong unguarded. docs/07 §9.8: GetTalentTabInfo does
+  -- NOT return the name first — position 1 is a numeric tab id (382 Holy / 383 Prot / 381 Ret) and
+  -- points spent are at position 5. Collector.lua got this wrong once already.
+  describe("talents() (M4 adapter extra)", function()
+    it("reads points from position 5 and the tab id from position 1", function()
+      -- The mock carries Arthorion's real 31/0/20 spread (docs/07 §9.7).
+      local t = Vanilla.talents()
+      assert.equal(382, t.tabs[1].id)
+      assert.equal(31, t.tabs[1].points)
+      assert.equal(383, t.tabs[2].id)
+      assert.equal(0, t.tabs[2].points)
+      assert.equal(381, t.tabs[3].id)
+      assert.equal(20, t.tabs[3].points)
+    end)
+
+    it("names the tree with the most points, and totals them", function()
+      local t = Vanilla.talents()
+      assert.equal(51, t.total)     -- correct for level 60
+      assert.equal(1, t.top)        -- Holy, for a 31/0/20 hybrid
+      assert.equal(31, t.topPoints)
+    end)
+
+    it("follows the points, not the tab order", function()
+      mock.talentTabs = { { 382, 5 }, { 383, 0 }, { 381, 46 } }
+      local t = Vanilla.talents()
+      assert.equal(3, t.top)
+      assert.equal(46, t.topPoints)
+    end)
+
+    it("answers nil rather than a fake spread when the client cannot say", function()
+      mock.talentTabs = {}
+      assert.is_nil(Vanilla.talents())
+    end)
+  end)
 end)

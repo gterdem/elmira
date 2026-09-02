@@ -34,8 +34,54 @@ end
 
 -- Returns buildKey, reason. `reason` names which rule fired, so `/elm debug` can explain a choice
 -- the user did not make — "why is it showing Exodin?" is otherwise unanswerable.
-function Profiles.resolve(pack, profile)
+-- M4 rule 2: a loadout label from an override source (ItemRack, docs/08). The label is the ONLY
+-- thing an override source supplies — gear-derived facts come from the debounced equipment path,
+-- never from inside the override callback, because that hook fires before the new gear is in the
+-- slots (docs/01 §3, docs/08). The label-to-build mapping is per USER, not shipped: "Shockadin" is
+-- one person's set name, and a catalog that guessed at set names would be wrong for everyone else.
+local function fromOverride(pack, profile, label)
+  if type(label) ~= "string" or label == "" then return nil end
+  local map = profile and profile.overrides
+  local key = type(map) == "table" and map[label] or nil
+  if key and buildExists(pack, key) then
+    return key, "ItemRack set '" .. label .. "'"
+  end
+  return nil
+end
+
+-- M4 rule 3: the best catalog entry this character can actually play.
+--
+-- `fits` is injected rather than imported: the requirement check lives in Setup/Detect.lua, and Core
+-- depending on Setup would invert the layering. It answers true / false / nil, and nil ("could not
+-- tell") must never disqualify an entry — an unreadable tooltip is not a reason to refuse someone a
+-- build. That is hard rule 8's reasoning: `requires` is advisory and never changes evaluation.
+local function fromDetection(pack, fits)
+  if type(fits) ~= "function" then return nil end
+  local catalog = catalogFor(pack)
+  if not catalog then return nil end
+
+  local best, bestReason
+  for _, entry in ipairs(catalog) do
+    if entry.available and buildExists(pack, entry.build) then
+      local ok = fits(entry)
+      if ok ~= false then
+        if entry.recommended then
+          return entry.build, "fits this character (recommended)"
+        elseif not best then
+          best, bestReason = entry.build, "fits this character"
+        end
+      end
+    end
+  end
+  return best, bestReason
+end
+
+-- `ctx` is optional and additive: { override = <loadout label>, fits = <function(entry)> }. A caller
+-- that passes nothing gets exactly the M3 behaviour, which is why every M3-era call site and spec is
+-- unaffected by M4's rules landing.
+function Profiles.resolve(pack, profile, ctx)
   if type(pack) ~= "table" or type(pack.builds) ~= "table" then return nil, "no data pack" end
+  ctx = ctx or {}
 
   -- 1. Explicit user choice. `false` is the DB's "unset" sentinel, not a key.
   local pinned = profile and profile.activeBuild
@@ -45,6 +91,15 @@ function Profiles.resolve(pack, profile)
     -- renamed, or a class pack was downgraded). Fall through rather than showing nothing, but say so.
     return Profiles.fallback(pack, "pinned build '" .. tostring(pinned) .. "' is not in this pack")
   end
+
+  -- 2. What the player's loadout addon says they are wearing.
+  local byOverride, overrideReason = fromOverride(pack, profile, ctx.override)
+  if byOverride then return byOverride, overrideReason end
+
+  -- 3. What this character can actually play.
+  local byDetection, detectionReason = fromDetection(pack, ctx.fits)
+  if byDetection then return byDetection, detectionReason end
+
   return Profiles.fallback(pack, nil)
 end
 

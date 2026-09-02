@@ -67,6 +67,33 @@ function Vanilla.playerClass()
   return class
 end
 
+-- Talent points per tree, for Setup/Detect's spec heuristic. An adapter EXTRA, deliberately not a
+-- State contract member: no condition in docs/02 reads talents, and adding one would mean editing
+-- the contract, its doc, the null state and interface_spec for something only the wizard wants.
+--
+-- The call shape is the one docs/07 §9.8 recorded from the live client, not the one the API docs
+-- describe: GetTalentTabInfo does NOT return the name first. Position 1 is a numeric tab id
+-- (382 Holy / 383 Prot / 381 Ret for paladins) and points spent are at position 5. Collector.lua
+-- learned this the hard way; naming the first return `first` here keeps the mistake un-repeatable.
+function Vanilla.talents()
+  if not GetTalentTabInfo then return nil end
+  local tabs, total, top, topPoints = {}, 0, nil, -1
+  for i = 1, 3 do
+    local ok, first, _, _, _, points = pcall(GetTalentTabInfo, i)
+    -- A tab the client cannot describe means the whole reading is unusable. Without this the loop
+    -- built three tabs of zero points and reported "tree 1, 0 points spent" — a confident answer
+    -- that a level-1 character is Holy, which is worse than admitting we do not know.
+    if not ok or first == nil then return nil end
+    points = tonumber(points) or 0
+    tabs[i] = { id = first, points = points }
+    total = total + points
+    if points > topPoints then top, topPoints = i, points end
+  end
+  -- `top` is the tree with the most points — a heuristic, and named as one. A 31/0/20 paladin is
+  -- "Holy" by this measure and plays as a Shockadin hybrid; the wizard offers, it never decides.
+  return { tabs = tabs, total = total, top = top, topPoints = topPoints }
+end
+
 function Vanilla.loadClassPack(class)
   if not (class and C_AddOns and C_AddOns.GetNumAddOns) then return false end
   for i = 1, C_AddOns.GetNumAddOns() do

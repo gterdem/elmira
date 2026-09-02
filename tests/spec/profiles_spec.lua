@@ -172,4 +172,93 @@ describe("Core.Profiles", function()
       assert.is_string(reason)
     end)
   end)
+
+  -- M4 added two rules between the pin and the catalog fallback. Both are additive: a caller that
+  -- passes no ctx must behave exactly as it did at M3, which is what keeps every rule-1..6 case above
+  -- meaningful rather than quietly re-specified.
+  describe("rule 2: the loadout override source", function()
+    local function twoBuildPack()
+      return {
+        class = "PALADIN",
+        builds = { PALADIN_EXODIN = {}, PALADIN_SHOCKADIN = {} },
+        catalog = { PALADIN = {
+          { build = "PALADIN_EXODIN", available = true, recommended = true },
+          { build = "PALADIN_SHOCKADIN", available = true },
+        } },
+      }
+    end
+
+    it("uses the build the USER mapped that set name to", function()
+      -- The mapping is per user, never shipped: "Shockadin" is one person's ItemRack set name.
+      local profile = { overrides = { Shockadin = "PALADIN_SHOCKADIN" } }
+      local key, reason = Profiles.resolve(twoBuildPack(), profile, { override = "Shockadin" })
+      assert.equal("PALADIN_SHOCKADIN", key)
+      assert.truthy(reason:find("Shockadin", 1, true))
+    end)
+
+    it("is outranked by an explicit pin", function()
+      local profile = { activeBuild = "PALADIN_EXODIN", overrides = { Shockadin = "PALADIN_SHOCKADIN" } }
+      local key, reason = Profiles.resolve(twoBuildPack(), profile, { override = "Shockadin" })
+      assert.equal("PALADIN_EXODIN", key)
+      assert.equal("pinned", reason)
+    end)
+
+    it("ignores a set name with no mapping, and one mapped to a build that is gone", function()
+      assert.equal("PALADIN_EXODIN", Profiles.resolve(twoBuildPack(), {}, { override = "Unmapped" }))
+      local stale = { overrides = { Shockadin = "PALADIN_REMOVED" } }
+      assert.equal("PALADIN_EXODIN", Profiles.resolve(twoBuildPack(), stale, { override = "Shockadin" }))
+    end)
+
+    it("ignores ItemRack's internal sets, which are not loadouts", function()
+      local profile = { overrides = { ["~BaseGear"] = "PALADIN_SHOCKADIN" } }
+      -- Even if one were somehow mapped, an empty label must never resolve.
+      assert.equal("PALADIN_EXODIN", Profiles.resolve(twoBuildPack(), profile, { override = "" }))
+    end)
+  end)
+
+  describe("rule 3: what this character can actually play", function()
+    local function gatedPack()
+      return {
+        class = "PALADIN",
+        builds = { PALADIN_EXODIN = {}, PALADIN_SHOCKADIN = {} },
+        catalog = { PALADIN = {
+          { build = "PALADIN_EXODIN", available = true, recommended = true, requires = { weapon = "2H" } },
+          { build = "PALADIN_SHOCKADIN", available = true, requires = { weapon = "1H" } },
+        } },
+      }
+    end
+
+    it("skips a recommended entry the character does not fit", function()
+      local fits = function(entry) return entry.requires.weapon == "1H" end
+      local key, reason = Profiles.resolve(gatedPack(), {}, { fits = fits })
+      assert.equal("PALADIN_SHOCKADIN", key)
+      assert.truthy(reason:find("fits", 1, true))
+    end)
+
+    it("prefers the recommended entry when the character fits it", function()
+      local key, reason = Profiles.resolve(gatedPack(), {}, { fits = function() return true end })
+      assert.equal("PALADIN_EXODIN", key)
+      assert.truthy(reason:find("recommended", 1, true))
+    end)
+
+    -- The important one. `requires` is advisory (hard rule 8): an unreadable tooltip must not cost
+    -- someone a build. `fits` answering nil means "could not tell", and nil is not a refusal.
+    it("treats 'could not tell' as acceptable, never as a failure", function()
+      local key = Profiles.resolve(gatedPack(), {}, { fits = function() return nil end })
+      assert.equal("PALADIN_EXODIN", key)
+    end)
+
+    it("falls back to the catalog when the character fits nothing at all", function()
+      local key, reason = Profiles.resolve(gatedPack(), {}, { fits = function() return false end })
+      assert.equal("PALADIN_EXODIN", key)
+      assert.equal("catalog recommended", reason)
+    end)
+
+    it("changes nothing when no ctx is passed — M3 callers are unaffected", function()
+      local withCtx = Profiles.resolve(gatedPack(), {}, {})
+      local without = Profiles.resolve(gatedPack(), {})
+      assert.equal(without, withCtx)
+      assert.equal("PALADIN_EXODIN", without)
+    end)
+  end)
 end)

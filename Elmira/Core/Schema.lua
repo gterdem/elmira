@@ -266,7 +266,11 @@ C.custom = {
 ns.__schemaConditions = C -- exposed for the spec's coverage check against docs/02
 
 -- ---------------------------------------------------------------- compilation
-local compileList, compileCond
+-- `condLabel` is forward-declared here rather than at its definition below because Schema.compileWhen
+-- (public API, further down but still above that definition) needs it: a `local` at the definition
+-- site would leave the earlier reference resolving to a nil global, and the label would silently
+-- come back as nothing rather than erroring.
+local compileList, compileCond, condLabel
 
 -- Forward-declared so all/any/not can recurse before compileCond is defined.
 function compileCond(cond, ctx, fail)
@@ -340,6 +344,36 @@ function compileList(when, ctx, fail)
 end
 
 -- ---------------------------------------------------------------- public API
+
+-- Compiles a BARE `when` list — one that is not attached to a build entry — into the same
+-- {test, conditions} shape `Schema.compile` produces per entry.
+--
+-- Exists because the condition language has a second consumer: Data/Advice/<Class>.lua gates its
+-- recommendations with the same `when` syntax (`{{"set","PALADIN_T25_AVENGERS", min = 2}}`), and
+-- until now the compiler was file-local, so the only way to evaluate one was to wrap it in a fake
+-- build. The gear-matrix spec worked around that with a stand-in that could not evaluate `when` at
+-- all and said so in its own comment — a test that quietly checked less than it appeared to.
+--
+-- One compiler, one condition language. A second evaluator for advice would drift from this one the
+-- first time a condition type was added, and the drift would show up as advice that is subtly wrong
+-- rather than as an error.
+function Schema.compileWhen(when, ctx)
+  ctx = ctx or {}
+  local errors = {}
+  local function fail(message) errors[#errors + 1] = { message = message } end
+  local compiled = {
+    test = compileList(when, ctx, fail),
+    conditions = {},
+  }
+  for i = 1, #(when or {}) do
+    compiled.conditions[i] = {
+      label = condLabel(when[i]),
+      test = compileCond(when[i], ctx, function() end),
+    }
+  end
+  return compiled, errors
+end
+
 -- Returns ok, errors. Errors are {entry = n|nil, message = "..."} — structured so the M4 wizard can
 -- group by entry, with Schema.errorLines() for chat and CI output.
 function Schema.validate(build, ctx)
@@ -413,7 +447,6 @@ end
 -- A short readable name for ONE condition: "buff:VENGEANCE_BUFF", "no_seal", "item_ready:13".
 -- Nested all/any/not recurse into "any(buff:X,bonus:Y)": a bare "any" names the operator but not
 -- what it tested, which is the half that explains a rejected suggestion.
-local condLabel
 function condLabel(cond)
   if type(cond) ~= "table" then return "?" end
   local kind = tostring(cond[1])

@@ -24,6 +24,7 @@ Core\Schema.lua
 Core\Engine.lua
 Core\Simulation.lua
 Core\Profiles.lua
+Core\Advisor.lua
 Core\Visibility.lua
 Core\Ticker.lua
 Core\Recorder.lua
@@ -35,6 +36,9 @@ Display\Glow.lua
 Display\BarGlow.lua
 Display\Queue.lua
 Display\Overlay.lua
+
+# Setup
+Setup\Detect.lua
 
 # Options
 Options\Options.lua
