@@ -9,7 +9,15 @@ ns.Data.SoD.Builds.PALADIN_EXODIN = {
   schema = 1, key = "PALADIN_EXODIN", name = "Paladin — Exodin (fast 2H)", class = "PALADIN", flavor = "SoD",
   notes = "Seal of Martyrdom only. Exorcism is the core button and is never held. Gear-dependent lines switch on when detected.",
   -- Advisory only: the wizard warns about these; evaluation never depends on them.
-  requires = { weapon = "2H", maxSpeed = 3.0, runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM", "RUNE_PURIFYING_POWER" } },
+  -- Seal of Martyrdom stopped being a chest rune in Patch 1.15.3 (2024-07-09) and is now learned
+  -- from a purchasable book at level 10 for well under a gold. Cheap and universally recommended, so
+  -- a level 60 will almost certainly have it -- but it is a PURCHASE, not something levelling grants,
+  -- and without it every entry here that needs a seal is skipped and the build has almost nothing to
+  -- say. That is why it is named as a requirement rather than assumed.
+  -- The book's item id is deliberately absent: it is not Wowhead-verified yet (hard rule 2).
+  -- docs/research/seal-of-martyrdom-acquisition.md
+  requires = { weapon = "2H", maxSpeed = 3.0, spells = { "SEAL_OF_MARTYRDOM" },
+               runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM", "RUNE_PURIFYING_POWER" } },
   -- Suggested PERIPHERAL cues, not a colour table for every spell. The overlay is off by default and
   -- opted into per cue (docs/01 "Overlay.lua", PRD F16); the wizard offers this list as "recommended
   -- peripheral cues" with one-click enable and never turns any of it on by itself. Deliberately short:

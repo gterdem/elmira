@@ -1,5 +1,8 @@
 # Changelog
 ## Unreleased
+- The Exodin build now lists Seal of Martyrdom as a requirement. It is bought from a book at level 10
+  rather than being a rune, so it is easy to reach 60 without it — and without a seal most of the
+  rotation has nothing to suggest.
 - Exodin now suggests Judgement when nothing better is ready, instead of leaving you with nothing to
   press. This matters most on a fresh level 60 with no runes, who previously had no suggestion for
   most of their globals; at full gear the rest of the rotation still outranks it, so little changes.

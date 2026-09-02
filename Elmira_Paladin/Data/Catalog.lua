@@ -12,7 +12,10 @@ ns.Data.SoD.Catalog = {
       updated = "2026-09-02", phase = "SoD P8",
       source = "https://www.wowhead.com/classic/guide/season-of-discovery/classes/paladin/dps-rotation-cooldowns-abilities-pve",
       summary = "Seal of Martyrdom, Exorcism never held, Crusader Strike; DS at 3 Holy Power with T3.5 4-set. ~20-33% ahead in Naxx; viable in SE.",
-      requires = { weapon = "2H", maxSpeed = 3.0, runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM" } } },
+      -- `spells` mirrors the build file: Seal of Martyrdom is a level-10 book purchase, not a rune
+      -- and not granted by levelling, so the wizard should warn when it is missing.
+      requires = { weapon = "2H", maxSpeed = 3.0, spells = { "SEAL_OF_MARTYRDOM" },
+                   runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM" } } },
     { build = "PALADIN_WRATHLIKE", available = false, playstyle = "Wrath-like — slow 2H, mono seal (Ret)", difficulty = "easy",
       updated = "2026-08-31", phase = "SoD P8", source = "https://onlyfarms.gg/guides/season-of-discovery-paladin-dps-bis-gear-pve-guide/",
       summary = "Relaxed Divine Storm / Crusader Strike / Exorcism priority on a slow two-hander.",
