@@ -1,5 +1,10 @@
 # Changelog
 ## Unreleased
+- **Elmira now shows you something.** A queue of your next casts appears on screen, largest first,
+  with cooldown sweeps and your keybinds. Drag it with `/elm lock`; hover an icon to see why it is
+  being suggested. Set how many icons to show, and the scale, in the options.
+- `/elm debug perf` reports how much work the display skipped, so a framerate problem is visible
+  rather than guessed at.
 - Recordings now note what each spell costs, so a suggestion you could not afford can be told apart
   from one that was simply cheap, and mark timestamps are rounded like every other recorded number.
 - The Exodin build now lists Seal of Martyrdom as a requirement. It is bought from a book at level 10

@@ -36,8 +36,11 @@ files["Elmira/Core/"] = { read_globals = {} }
 -- Adapters/ is the only place the WoW API may be named (hard rule 3).
 files["Elmira/Adapters/"] = { read_globals = WOW_API }
 
+-- Presentation only. Note the absence of GetTime: Display takes its time from ns.now() like
+-- everything else, so a second clock cannot appear here by accident.
 files["Elmira/Display/"] = { read_globals = { "CreateFrame", "UIParent", "GameTooltip",
-  "GetActionInfo", "GetMacroSpell", "PlaySoundFile" } }
+  "GetActionInfo", "GetMacroSpell", "PlaySoundFile", "GetSpellTexture", "GetItemIcon",
+  "GetInventoryItemID", "ActionButton_GetPagedID", "RANGE_INDICATOR" } }
 files["Elmira/Setup/"] = { read_globals = { "CreateFrame", "UIParent", "UnitClass", "UnitLevel",
   "GetTalentTabInfo", "C_Engraving" } }
 files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent" } }

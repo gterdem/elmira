@@ -61,6 +61,9 @@ function NA:OnInitialize()
   self.db.RegisterCallback(self, "OnProfileCopied", "OnProfileChanged")
   self.db.RegisterCallback(self, "OnProfileReset", "OnProfileChanged")
 
+  -- Display and Options read settings through this; Init is the only place that owns the handle.
+  ns.db = self.db
+
   self:RegisterChatCommand("elm", "OnSlash")
   self:RegisterChatCommand("elmira", "OnSlash")
 
@@ -69,6 +72,27 @@ function NA:OnInitialize()
   self:RegisterEvent("PLAYER_EQUIPMENT_CHANGED", "OnEquipChanged")
   self:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED", "OnCastSucceeded")
   self:RegisterEvent("PLAYER_LOGOUT", function() ns.flushRecorder() end)
+
+  -- What makes the queue stale. `Display.invalidate` only sets a flag; Core/Ticker decides when to
+  -- act on it, so a spammy event cannot drag the recompute rate up with it.
+  for _, event in ipairs({
+    "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_USABLE", "ACTIONBAR_UPDATE_USABLE",
+    "UNIT_AURA", "UNIT_POWER_UPDATE", "PLAYER_TARGET_CHANGED",
+    "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_EQUIPMENT_CHANGED",
+  }) do
+    self:RegisterEvent(event, function() if ns.Display then ns.Display.invalidate() end end)
+  end
+
+  -- The bar map, separately: these change which BUTTON holds a spell, not whether to suggest it.
+  for _, event in ipairs({
+    "ACTIONBAR_SLOT_CHANGED", "ACTIONBAR_PAGE_CHANGED", "UPDATE_BONUS_ACTIONBAR",
+    "UPDATE_MACROS", "PLAYER_ENTERING_WORLD",
+  }) do
+    self:RegisterEvent(event, function()
+      if ns.BarGlow then ns.BarGlow.Invalidate() end
+      if ns.Display then ns.Display.refresh() end
+    end)
+  end
 end
 
 -- Automatic marks. The player asked not to have to type during a fight, and combat start/end plus
@@ -218,6 +242,21 @@ function NA:OnEnable()
     ns.log("Elmira: adapter cannot accept a data pack (no attachPack); running with a null state.")
   else
     ns.Adapter.attachPack(pack)
+  end
+
+  self:StartDisplay()
+end
+
+-- Wiring the renderers to the driver. Deliberately after attachPack: a queue built before the pack
+-- is attached compiles against no data and every symbolic key resolves to nil, which renders as an
+-- empty strip rather than an error.
+function NA:StartDisplay()
+  if not (ns.Display and ns.Queue) then return end
+  ns.Queue.Create()
+  ns.Queue.SetLocked(self.db.profile.locked)
+  ns.Display.register("queue", ns.Queue.Render)
+  if self.db.profile.enabled then
+    ns.Display.Enable()
   end
 end
 

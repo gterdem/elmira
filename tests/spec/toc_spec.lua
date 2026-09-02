@@ -64,7 +64,11 @@ describe("core TOC", function()
   end
 
   local function sourceFiles()
-    local pipe = assert(io.popen("ls Elmira/Core/*.lua Elmira/Adapters/*.lua 2>/dev/null"))
+    -- Display/ and Options/ are included deliberately: this spec's whole point is that a file the
+    -- suite can dofile but the game never loads looks identical from here. That applies to a
+    -- renderer just as much as to a Core module.
+    local pipe = assert(io.popen(
+      "ls Elmira/Core/*.lua Elmira/Adapters/*.lua Elmira/Display/*.lua Elmira/Options/*.lua 2>/dev/null"))
     local found = {}
     for path in pipe:lines() do found[#found + 1] = path end
     pipe:close()

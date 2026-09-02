@@ -16,13 +16,22 @@ Adapters\Vanilla.lua
 Adapters\Collector.lua
 
 # Core — pure Lua, no WoW API (hard rule 3)
+Core\Colors.lua
 Core\API.lua
 Core\DB.lua
 Core\Schema.lua
 Core\Engine.lua
 Core\Simulation.lua
+Core\Profiles.lua
+Core\Ticker.lua
 Core\Recorder.lua
 Core\Slash.lua
+
+# Display — frames and textures. May name presentation globals (see .luacheckrc), never state ones.
+Display\Driver.lua
+Display\Glow.lua
+Display\BarGlow.lua
+Display\Queue.lua
 
 # Entry point last
 Core\Init.lua

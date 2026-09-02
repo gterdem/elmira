@@ -327,11 +327,30 @@ Slash.register{
       end
       return lines
     elseif sub == "perf" then
-      return {
-        string.format("lua memory: %d KB", math.floor(collectgarbage("count"))),
-        "updates: 0", -- nothing ticks before M3
-        "allocations/frame: n/a (M3)",
-      }
+      local lines = { string.format("lua memory: %d KB", math.floor(collectgarbage("count"))) }
+      if not ns.Display then
+        lines[#lines + 1] = "display: not loaded"
+        return lines
+      end
+      local s = ns.Display.stats()
+      local total = (s.runs or 0) + (s.skipped or 0)
+      lines[#lines + 1] = string.format("display: %s, build=%s, renderers=%d",
+        ns.Display.isEnabled() and "running" or "stopped", tostring(s.build), s.renderers or 0)
+      -- Recomputes vs ticks: at 10 Hz against a 60 fps client this should sit near 83% skipped.
+      -- A low number here means the throttle is not doing its job, which is the failure this
+      -- command exists to make visible rather than something a player discovers as frame drops.
+      lines[#lines + 1] = string.format("ticks: %d recomputed, %d skipped (%.0f%% skipped)",
+        s.runs or 0, s.skipped or 0, total > 0 and (s.skipped or 0) / total * 100 or 0)
+      if ns.BarGlow then
+        local b = ns.BarGlow.stats()
+        lines[#lines + 1] = string.format("bar map: %d spells, %d provider(s), built=%s",
+          b.mapped or 0, b.providers or 0, tostring(b.built))
+      end
+      if ns.Glow then
+        lines[#lines + 1] = string.format("active glows: %d", ns.Glow.activeCount())
+      end
+      lines[#lines + 1] = "/elm debug perf again after a fight to compare"
+      return lines
     elseif sub == "dump" then
       -- Writes a full character snapshot to SavedVariables for offline analysis (docs/01 §4a).
       -- Slash stays WoW-API-free: Collector does every client read, exactly as `state` delegates
@@ -521,7 +540,19 @@ Slash.register{
 -- Not-yet-available verbs, in the order the project documents them, each honest about its milestone
 -- so `/elm` never claims a command it can't run.
 Slash.register{ key = "setup", desc = ns.L["Run the setup wizard"], order = 100, run = unavailableNamed("setup", 4) }
-Slash.register{ key = "lock", desc = ns.L["Lock/unlock frames"], order = 101, run = unavailableNamed("lock", 3) }
+Slash.register{
+  key = "lock", desc = ns.L["Lock/unlock frames"], order = 101,
+  run = function()
+    if not ns.Queue then return { "lock: display not loaded" } end
+    local locked = ns.Queue.SetLocked(not ns.Queue.isLocked())
+    if locked then
+      return { "Frames locked." }
+    end
+    -- Say where it is, because an unlocked frame with nothing in it is invisible: before a build is
+    -- active the strip has no icons, and "drag it" is unhelpful advice about an empty rectangle.
+    return { "Frames unlocked — drag the queue to move it. /elm lock again to lock." }
+  end,
+}
 Slash.register{ key = "profile", args = "<key>", desc = ns.L["Pin a build"], order = 102, run = unavailableNamed("profile", 4) }
 Slash.register{ key = "advise", desc = ns.L["Gear advisor"], order = 103, run = unavailableNamed("advise", 4) }
 Slash.register{ key = "sim", desc = ns.L["Export to WoWSims"], order = 104, run = unavailableNamed("sim", "5c") }
