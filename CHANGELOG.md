@@ -1,5 +1,8 @@
 # Changelog
 ## Unreleased
+- `/elm debug queue [build] [depth]` prints the live suggestion queue and, beneath it, why each entry
+  passed or failed its conditions. Until the display lands this is the only way to see what the
+  engine actually decides on a real character.
 - Weapon speed is now the base item speed read from the tooltip, not the haste-modified attack speed.
   A weapon with an attack-speed proc previously reported a different speed mid-fight, which could
   flip a build's speed requirement while you were playing.

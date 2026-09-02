@@ -68,4 +68,30 @@ describe("Core.Slash", function()
     local lines = Slash.run("sim")
     assert.matches("not available yet %(M5c%)", lines[1])
   end)
+
+  -- M2 acceptance runs through this command, so it must degrade with a DIAGNOSIS rather than an
+  -- empty list — "nothing happened" is the shape that wastes an in-game round trip.
+  describe("debug queue", function()
+    it("says which builds exist when asked for one that does not", function()
+      local ns = helper.ns()
+      ns.Adapter = { playerClass = function() return "PALADIN" end }
+      ns.API = { GetProviders = function() return { PALADIN = { builds = { PALADIN_EXODIN = {} } } } end,
+                 GetState = function() return {} end }
+      local out = table.concat(Slash.run("debug queue NOPE"), "\n")
+      assert.truthy(out:find("PALADIN_EXODIN", 1, true), out)
+    end)
+
+    it("reports no builds rather than printing an empty queue", function()
+      local ns = helper.ns()
+      ns.Adapter = { playerClass = function() return "PALADIN" end }
+      ns.API = { GetProviders = function() return {} end, GetState = function() return {} end }
+      local out = table.concat(Slash.run("debug queue"), "\n")
+      assert.truthy(out:find("no builds registered", 1, true), out)
+    end)
+
+    it("lists queue as an available debug subcommand", function()
+      local out = table.concat(Slash.run("debug"), "\n")
+      assert.truthy(out:find("queue", 1, true), out)
+    end)
+  end)
 end)

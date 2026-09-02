@@ -41,7 +41,7 @@ end
 Slash.register{ key = "help", desc = ns.L["Show this help"], order = 0, run = helpLines }
 
 Slash.register{
-  key = "debug", args = "state|bars|perf|dump", desc = ns.L["Diagnostics"], order = 10,
+  key = "debug", args = "state|bars|perf|dump|queue", desc = ns.L["Diagnostics"], order = 10,
   run = function(rest)
     local sub = rest and rest:match("^(%S+)")
     if sub == "state" then
@@ -98,8 +98,63 @@ Slash.register{
           .. "What you see above is all there is."
       end
       return lines
+    elseif sub == "queue" then
+      -- M2 acceptance vehicle (docs/06 M2 row: "Exodin queue prints correctly on a dummy"). There is
+      -- no display until M3, so the queue has to be printable some other way; this runs the real
+      -- Engine and Simulation against the LIVE adapter state, not a fixture.
+      local packs = ns.API and ns.API.GetProviders("dataPacks") or {}
+      local class = ns.Adapter and ns.Adapter.playerClass and ns.Adapter.playerClass()
+      local pack = class and packs[class] or nil
+      if not (pack and pack.builds) then
+        return { string.format("queue: no builds registered for %s", tostring(class)) }
+      end
+
+      local wanted = rest and rest:match("^%S+%s+(%S+)")
+      local key, build
+      for k, b in pairs(pack.builds) do
+        if wanted == nil or k == wanted then key, build = k, b; break end
+      end
+      if not build then
+        local names = {}
+        for k in pairs(pack.builds) do names[#names + 1] = k end
+        table.sort(names)
+        return { "queue: no such build. Available: " .. table.concat(names, ", ") }
+      end
+
+      local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
+      local compiled, errors = ns.Schema.compile(build, ctx)
+      if not compiled then
+        local lines = { string.format("queue: %s failed validation", key) }
+        for _, l in ipairs(ns.Schema.errorLines(errors or {})) do lines[#lines + 1] = "  " .. l end
+        return lines
+      end
+
+      local state = ns.API.GetState()
+      local depth = tonumber(rest and rest:match("(%d+)%s*$")) or 5
+      local q = ns.Simulation.queue(compiled, state, depth)
+
+      local lines = { string.format("queue for %s (depth %d):", key, depth) }
+      if #q == 0 then
+        lines[#lines + 1] = "  (empty — nothing eligible right now)"
+      end
+      for i, slot in ipairs(q) do
+        lines[#lines + 1] = string.format("  %d. %-26s t=%.1fs%s", i,
+          tostring(slot.spell or slot.item), slot.t or 0, slot.cdVolatile and "  [volatile cd]" or "")
+      end
+      -- Why each entry did or did not make it. An empty queue with no explanation is the failure
+      -- shape this project keeps hitting, so the reasons print alongside the answer.
+      lines[#lines + 1] = "entries, in priority order:"
+      for i, entry in ipairs(compiled.entries) do
+        local name = tostring(entry.spell or entry.item)
+        local passes = entry.test and entry.test(state)
+        local usable = entry.spell and state:usable(entry.spell)
+        local cd = entry.spell and state:cooldown(entry.spell) or 0
+        lines[#lines + 1] = string.format("  %2d %-26s when=%s usable=%s cd=%.1f", i, name,
+          passes and "pass" or "FAIL", tostring(usable), cd)
+      end
+      return lines
     end
-    return { "Usage: /elm debug state|bars|perf|dump" }
+    return { "Usage: /elm debug state|bars|perf|dump|queue [build] [depth]" }
   end,
 }
 
