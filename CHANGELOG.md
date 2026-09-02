@@ -1,5 +1,11 @@
 # Changelog
 ## Unreleased
+- Fixed: the bar glow missed any spell whose **rank** on your bar differs from the one Elmira ships.
+  Classic gives every rank its own spell id, so a bar holding Exorcism (Rank 5) never matched — for
+  that spell the glow simply never appeared, with no error anywhere. Buttons are now matched by name
+  as well as by id, which has no ranks.
+- Fixed: the ElvUI provider's fallback lookup passed the word "action" where a slot number belonged,
+  so it found nothing whenever the fast path did not already work.
 - **The queue now hides when you are not fighting.** New setting under Display: *Always*, *In
   combat*, or *In combat, or when you have a target* (the default). Until now it was on screen from
   login to logout, glowing your action bar while you stood in a city — there was no setting because

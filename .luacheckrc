@@ -40,6 +40,9 @@ files["Elmira/Adapters/"] = { read_globals = WOW_API }
 -- everything else, so a second clock cannot appear here by accident.
 files["Elmira/Display/"] = { read_globals = { "CreateFrame", "UIParent", "GameTooltip",
   "GetActionInfo", "GetMacroSpell", "PlaySoundFile", "GetSpellTexture", "GetItemIcon",
+  -- Ranks: the id on a bar and the id in the data pack can be different ranks of one ability, so the
+  -- bar map is keyed by the rank-free name as well. Presentation-side lookup, not state.
+  "GetSpellInfo",
   "GetInventoryItemID", "ActionButton_GetPagedID", "RANGE_INDICATOR" } }
 files["Elmira/Setup/"] = { read_globals = { "CreateFrame", "UIParent", "UnitClass", "UnitLevel",
   "GetTalentTabInfo", "C_Engraving" } }
@@ -55,6 +58,9 @@ files["Elmira_Paladin/"] = { read_globals = {} }
 files["Elmira_Paladin/Data/"] = { read_globals = {}, max_line_length = false }
 
 files["Elmira_ElvUI/"] = { read_globals = { "ElvUI", "GetActionInfo", "GetMacroSpell", "CreateFrame",
+  -- Classic has spell ranks, so a bar can hold a different id for the same ability than the data
+  -- pack ships. GetSpellInfo turns an id into a rank-free name, which is what the map is keyed on.
+  "GetSpellInfo",
   -- Blizzard parks an unbound button's hotkey text at this sentinel instead of clearing it, so a
   -- provider that does not compare against it reports the range dot as a keybind.
   "RANGE_INDICATOR" } }

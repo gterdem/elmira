@@ -21,6 +21,11 @@ local function defaults()
     gcdActive = false,       -- when true, GetSpellCooldown reports the GCD for spells with no real CD
     castTimes = {},          -- [spellID] = milliseconds
     knownSpells = {},        -- [spellID] = true; nil means "not known"
+    -- [spellID] = name. Classic has RANKS: several ids share one name, and that is precisely what
+    -- lets a bar hold Rank 5 while the data pack ships Rank 6. Without this the mock gave every id a
+    -- unique name, so a rank mismatch was unrepresentable and the bar-glow bug it causes could not
+    -- be written as a test. Defaults to "Spell<id>" when unset, so existing specs are unaffected.
+    spellNames = {},
     powerCosts = {},         -- [spellID] = amount (mana)
     auras = { player = {}, target = {} },
     power = { [0] = { 1000, 1000 } },
@@ -91,7 +96,7 @@ function IsSpellKnown(id) return M.knownSpells[id] == true end
 function GetSpellInfo(id)
   if M.knownSpells[id] == nil then return nil end
   -- Field 2 (rank) is absent on this client — docs/07 §9.6. Returning nil keeps specs honest.
-  return "Spell" .. tostring(id), nil, nil, M.castTimes[id] or 0
+  return M.spellNames[id] or ("Spell" .. tostring(id)), nil, nil, M.castTimes[id] or 0
 end
 
 -- Returns a LIST of cost tables, not a bare number. Reflects runes on the live client (345 -> 69

@@ -276,4 +276,48 @@ describe("Display.BarGlow", function()
       assert.is_nil(d.providers[1].info)
     end)
   end)
+
+  -- Classic has spell RANKS. Each rank is its own spell id; the bar holds whichever rank the player
+  -- dragged there; the data pack ships exactly one id per ability. This is the difference between
+  -- "the glow works" and "the glow works for Judgement but never for Exorcism", with no error and
+  -- nothing in any log.
+  describe("spell ranks", function()
+    it("finds the button when the bar holds a DIFFERENT rank of the same spell", function()
+      -- Pack says Rank 6 (415073); the bar holds Rank 5 (415072). Same name, different id.
+      mock.spellNames[415073], mock.spellNames[415072] = "Exorcism", "Exorcism"
+      mock.knownSpells[415073] = true
+      mock.knownSpells[415072] = true
+      mock.actionInfo[1] = { "spell", 415072 }
+      setButton("ActionButton1", { action = 1, IsVisible = function() return true end,
+                                   GetName = function() return "ActionButton1" end })
+      local buttons, source = BarGlow.buttonsFor("EXORCISM")
+      assert.equal(1, #buttons)
+      assert.equal("blizzard", source)
+    end)
+
+    it("still prefers an exact id match when both ranks are on the bars", function()
+      mock.spellNames[415073], mock.spellNames[415072] = "Exorcism", "Exorcism"
+      mock.knownSpells[415073] = true
+      mock.knownSpells[415072] = true
+      mock.actionInfo[1] = { "spell", 415072 }
+      mock.actionInfo[2] = { "spell", 415073 }
+      setButton("ActionButton1", { action = 1, IsVisible = function() return true end,
+                                   GetName = function() return "ActionButton1" end })
+      setButton("ActionButton2", { action = 2, IsVisible = function() return true end,
+                                   GetName = function() return "ActionButton2" end })
+      local buttons = BarGlow.buttonsFor("EXORCISM")
+      assert.equal(1, #buttons)
+      assert.equal("ActionButton2", buttons[1]:GetName())
+    end)
+
+    it("a keybind is found through the name match too", function()
+      mock.spellNames[415072], mock.spellNames[415073] = "Exorcism", "Exorcism"
+      mock.knownSpells[415072] = true
+      mock.knownSpells[415073] = true
+      mock.actionInfo[1] = { "spell", 415072 }
+      setButton("ActionButton1", { action = 1, IsVisible = function() return true end,
+                                   HotKey = { GetText = function() return "3" end } })
+      assert.equal("3", BarGlow.keybindFor("EXORCISM"))
+    end)
+  end)
 end)

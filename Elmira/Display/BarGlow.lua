@@ -15,6 +15,7 @@ ns = ns or _G.__ELM_NS or {}
 
 local BarGlow = {}
 local blizzMap = nil        -- spellID -> { buttons }, lazily built, invalidated by bar events
+local blizzByName = nil     -- spell NAME -> { buttons }; Classic has ranks, see nameOf()
 
 local BLIZZ_BARS = {
   "ActionButton", "MultiBarBottomLeftButton", "MultiBarBottomRightButton",
@@ -58,8 +59,18 @@ local function onlyOnScreen(buttons)
   return out
 end
 
+-- Classic has spell RANKS: each rank is its own spell id, the bar holds whichever rank the player
+-- dragged there, and the data pack ships exactly one id per ability. Matching on id alone misses a
+-- bar holding Exorcism (Rank 5) when the pack says 415073 (Rank 6), for every spell that has ranks —
+-- and misses it silently, which is the whole failure mode of this file. Names have no rank.
+local function nameOf(id)
+  if not (id and GetSpellInfo) then return nil end
+  local name = GetSpellInfo(id)
+  return name
+end
+
 local function buildBlizzMap()
-  local map = {}
+  local map, names = {}, {}
   for _, prefix in ipairs(BLIZZ_BARS) do
     for i = 1, 12 do
       local button = _G[prefix .. i]
@@ -70,21 +81,34 @@ local function buildBlizzMap()
         if id then
           map[id] = map[id] or {}
           map[id][#map[id] + 1] = button
+          local name = nameOf(id)
+          if name then
+            names[name] = names[name] or {}
+            names[name][#names[name] + 1] = button
+          end
         end
       end
     end
   end
-  return map
+  return map, names
+end
+
+-- Blizzard-scan buttons for an id, by id then by name.
+local function blizzButtons(id)
+  if not blizzMap then BarGlow.Rebuild() end
+  if blizzMap[id] then return blizzMap[id] end
+  local name = nameOf(id)
+  return name and blizzByName and blizzByName[name] or nil
 end
 
 -- Bars change: the player drags a spell, pages a bar, edits a macro, or a stance swaps the whole
 -- set. A stale map glows a button that no longer holds the spell, which is worse than not glowing.
 function BarGlow.Invalidate()
-  blizzMap = nil
+  blizzMap, blizzByName = nil, nil
 end
 
 function BarGlow.Rebuild()
-  blizzMap = buildBlizzMap()
+  blizzMap, blizzByName = buildBlizzMap()
   return blizzMap
 end
 
@@ -113,8 +137,7 @@ function BarGlow.buttonsFor(spellKey)
     end
   end
 
-  if not blizzMap then BarGlow.Rebuild() end
-  local fallback = onlyOnScreen(blizzMap[id])
+  local fallback = onlyOnScreen(blizzButtons(id))
   if #fallback > 0 then return fallback, "blizzard" end
   return {}, nil
 end
@@ -130,8 +153,7 @@ function BarGlow.keybindFor(spellKey)
     end
   end
 
-  if not blizzMap then BarGlow.Rebuild() end
-  local buttons = blizzMap[id]
+  local buttons = blizzButtons(id)
   local button = buttons and buttons[1]
   if button and button.HotKey then
     local text = button.HotKey:GetText()
