@@ -158,6 +158,25 @@ describe("Gear matrix: PALADIN_EXODIN", function()
     return names
   end
 
+  -- Same key shape as queueToNames, applied to a compiled entry instead of a queue slot -- so an
+  -- entry and a slot it might have produced always compare on identical keys.
+  local function entryKey(entry)
+    return entry.spell or ("item:" .. tostring(entry.item))
+  end
+
+  -- How many compiled entries in the REAL build can produce each spell/item key. Derived from
+  -- `build.entries` every time, never a hand-maintained list of "the ambiguous spells" -- so a future
+  -- entry added for an existing key (a second CONSECRATION line, say) makes this ambiguity guard fire
+  -- the moment any scenario's `expect` references that key, with no separate bookkeeping to remember.
+  local function countEntriesByKey(compiledBuild)
+    local counts = {}
+    for _, entry in ipairs(compiledBuild.entries) do
+      local key = entryKey(entry)
+      counts[key] = (counts[key] or 0) + 1
+    end
+    return counts
+  end
+
   -- Stand-in for Core/Advisor.lua, which does not exist yet (see the report — this is flagged there
   -- as a gap, not patched here per the task brief's "do not edit Core/"). Data/Advice/<Class>.lua's
   -- own header says "First matching soul rule wins"; PALADIN_EXODIN's only rule carries no `when`, so
@@ -185,10 +204,50 @@ describe("Gear matrix: PALADIN_EXODIN", function()
 
   for _, scenario in ipairs(scenarios.PALADIN_EXODIN) do
     if scenario.expect then
+      -- Ambiguity guard: `queueToNames`/`expect` only compare spell KEYS, and PALADIN_EXODIN has
+      -- several keys more than one entry can produce (three JUDGEMENT entries, three CONSECRATION,
+      -- two DIVINE_STORM as of 2026-09-02). A name-only match can't tell which entry actually fired,
+      -- so a reordering that makes a gated upgrade unreachable can still pass — the exact class of bug
+      -- that nearly shipped this week. This fails the suite the moment a scenario's `expect` touches an
+      -- ambiguous key without an `expectLabels` to say which entry must have produced it; it is derived
+      -- from the compiled build every run (see countEntriesByKey), never a hardcoded spell list, so a
+      -- future entry added for an existing key trips it automatically.
+      it(scenario.name .. ": expect spells are disambiguated where the build is ambiguous", function()
+        local counts = countEntriesByKey(build)
+        local seen, ambiguous = {}, {}
+        for _, key in ipairs(scenario.expect) do
+          if (counts[key] or 0) > 1 and not seen[key] then
+            seen[key] = true
+            ambiguous[#ambiguous + 1] = key
+          end
+        end
+        if #ambiguous > 0 then
+          assert.is_not_nil(scenario.expectLabels, "scenario '" .. scenario.name ..
+            "' expect[] includes " .. table.concat(ambiguous, ", ") ..
+            " -- PALADIN_EXODIN has more than one entry that can produce " ..
+            (#ambiguous > 1 and "each of those keys" or "that key") ..
+            "; add expectLabels naming which entry must fire in each slot")
+        end
+      end)
+
       it(scenario.name .. ": top-" .. #scenario.expect .. " queue", function()
         local state = stateFromScenario(scenario)
         local queue = Simulation.queue(build, state, 3)
         assert.same(scenario.expect, queueToNames(queue))
+
+        if scenario.expectLabels then
+          assert.equal(#scenario.expect, #scenario.expectLabels, "scenario '" .. scenario.name ..
+            "': expectLabels must be the same length as expect")
+          for i, slot in ipairs(queue) do
+            -- `false` is the sentinel for "the unlabelled baseline entry": a compiled entry with no
+            -- `label` field carries entry.label == nil, and a Lua array cannot hold a nil element
+            -- without leaving a hole that ipairs/# would stop at — so expectLabels spells that case
+            -- out as `false` instead, which can never collide with a real (string) label.
+            local want = scenario.expectLabels[i]
+            if want == false then want = nil end
+            assert.equal(want, slot.label, "scenario '" .. scenario.name .. "' slot " .. i .. " label")
+          end
+        end
 
         if scenario.bonusExpected then
           for key, want in pairs(scenario.bonusExpected) do

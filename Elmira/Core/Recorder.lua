@@ -31,6 +31,16 @@ Recorder.MAX_MARKS = 120
 -- A cast row is five short fields, far cheaper than a mark, and one arrives per GCD at most.
 Recorder.MAX_CASTS = 600
 
+-- Two decimals, matching every other number that reaches SavedVariables. `at` and `elapsed` are
+-- stamped HERE, after captureMark has returned, so Core/Slash.lua's rounding never reached them and
+-- a recording carried `250081.013` / `74.339000000007` among otherwise-tidy values. Duplicated
+-- rather than shared because this file deliberately depends on nothing.
+local function r2(x)
+  if type(x) ~= "number" then return nil end
+  if x < 0 then return -(math.floor(-x * 100 + 0.5) / 100) end
+  return math.floor(x * 100 + 0.5) / 100
+end
+
 local function newState()
   return { active = false, marks = {}, dropped = 0, deduped = 0, startedAt = nil, lastKey = nil,
            casts = {}, castsDropped = 0 }
@@ -74,8 +84,8 @@ function Recorder.mark(label, now, capture, dedupeKey)
   state.lastKey = dedupeKey
 
   snapshot.label = label or "mark"
-  snapshot.at = now
-  snapshot.elapsed = (now and state.startedAt) and (now - state.startedAt) or nil
+  snapshot.at = r2(now)
+  snapshot.elapsed = (now and state.startedAt) and r2(now - state.startedAt) or nil
 
   state.marks[#state.marks + 1] = snapshot
   while #state.marks > Recorder.MAX_MARKS do

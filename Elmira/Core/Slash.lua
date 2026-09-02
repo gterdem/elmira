@@ -169,6 +169,17 @@ function ns.captureMark(pack)
   local okP, mana = pcall(function() return state:power("MANA") end)
   if okP and mana then mark.mana = r2(mana) end
 
+  -- What each spell COSTS, read from the client rather than the data table (GetSpellPowerCost tracks
+  -- the rank and the runes; Data/Spells.lua cannot). Without this, "the seal reported usable at 86
+  -- mana" is an argument rather than a check: cost next to mana settles whether `usable` is wrong or
+  -- the seal is simply cheap. SEAL_OF_MARTYRDOM carries no `cost` in Data/Spells.lua at all, so the
+  -- client is the only source for it.
+  mark.powerCosts = {}
+  for key in pairs(pack.spells or {}) do
+    local okC, cost = pcall(function() return state:powerCost(key) end)
+    if okC and cost and cost > 0 then mark.powerCosts[key] = r2(cost) end
+  end
+
   -- A queue computed with no target is not the queue the player was looking at.
   local okT, exists = pcall(function() return state:targetExists() end)
   if okT then

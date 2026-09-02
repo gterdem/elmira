@@ -24,7 +24,9 @@ Elmira.API = ns.API
 ns.log = function(fmt, ...) NA:Printf(fmt, ...) end
 
 -- Overrides the no-op in Core/Slash.lua. Only ONE snapshot is kept: the dump is a diagnostic, and
--- docs/12 budgets SavedVariables size — an append-forever history would quietly grow the SV file
+-- docs/12 budgets the Insights/Tracker ENCOUNTER history (20/100/250 records), which is a different
+-- thing from the recorder's mark/cast ring buffer — that one is budgeted in Core/Recorder.lua itself.
+-- Either way an append-forever history would quietly grow the SV file
 -- every time the command is run. `global` scope, not `profile`: the snapshot describes the
 -- character, not a set of user preferences, and must survive a profile switch.
 -- Returns whether it actually saved. A silent `return` here while Slash prints "saved to ..." makes

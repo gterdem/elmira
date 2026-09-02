@@ -1,5 +1,7 @@
 # Changelog
 ## Unreleased
+- Recordings now note what each spell costs, so a suggestion you could not afford can be told apart
+  from one that was simply cheap, and mark timestamps are rounded like every other recorded number.
 - The Exodin build now lists Seal of Martyrdom as a requirement. It is bought from a book at level 10
   rather than being a rune, so it is easy to reach 60 without it — and without a seal most of the
   rotation has nothing to suggest.

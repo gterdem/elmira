@@ -7,8 +7,13 @@ ns = ns or _G.__ELM_NS or {}
 
 local Interface = {}
 
--- Verbatim from docs/01 §2, in order. A literal list here means a doc/code drift fails a test
--- instead of rotting silently (see tests/spec/interface_spec.lua).
+-- The same MEMBERS as docs/01 §2, which is what interface_spec.lua enforces — not the same order.
+-- The grouping below is chronological (original set, then M1's level/rune/sealLinger, then M2's
+-- gcdDuration and baseCooldown/powerCost) because each block carries the comment explaining why it
+-- was added; docs/01 §2 groups by topic instead, so `gcdDuration` sits next to `gcd` there. This
+-- comment used to claim "verbatim, in order", which was false and invited someone to trust the order
+-- as meaningful. A literal list here still means doc/code drift in MEMBERSHIP fails a test rather
+-- than rotting silently.
 Interface.CONTRACT = {
   "now", "gcd", "cooldown", "usable", "castTime", "buff", "debuff", "power",
   "targetType", "targetHPPct", "targetExists", "inCombat", "moving", "weapon", "setCount",
