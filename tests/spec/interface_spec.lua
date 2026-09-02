@@ -17,6 +17,7 @@ describe("Adapters.Interface (State contract)", function()
       "enchant", "bonus", "itemCooldown", "itemUsable", "seal", "swingRemaining", "ttd",
       "enemies", "mode", "latency",
       "level", "rune", "sealLinger",
+      "gcdDuration",
       "baseCooldown", "powerCost",
     }
     assert.same(expected, Interface.CONTRACT)
@@ -58,6 +59,7 @@ describe("Adapters.Interface (State contract)", function()
     assert.equal(0, s.level())
     assert.is_false(s.rune())
     assert.is_nil(s.sealLinger())
+    assert.equal(0, s.gcdDuration())
     assert.equal(0, s.baseCooldown())
     local amount, kind = s.powerCost()
     assert.equal(0, amount); assert.is_nil(kind)

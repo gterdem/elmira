@@ -15,6 +15,38 @@ ns.saveDump = ns.saveDump or function() end
 local Slash = {}
 local entries = {}
 
+-- Builds the queue for every registered build, as data rather than text, so `/elm debug dump` can
+-- persist it. Kept next to the slash command that prints it so the two can never diverge.
+function ns.queueSnapshot(pack, depth)
+  if not (pack and pack.builds and ns.Schema and ns.Simulation and ns.API) then return nil end
+  local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
+  local state = ns.API.GetState()
+  local out = {}
+  for key, build in pairs(pack.builds) do
+    local compiled, errors = ns.Schema.compile(build, ctx)
+    if not compiled then
+      out[key] = { error = ns.Schema.errorLines(errors or {}) }
+    else
+      local rows = {}
+      for i, slot in ipairs(ns.Simulation.queue(compiled, state, depth or 5)) do
+        rows[i] = { spell = slot.spell, item = slot.item, t = slot.t, cdVolatile = slot.cdVolatile }
+      end
+      -- The per-entry verdicts matter more than the queue itself when something looks wrong.
+      local verdicts = {}
+      for i, entry in ipairs(compiled.entries) do
+        verdicts[i] = {
+          spell = entry.spell, item = entry.item,
+          passes = entry.test and entry.test(state) or false,
+          usable = entry.spell and state:usable(entry.spell) or nil,
+          cooldown = entry.spell and state:cooldown(entry.spell) or nil,
+        }
+      end
+      out[key] = { queue = rows, entries = verdicts, inCombat = state:inCombat() }
+    end
+  end
+  return out
+end
+
 -- entry = { key, args?, desc, available, milestone?, order, run = function(rest) -> {lines} }
 function Slash.register(entry)
   table.insert(entries, entry)
@@ -82,6 +114,10 @@ Slash.register{
         return { string.format("dump: no data pack registered for %s", tostring(class)) }
       end
       local snapshot = Collector.snapshot(pack)
+      -- Capture the queue into the file too. Reading it off the chat frame is unworkable in combat —
+      -- it truncates, and the player has better things to do mid-fight than copy text — so the one
+      -- command that matters writes everything to disk and the chat output is only a preview.
+      snapshot.queues = ns.queueSnapshot and ns.queueSnapshot(pack) or nil
       local saved = ns.saveDump(snapshot)
       local lines = Collector.format(snapshot)
       local mismatches = Collector.mismatchCount(snapshot)

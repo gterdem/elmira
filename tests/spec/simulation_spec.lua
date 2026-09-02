@@ -304,6 +304,36 @@ describe("Simulation.queue", function()
       assert.equal("CONSECRATION", queue[2].spell)
     end)
   end)
+  -- Both found by the M2 acceptance run on a live character; both invisible to a spec that hands the
+  -- state a nonzero `gcd`, which is what every earlier fixture did (docs/07 §9.15).
+  describe("live-character defects found at M2 acceptance", function()
+    it("advances the clock by the GCD DURATION, not the remaining GCD", function()
+      -- Idle character: no global is running, so gcd() is 0 but a cast still costs 1.5s.
+      local state = FakeState.new{ gcd = 0, gcdDuration = 1.5,
+                                   usable = { EXORCISM = true, CONSECRATION = true } }
+      local build = compileBuild({
+        schema = 1, key = "T", name = "T", class = "PALADIN",
+        entries = { { spell = "EXORCISM", when = {} }, { spell = "CONSECRATION", when = {} } },
+      })
+      local q = Simulation.queue(build, state, 2)
+      assert.equal(2, #q)
+      assert.is_true(q[2].t > 0, "slot 2 must be later than slot 1; t=0 means the clock never moved")
+    end)
+
+    it("does not suggest the same seal in every slot", function()
+      local state = FakeState.new{ gcd = 0, gcdDuration = 1.5, seal = nil,
+                                   usable = { SEAL_OF_MARTYRDOM = true, EXORCISM = true } }
+      local build = compileBuild({
+        schema = 1, key = "T", name = "T", class = "PALADIN",
+        entries = { { spell = "SEAL_OF_MARTYRDOM", when = { { "no_seal" } } },
+                    { spell = "EXORCISM", when = {} } },
+      })
+      local q = Simulation.queue(build, state, 3)
+      assert.equal("SEAL_OF_MARTYRDOM", q[1].spell)
+      assert.is_not.equal("SEAL_OF_MARTYRDOM", q[2].spell,
+        "casting the seal must satisfy no_seal for the following slots")
+    end)
+  end)
 end)
 
 -- M1 audit findings 1-3: every one of these used to fail silently or confusingly. They are grouped
@@ -376,4 +406,5 @@ describe("Simulation dependency and normalisation guards", function()
     -- 650 -> 350 -> 50, so the third pick must fail the >= 300 gate.
     assert.equal(2, #Simulation.queue(build, state, 4))
   end)
+
 end)

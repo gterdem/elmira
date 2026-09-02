@@ -4,6 +4,9 @@ FakeState.__index = FakeState
 function FakeState.new(t)
   local s = setmetatable({}, FakeState)
   s._now = t.now or 0; s._gcd = t.gcd or 0
+  -- Defaults to a real 1.5s global unless a scenario overrides it: a duration of 0 means the queue
+  -- cannot advance, which is a client impossibility and only ever masks bugs.
+  s._gcdDuration = t.gcdDuration or 1.5
   s.cooldowns = t.cooldowns or {}; s.buffs = t.buffs or {}; s.debuffs = t.debuffs or {}
   s.powers = t.power or { MANA = {1000, 1000} }; s._targetType = t.targetType; s._moving = t.moving or false
   s.weapons = t.weapon or {}; s.sets = t.sets or {}; s.items = t.items or {}; s._seal = t.seal
@@ -22,6 +25,7 @@ function FakeState.new(t)
 end
 function FakeState:now() return self._now end
 function FakeState:gcd() return self._gcd end
+function FakeState:gcdDuration() return self._gcdDuration end
 function FakeState:cooldown(key) return self.cooldowns[key] or 0 end
 function FakeState:usable(key) return self.usableSet == nil or self.usableSet[key] ~= false end
 function FakeState:castTime(key) return self.castTimes[key] or 0 end

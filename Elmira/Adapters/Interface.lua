@@ -19,6 +19,11 @@ Interface.CONTRACT = {
   -- (runes M2, sealLinger M3b); until then newNullState()'s safe zeros mean such a condition reads
   -- false rather than erroring.
   "level", "rune", "sealLinger",
+  -- Added at M2 after the acceptance run: Simulation stepped the virtual clock by `gcd()`, but that
+  -- is the REMAINING gcd and reads 0 whenever you are not mid-global — so the clock never advanced
+  -- and every queue slot came back at t=0. `gcdDuration` is how long a GCD lasts; `gcd` is how much
+  -- of one is left. Conflating them is invisible in tests that hand-set a nonzero `gcd`.
+  "gcdDuration",
   -- Also M1: the client knows a spell's real cooldown and cost better than any shipped table can,
   -- because both track the rank the character actually has and neither goes stale on a tuning pass.
   -- GetSpellPowerCost delivers on that and tracks runes (345 -> 69 measured). GetSpellBaseCooldown
@@ -56,6 +61,7 @@ function Interface.newNullState()
   return {
     now = function() return 0 end,
     gcd = function() return 0 end,
+    gcdDuration = function() return 0 end,
     cooldown = function() return 0 end,
     usable = function() return false end,
     castTime = function() return 0 end,

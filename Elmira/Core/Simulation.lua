@@ -25,7 +25,11 @@ local QUEUE_HORIZON = 86400
 -- Pluggable per docs/01 §3, so M3b can drive the step from LibClassicSwingTimerAPI instead of the
 -- GCD. Contract: fn(entry, state, t) -> seconds to advance.
 local defaultTimeStep = function(entry, state, _t)
-  local gcd = state:gcd() or 0
+  -- gcdDuration, NOT gcd: the latter is the REMAINING global cooldown and is 0 whenever the player is
+  -- not mid-global, which made every simulated slot land at t=0 on a live character. Verified in game
+  -- 2026-09-02 (docs/07 §9.15). Falls back to gcd() only for a state predating the contract member.
+  local gcd = (state.gcdDuration and state:gcdDuration()) or 0
+  if gcd <= 0 then gcd = state:gcd() or 0 end
   local cast = entry.spell and state:castTime(entry.spell) or 0
   return math.max(gcd, cast or 0)
 end
@@ -68,6 +72,19 @@ local function newVirtualState(real)
 
   function v:now() return real:now() + self.elapsed end
   function v:gcd() return real:gcd() end
+  function v:gcdDuration()
+    return (real.gcdDuration and real:gcdDuration()) or real:gcd() or 0
+  end
+
+  -- The virtual state models cooldowns and the resource pool, not auras — so a `no_seal` entry used
+  -- to pass in every slot and the queue came back as the same seal five times (docs/07 §9.15).
+  -- Seals are the one aura the contract exposes directly, so casting one can be reflected honestly
+  -- here rather than by special-casing the entry. Everything else stays as documented: an entry that
+  -- depends on an aura it just consumed is still not modelled (see M5d twist/stack).
+  function v:seal()
+    if self.sealOverride ~= nil then return self.sealOverride end
+    return real:seal()
+  end
 
   function v:cooldown(key)
     local override = self.cdOverride[key]
@@ -148,6 +165,13 @@ local function applyCast(v, entry)
         v.spent[costKind] = (v.spent[costKind] or 0) + costAmount
       end
     end
+  end
+
+  -- Casting a seal makes it the active seal, which is what stops a `no_seal` entry from matching
+  -- again on the next slot. Detected from the compiled entry's own data, so Simulation stays free of
+  -- class knowledge — the data pack is what says a spell is a seal.
+  if entry.spell and entry.data and entry.data.seal then
+    v.sealOverride = entry.spell
   end
 
   -- docs/02: an entry may declare `hold = true` to be shown but not consume simulated time (off-GCD

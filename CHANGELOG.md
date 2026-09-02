@@ -1,5 +1,10 @@
 # Changelog
 ## Unreleased
+- Fixed the suggestion queue advancing no time: every slot was computed for the same instant, so the
+  queue after the first suggestion was meaningless. Fixed the queue repeating "cast your seal" five
+  times out of combat. Both were only visible on a live character.
+- `/elm debug dump` now saves the full queue and each entry's pass/fail verdict to SavedVariables, so
+  results no longer have to be copied out of the chat frame mid-fight.
 - `/elm debug queue [build] [depth]` prints the live suggestion queue and, beneath it, why each entry
   passed or failed its conditions. Until the display lands this is the only way to see what the
   engine actually decides on a real character.

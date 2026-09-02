@@ -151,6 +151,20 @@ function Vanilla.newState(spells, sets, souls, bonusDefs)
     return 0
   end
 
+  -- How long a global cooldown LASTS, as opposed to how much of one is left. Read from whatever
+  -- spell is currently showing a GCD-length cooldown; falls back to the 1.5s base when nothing is,
+  -- which is the common case out of combat. Melee GCDs are not haste-reduced on this client.
+  function S:gcdDuration()
+    for key in pairs(spells) do
+      local id = resolve(key)
+      if id and IsPlayerSpell and IsPlayerSpell(id) then
+        local _, duration = GetSpellCooldown(id)
+        if duration and duration > 0 and duration <= GCD_CEILING then return duration end
+      end
+    end
+    return 1.5
+  end
+
   function S:cooldown(key)
     local id = resolve(key)
     if not id then return 0 end

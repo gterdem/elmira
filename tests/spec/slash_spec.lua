@@ -89,6 +89,33 @@ describe("Core.Slash", function()
       assert.truthy(out:find("no builds registered", 1, true), out)
     end)
 
+    -- The player's own feedback after the acceptance run: copying chat output mid-combat is not
+    -- workable. The queue has to reach the saved file, not just the chat frame.
+    it("captures the queue as data for the dump file", function()
+      local ns = helper.ns()
+      ns.Schema = { compile = function(b) return { entries = { { spell = "EXORCISM", test = function() return true end } } } end,
+                    errorLines = function() return {} end }
+      ns.Simulation = { queue = function() return { { spell = "EXORCISM", t = 0 } } end }
+      ns.API = { GetState = function() return { usable = function() return true end,
+                                                cooldown = function() return 0 end,
+                                                inCombat = function() return true end } end }
+      local snap = ns.queueSnapshot({ builds = { PALADIN_EXODIN = {} } })
+      assert.is_table(snap.PALADIN_EXODIN)
+      assert.equal("EXORCISM", snap.PALADIN_EXODIN.queue[1].spell)
+      assert.equal("EXORCISM", snap.PALADIN_EXODIN.entries[1].spell)
+      assert.is_true(snap.PALADIN_EXODIN.inCombat)
+    end)
+
+    it("records a validation failure instead of an empty queue", function()
+      local ns = helper.ns()
+      ns.Schema = { compile = function() return nil, { { message = "bad" } } end,
+                    errorLines = function() return { "entry 1: bad" } end }
+      ns.Simulation = { queue = function() return {} end }
+      ns.API = { GetState = function() return {} end }
+      local snap = ns.queueSnapshot({ builds = { PALADIN_EXODIN = {} } })
+      assert.same({ "entry 1: bad" }, snap.PALADIN_EXODIN.error)
+    end)
+
     it("lists queue as an available debug subcommand", function()
       local out = table.concat(Slash.run("debug"), "\n")
       assert.truthy(out:find("queue", 1, true), out)
