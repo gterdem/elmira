@@ -410,6 +410,30 @@ end
 
 -- Returns compiled, errors. On any validation error it returns nil — a half-compiled build would
 -- silently drop entries, which is the failure mode ADR-0002 exists to prevent.
+-- A short readable name for ONE condition: "buff:VENGEANCE_BUFF", "no_seal", "item_ready:13".
+-- Nested all/any/not recurse into "any(buff:X,bonus:Y)": a bare "any" names the operator but not
+-- what it tested, which is the half that explains a rejected suggestion.
+local condLabel
+function condLabel(cond)
+  if type(cond) ~= "table" then return "?" end
+  local kind = tostring(cond[1])
+  if kind == "all" or kind == "any" or kind == "not" then
+    local parts = {}
+    for i = 2, #cond do parts[#parts + 1] = condLabel(cond[i]) end
+    return kind .. "(" .. table.concat(parts, ",") .. ")"
+  end
+  -- Variadic conditions ({"target_type","Undead","Demon"}) must show every argument: naming only
+  -- the first describes a narrower test than the one that ran. "/" separates arguments so they
+  -- cannot be misread as the "," that separates siblings inside any(...)/all(...).
+  local args = {}
+  for i = 2, #cond do
+    local a = cond[i]
+    if type(a) == "string" or type(a) == "number" then args[#args + 1] = tostring(a) end
+  end
+  if #args > 0 then return kind .. ":" .. table.concat(args, "/") end
+  return kind
+end
+
 function Schema.compile(build, ctx)
   ctx = ctx or {}
   local ok, errors = Schema.validate(build, ctx)
@@ -427,6 +451,17 @@ function Schema.compile(build, ctx)
     for k, v in pairs(entry) do out[k] = v end
     out.index = i
     out.test = compileList(entry.when, ctx, function() end) -- already validated; cannot fail here
+    -- One compiled test PER top-level condition, alongside the combined `test`. `passes = false`
+    -- cannot say WHY an entry was rejected, and explaining a suggestion is the entire value of a
+    -- recording taken with no display to look at. Same closures, evaluated separately; the combined
+    -- `test` stays authoritative for the queue. Also what M3's hover-"why" needs.
+    out.conditions = {}
+    for ci = 1, #(entry.when or {}) do
+      out.conditions[ci] = {
+        label = condLabel(entry.when[ci]),
+        test = compileCond(entry.when[ci], ctx, function() end),
+      }
+    end
     local data = entry.spell and ctx.spells and ctx.spells[entry.spell] or nil
     out.data = data
     -- Surfaced on the entry so Simulation and M3's renderer never reach back into ctx.

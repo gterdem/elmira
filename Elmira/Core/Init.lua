@@ -40,7 +40,7 @@ end
 -- so the player never has to remember to "save" — stop recording and reload is the whole ritual.
 ns.flushRecorder = function()
   if not (NA.db and NA.db.global and ns.Recorder) then return false end
-  if ns.Recorder.count() == 0 then return false end
+  if ns.Recorder.count() == 0 and ns.Recorder.castCount() == 0 then return false end
   NA.db.global.recording = ns.Recorder.payload()
   return true
 end
@@ -65,6 +65,7 @@ function NA:OnInitialize()
   self:RegisterEvent("PLAYER_REGEN_DISABLED", "OnCombatStart")
   self:RegisterEvent("PLAYER_REGEN_ENABLED", "OnCombatEnd")
   self:RegisterEvent("PLAYER_EQUIPMENT_CHANGED", "OnEquipChanged")
+  self:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED", "OnCastSucceeded")
   self:RegisterEvent("PLAYER_LOGOUT", function() ns.flushRecorder() end)
 end
 
@@ -90,14 +91,19 @@ function NA:RecordAuto(label, always)
   -- dummy otherwise buries the gear states in identical combat snapshots.
   local mark = ns.captureMark(pack)
   if not mark then return end
-  ns.Recorder.mark(label, ns.now and ns.now() or 0, function() return mark end,
+  ns.Recorder.mark(label, ns.now(), function() return mark end,
     (not always) and ns.Recorder.fingerprint(mark) or nil)
 end
 
 -- Sampling interval while fighting. combat-start captures t=0, before anything is on cooldown, and
 -- combat-end captures after most cooldowns have expired — so neither sees the state the rotation
 -- actually runs in. This is the only way an in-combat queue, with real cooldowns, reaches the file.
-local COMBAT_SAMPLE = 5
+local COMBAT_SAMPLE = 3
+
+-- How often the top suggestion is refreshed into memory during combat. NOT a mark: this writes two
+-- fields to a local, so it is cheap enough to run between marks and gives the cast log a suggestion
+-- that is at most this stale.
+local SUGGEST_POLL = 1
 
 function NA:OnCombatStart()
   self:RecordAuto("combat-start")
@@ -116,6 +122,57 @@ function NA:OnCombatStart()
     end
     self:RecordAuto("combat-sample", true)
   end, COMBAT_SAMPLE)
+
+  -- Poll ONCE immediately as well as on the timer. The opening cast of a fight lands within a
+  -- fraction of a second of PLAYER_REGEN_DISABLED, long before a 1 s timer first fires, so without
+  -- this every fight's opener would record with no suggestion attached -- losing exactly the cast
+  -- where the advice matters most.
+  self:PollSuggestion()
+
+  if self._suggestTimer then return end
+  self._suggestTimer = self:ScheduleRepeatingTimer(function()
+    if not (ns.Recorder and ns.Recorder.isRecording()) then
+      self:CancelTimer(self._suggestTimer, true)
+      self._suggestTimer = nil
+      return
+    end
+    self:PollSuggestion()
+  end, SUGGEST_POLL)
+end
+
+-- Keeps the most recent top suggestion in memory so a cast can be labelled with what Elmira was
+-- saying JUST BEFORE it. Reading the queue inside the cast handler instead would be wrong: by then
+-- the spell is already on cooldown and the queue has moved on to the NEXT suggestion, so every row
+-- would compare a cast against the advice that followed it.
+function NA:PollSuggestion()
+  local packs = ns.API.GetProviders("dataPacks")
+  local class = ns.Adapter.playerClass()
+  local pack = class and packs[class]
+  if not pack then return end
+  local ok, top = pcall(function() return ns.topSuggestions(pack) end)
+  if ok and top then self._suggestion = { at = ns.now(), top = top } end
+end
+
+-- The player's own casts. This is the passive answer to "was the top suggestion what you would have
+-- pressed?" -- a question that cannot be answered any other way before M3, because there is no
+-- display to look at and no way to type a command mid-fight.
+function NA:OnCastSucceeded(_, unit, _, spellID)
+  if unit ~= "player" then return end
+  if not (ns.Recorder and ns.Recorder.isRecording()) then return end
+  if type(spellID) ~= "number" then return end
+  local packs = ns.API.GetProviders("dataPacks")
+  local class = ns.Adapter.playerClass()
+  local pack = class and packs[class]
+  if not pack then return end
+
+  self._castKeys = self._castKeys or {}
+  if self._castKeysPack ~= pack then
+    self._castKeys = ns.spellKeyByID(pack)
+    self._castKeysPack = pack
+  end
+
+  local row = ns.castRow(ns.now(), spellID, self._castKeys, self._suggestion)
+  if row then ns.Recorder.cast(row) end
 end
 
 function NA:OnCombatEnd()
@@ -123,6 +180,11 @@ function NA:OnCombatEnd()
     self:CancelTimer(self._combatTimer, true)
     self._combatTimer = nil
   end
+  if self._suggestTimer then
+    self:CancelTimer(self._suggestTimer, true)
+    self._suggestTimer = nil
+  end
+  self._suggestion = nil
   self:RecordAuto("combat-end")
 end
 

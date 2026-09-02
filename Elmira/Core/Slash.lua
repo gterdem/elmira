@@ -12,10 +12,101 @@ ns.L = ns.L or setmetatable({}, { __index = function(_, k) return k end })
 -- spec (and harmless before OnInitialize) instead of erroring on a nil global.
 ns.saveDump = ns.saveDump or function() end
 
+-- Every timestamp comes from the injected clock (docs/01 §2), never GetTime() directly. Nothing ever
+-- assigned `ns.now`, and all three call sites guarded it as `ns.now and ns.now() or 0` -- so every
+-- recorder mark was stamped 0 and a recording had no time axis at all. The guard hid the omission
+-- instead of surfacing it; giving the name a definition here is what makes those call sites mean
+-- something. Falls back to 0 only when no state exists yet, which is the pre-OnInitialize case.
+function ns.now()
+  local state = ns.API and ns.API.GetState()
+  if state and state.now then return state:now() end
+  return 0
+end
+
 local Slash = {}
 local entries = {}
 
--- One recorder mark. Deliberately NOT the full dump: 41 spell rows x40 marks would blow the
+-- Two decimals is the whole of the client's useful precision (cooldowns tick at 10 Hz), and it is
+-- what turns `5.7760000000126` into `5.78`. Applied to every number that reaches SavedVariables:
+-- the fourth recording spent a large share of its 99 KB on float noise nobody can read.
+local function r2(x)
+  if type(x) ~= "number" then return nil end
+  if x < 0 then return -(math.floor(-x * 100 + 0.5) / 100) end
+  return math.floor(x * 100 + 0.5) / 100
+end
+
+-- Compiling a build is not free and the cast log polls the queue once a second in combat. Builds do
+-- not change at runtime, so compile once per build table and keep it. Weak keys mean a pack swap
+-- (which creates new build tables) drops the old entries instead of pinning them forever.
+local compileCache = setmetatable({}, { __mode = "k" })
+
+function ns.compileBuild(build, ctx)
+  local hit = compileCache[build]
+  -- A hit must also have been compiled against THIS ctx. Keying on the build alone would serve a
+  -- stale compilation whenever the pack's data tables are replaced but the build tables survive --
+  -- silently, with the queue simply evaluating against the old spell/set data.
+  if hit and hit.spells == ctx.spells and hit.sets == ctx.sets
+     and hit.souls == ctx.souls and hit.bonuses == ctx.bonuses then
+    return hit.compiled, hit.errors
+  end
+  local compiled, errors = ns.Schema.compile(build, ctx)
+  compileCache[build] = { compiled = compiled, errors = errors,
+                          spells = ctx.spells, sets = ctx.sets, souls = ctx.souls, bonuses = ctx.bonuses }
+  return compiled, errors
+end
+
+-- Which buffs this pack's builds actually ask about, walked out of their conditions. Recording every
+-- aura on the player would be huge and mostly noise; recording none is why the third and fourth
+-- recordings could not explain a single verdict -- whether the seal was up had to be inferred
+-- backwards from `no_seal` passing.
+function ns.referencedBuffs(pack)
+  local out = {}
+  local function walk(when)
+    for _, cond in ipairs(when or {}) do
+      if type(cond) == "table" then
+        local kind = cond[1]
+        if kind == "buff" or kind == "no_buff" or kind == "seal" then
+          if type(cond[2]) == "string" then out[cond[2]] = true end
+        elseif kind == "all" or kind == "any" or kind == "not" then
+          local nested = {}
+          for i = 2, #cond do nested[#nested + 1] = cond[i] end
+          walk(nested)
+        end
+      end
+    end
+  end
+  for _, build in pairs(pack and pack.builds or {}) do
+    for _, entry in ipairs(build.entries or {}) do walk(entry.when) end
+  end
+  return out
+end
+
+-- Reverse map spellID -> symbolic key. The cast log arrives from the client as a raw numeric id and
+-- every other part of the addon speaks keys (hard rule 4). Two keys can share one id (RUNE_* mirrors
+-- its ability), so collisions resolve deterministically: the non-RUNE_ name wins, then the
+-- lexicographically smaller one. Left to pairs() order this map would differ between reloads.
+function ns.spellKeyByID(pack)
+  local map = {}
+  for key, data in pairs(pack and pack.spells or {}) do
+    if type(data) == "table" and data.id then
+      local held = map[data.id]
+      if held == nil then
+        map[data.id] = key
+      else
+        local heldIsRune = held:sub(1, 5) == "RUNE_"
+        local keyIsRune = key:sub(1, 5) == "RUNE_"
+        if heldIsRune ~= keyIsRune then
+          if heldIsRune then map[data.id] = key end
+        elseif key < held then
+          map[data.id] = key
+        end
+      end
+    end
+  end
+  return map
+end
+
+-- One recorder mark. Deliberately NOT the full dump: 41 spell rows x120 marks would blow the
 -- SavedVariables budget for no benefit, since the spell table barely changes between marks. Keeps
 -- what actually distinguishes one gear state from another, plus the queue and every verdict.
 function ns.captureMark(pack)
@@ -44,9 +135,48 @@ function ns.captureMark(pack)
 
   -- Only cooldowns actually observed; nil ones say nothing and would triple the size.
   mark.cooldowns = {}
+  -- The LEARNED cooldown duration, which is a different question from how much is left and the one
+  -- the shipped data table can be wrong about. GetSpellBaseCooldown reported 15000 for Exorcism in
+  -- every gear state while the real cooldown was 6 s (docs/07 §9.1), so the adapter observes and
+  -- caches instead — but that cache was session-local and never reached a recording, leaving "does
+  -- Exorcism settle at 6, not the shipped 15?" unanswerable from four runs of evidence.
+  mark.baseCooldowns = {}
   for key in pairs(pack.spells or {}) do
     local okD, cd = pcall(function() return state:cooldown(key) end)
-    if okD and cd and cd > 0 then mark.cooldowns[key] = cd end
+    if okD and cd and cd > 0 then mark.cooldowns[key] = r2(cd) end
+    local okB, base = pcall(function() return state:baseCooldown(key) end)
+    if okB and base and base > 0 then mark.baseCooldowns[key] = r2(base) end
+  end
+
+  -- Timing. `gcd` is how much of a global is LEFT, `gcdDuration` is how long one lasts; conflating
+  -- them stalled the whole simulated queue at t=0 once already, so a recording states both.
+  local okG, gcd = pcall(function() return state:gcd() end)
+  if okG then mark.gcd = r2(gcd) end
+  local okGD, gcdDur = pcall(function() return state:gcdDuration() end)
+  if okGD then mark.gcdDuration = r2(gcdDur) end
+
+  -- Every buff the builds actually gate on, with stacks and remaining. Without this, a verdict of
+  -- "passes = false" on a buff condition is unfalsifiable.
+  mark.buffs = {}
+  for key in pairs(ns.referencedBuffs(pack)) do
+    local okA, stacks, remaining = pcall(function() return state:buff(key) end)
+    if okA and stacks then mark.buffs[key] = { stacks = stacks, remaining = r2(remaining) } end
+  end
+
+  local okSeal, seal = pcall(function() return state:seal() end)
+  mark.seal = okSeal and seal or nil
+
+  local okP, mana = pcall(function() return state:power("MANA") end)
+  if okP and mana then mark.mana = r2(mana) end
+
+  -- A queue computed with no target is not the queue the player was looking at.
+  local okT, exists = pcall(function() return state:targetExists() end)
+  if okT then
+    mark.target = { exists = exists == true }
+    local okTT, ttype = pcall(function() return state:targetType() end)
+    if okTT then mark.target.type = ttype end
+    local okHP, hp = pcall(function() return state:targetHPPct() end)
+    if okHP then mark.target.hpPct = r2(hp) end
   end
   return mark
 end
@@ -59,27 +189,79 @@ function ns.queueSnapshot(pack, depth)
   local state = ns.API.GetState()
   local out = {}
   for key, build in pairs(pack.builds) do
-    local compiled, errors = ns.Schema.compile(build, ctx)
+    local compiled, errors = ns.compileBuild(build, ctx)
     if not compiled then
       out[key] = { error = ns.Schema.errorLines(errors or {}) }
     else
       local rows = {}
       for i, slot in ipairs(ns.Simulation.queue(compiled, state, depth or 5)) do
-        rows[i] = { spell = slot.spell, item = slot.item, t = slot.t, cdVolatile = slot.cdVolatile }
+        rows[i] = { spell = slot.spell, item = slot.item, t = r2(slot.t), cdVolatile = slot.cdVolatile }
       end
       -- The per-entry verdicts matter more than the queue itself when something looks wrong.
       local verdicts = {}
       for i, entry in ipairs(compiled.entries) do
+        -- `usable = false` must survive as false, not become nil: a verdict of nil reads as "not
+        -- asked", which is exactly what it must not mean here. The previous one-liner was
+        -- `entry.spell and (state:usable(entry.spell) == true) or nil`, and `false or nil` is nil --
+        -- committing the very collapse the comment above it warned against. Only an explicit `if`
+        -- keeps a boolean a boolean; there is no and/or spelling of this that does.
+        local usable, cooldown = nil, nil
+        if entry.spell then
+          usable = state:usable(entry.spell) == true
+          cooldown = r2(state:cooldown(entry.spell))
+        end
+        -- WHICH condition rejected the entry. Only failures are stored: a passing condition carries
+        -- no information and every byte here is multiplied by entries x marks.
+        local failed = nil
+        for _, cond in ipairs(entry.conditions or {}) do
+          if cond.test and not cond.test(state) then
+            failed = failed or {}
+            failed[#failed + 1] = cond.label
+          end
+        end
         verdicts[i] = {
           spell = entry.spell, item = entry.item,
           passes = entry.test and entry.test(state) or false,
-          -- Same trap: `usable = false` must survive as false, not become nil. A verdict of nil reads
-          -- as "not asked", which is exactly what it must not mean here.
-          usable = entry.spell and (state:usable(entry.spell) == true) or nil,
-          cooldown = entry.spell and state:cooldown(entry.spell) or nil,
+          usable = usable,
+          cooldown = cooldown,
+          failed = failed,
         }
       end
       out[key] = { queue = rows, entries = verdicts, inCombat = state:inCombat() }
+    end
+  end
+  return out
+end
+
+-- PURE. One row of the cast log. This lives here rather than in Core/Init.lua because no spec can
+-- load Init.lua (it needs AceAddon) -- the same reason breaking the dedupe fingerprint changed no
+-- test until it was moved out. `suggestion` is the poll's {at, top} or nil.
+--
+-- `age` is how stale the suggestion was when the cast landed. It is recorded rather than filtered
+-- because the right cutoff is an analysis decision, not a capture one: a row with age 0.9 next to a
+-- 1.5 s global is weaker evidence than one at 0.1, and discarding it here would hide that.
+function ns.castRow(now, spellID, keyMap, suggestion)
+  if type(spellID) ~= "number" then return nil end
+  local row = { at = r2(now), id = spellID, spell = keyMap and keyMap[spellID] or nil }
+  if suggestion and suggestion.at then
+    row.suggested = suggestion.top
+    row.age = r2(now - suggestion.at)
+  end
+  return row
+end
+
+-- Just the top suggestion per build, for the cast log's "what was Elmira saying?" column. Depth 1
+-- and no verdicts: this runs once a second in combat, unlike queueSnapshot which runs per mark.
+function ns.topSuggestions(pack)
+  if not (pack and pack.builds and ns.Schema and ns.Simulation and ns.API) then return nil end
+  local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
+  local state = ns.API.GetState()
+  local out = {}
+  for key, build in pairs(pack.builds) do
+    local compiled = ns.compileBuild(build, ctx)
+    if compiled then
+      local slot = ns.Simulation.queue(compiled, state, 1)[1]
+      if slot then out[key] = slot.spell or (slot.item and ("item:" .. tostring(slot.item))) end
     end
   end
   return out
@@ -261,18 +443,17 @@ Slash.register{
                  "Step away, let combat drop, then /elm rec start again." }
       end
       Recorder.clear()
-      Recorder.start(ns.now and ns.now() or 0)
+      Recorder.start(ns.now())
       -- Print the plan here rather than relying on a document on another machine.
       return {
-        "Recording started. Combat and gear swaps mark themselves; no copying needed.",
-        "Run these in order — after each gear change, wait a second, then label it:",
+        "Recording started. Combat, gear swaps and your own casts all record themselves.",
+        "Nothing needs typing during a fight — you cannot, and you do not have to.",
         "  1) /elm rec mark baseline",
-        "  2) hit a dummy ~20s, let combat end        (auto)",
-        "  3) remove ONE tier-3 piece   -> /elm rec mark t3-minus-one",
-        "  4) put it back               -> /elm rec mark t3-restored",
-        "  5) remove your shoulder      -> /elm rec mark no-shoulder",
-        "  6) put it back               -> /elm rec mark shoulder-back",
-        "  7) hit the dummy again ~20s                (auto)",
+        "  2) fight something for 30s+ and PLAY NORMALLY   (auto)",
+        "     A duel or a real mob. Longer fights beat more fights.",
+        "  3) let combat drop, then fight again using cooldowns  (auto)",
+        "Gear test, if you want one — after each swap wait a second, then label it:",
+        "  remove ONE tier-3 piece -> /elm rec mark t3-minus-one, then put it back",
         "Then: /elm rec stop, then /reload. /elm rec status shows progress.",
       }
     elseif sub == "stop" then
@@ -292,7 +473,7 @@ Slash.register{
       local p = pack()
       if not p then return { "rec: no data pack registered" } end
       -- No dedupe key: a mark the player asked for is always recorded, even if nothing changed.
-      local ok, err = Recorder.mark(label ~= "" and label or "mark", ns.now and ns.now() or 0,
+      local ok, err = Recorder.mark(label ~= "" and label or "mark", ns.now(),
         function() return ns.captureMark(p) end)
       if not ok then return { "rec: " .. tostring(err) } end
       return { string.format("Marked %q (%d total).", label ~= "" and label or "mark", Recorder.count()) }

@@ -1,6 +1,18 @@
 # Changelog
 ## Unreleased
-- While recording, the addon now samples every 5 seconds during combat. Combat start happens before
+- Recording now captures **what you actually cast**, next to what Elmira was suggesting a moment
+  earlier. Until the display lands there is no way to see a suggestion mid-fight and no way to type a
+  command during one, so this is the only way to check whether the rotation advice is any good.
+- Recorded marks now carry real timestamps. Every mark in every recording so far was stamped zero, so
+  a recording could not be read in time order at all.
+- Each entry in a recorded mark now says **which condition rejected it** (`buff:VENGEANCE_BUFF`,
+  `any(target_type:Undead,rune:RUNE_PURIFYING_POWER)`), and marks now also record your buffs, active
+  seal, mana, target, global cooldown and each spell's learned cooldown. Previously a rejected
+  suggestion gave no reason and had to be guessed at backwards.
+- Recordings hold 120 marks rather than 40. A four-fight session overran the old limit and discarded
+  76 snapshots, keeping only the end of the run.
+- Recorded numbers are rounded to two decimals, which is all the precision the client has.
+- While recording, the addon now samples every 3 seconds during combat. Combat start happens before
   anything is on cooldown and combat end after most have expired, so neither captured the state the
   rotation actually runs in.
 - Combat detection now uses the player's actual combat state rather than UI lockdown, which is a
