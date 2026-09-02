@@ -77,7 +77,9 @@ end
 -- states the test is actually comparing.
 local EQUIP_DEBOUNCE = 0.5
 
-function NA:RecordAuto(label)
+-- `always` skips the dedupe fingerprint, for marks whose value is that they were taken at a
+-- particular moment rather than in a particular gear state.
+function NA:RecordAuto(label, always)
   if not (ns.Recorder and ns.Recorder.isRecording()) then return end
   local packs = ns.API.GetProviders("dataPacks")
   local class = ns.Adapter.playerClass()
@@ -89,11 +91,40 @@ function NA:RecordAuto(label)
   local mark = ns.captureMark(pack)
   if not mark then return end
   ns.Recorder.mark(label, ns.now and ns.now() or 0, function() return mark end,
-    ns.Recorder.fingerprint(mark))
+    (not always) and ns.Recorder.fingerprint(mark) or nil)
 end
 
-function NA:OnCombatStart() self:RecordAuto("combat-start") end
-function NA:OnCombatEnd() self:RecordAuto("combat-end") end
+-- Sampling interval while fighting. combat-start captures t=0, before anything is on cooldown, and
+-- combat-end captures after most cooldowns have expired — so neither sees the state the rotation
+-- actually runs in. This is the only way an in-combat queue, with real cooldowns, reaches the file.
+local COMBAT_SAMPLE = 5
+
+function NA:OnCombatStart()
+  self:RecordAuto("combat-start")
+  if not (ns.Recorder and ns.Recorder.isRecording()) then return end
+  if self._combatTimer then return end
+  -- Samples deliberately carry NO dedupe fingerprint: gear and combat state do not change during a
+  -- fight, so a fingerprinted sample would be discarded as "unchanged" and we would capture nothing.
+  -- The 5s throttle is what bounds them instead.
+  self._combatTimer = self:ScheduleRepeatingTimer(function()
+    -- Stop sampling the moment recording stops, even mid-fight; otherwise a `/elm rec stop` during
+    -- combat leaves a repeating timer running for the rest of the session doing nothing.
+    if not (ns.Recorder and ns.Recorder.isRecording()) then
+      self:CancelTimer(self._combatTimer, true)
+      self._combatTimer = nil
+      return
+    end
+    self:RecordAuto("combat-sample", true)
+  end, COMBAT_SAMPLE)
+end
+
+function NA:OnCombatEnd()
+  if self._combatTimer then
+    self:CancelTimer(self._combatTimer, true)
+    self._combatTimer = nil
+  end
+  self:RecordAuto("combat-end")
+end
 
 function NA:OnEquipChanged()
   if self._equipTimer then self:CancelTimer(self._equipTimer, true) end

@@ -1,5 +1,8 @@
 # Changelog
 ## Unreleased
+- While recording, the addon now samples every 5 seconds during combat. Combat start happens before
+  anything is on cooldown and combat end after most have expired, so neither captured the state the
+  rotation actually runs in.
 - Combat detection now uses the player's actual combat state rather than UI lockdown, which is a
   different thing and lags the start of a fight — previously every recorded mark claimed you were out
   of combat. Recorded marks also no longer collapse a combat transition into the previous mark.
