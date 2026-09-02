@@ -23,8 +23,11 @@ function ns.captureMark(pack)
   local state = ns.API.GetState()
   local mark = { queues = ns.queueSnapshot(pack, 5) }
 
+  -- `ok and inCombat or nil` collapses a legitimate `false` to nil, so every mark reported
+  -- combat=nil in the first recording — including the ones taken at combat start. Same defect as the
+  -- collector's `known` flag and the rec label. Only ever branch explicitly on a boolean.
   local ok, inCombat = pcall(function() return state:inCombat() end)
-  mark.inCombat = ok and inCombat or nil
+  if ok then mark.inCombat = inCombat == true end
 
   local okW, weapon = pcall(function() return state:weapon(16) end)
   if okW and weapon then mark.weapon = { type = weapon.type, speed = weapon.speed, itemID = weapon.itemID } end
@@ -70,7 +73,9 @@ function ns.queueSnapshot(pack, depth)
         verdicts[i] = {
           spell = entry.spell, item = entry.item,
           passes = entry.test and entry.test(state) or false,
-          usable = entry.spell and state:usable(entry.spell) or nil,
+          -- Same trap: `usable = false` must survive as false, not become nil. A verdict of nil reads
+          -- as "not asked", which is exactly what it must not mean here.
+          usable = entry.spell and (state:usable(entry.spell) == true) or nil,
           cooldown = entry.spell and state:cooldown(entry.spell) or nil,
         }
       end

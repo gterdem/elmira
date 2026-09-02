@@ -386,6 +386,20 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.equal(1.61, w.hastedSpeed, "the hasted value stays available, under its own name")
     end)
 
+    -- The recording proved the first fix did nothing in game: the client puts "Speed 2.10" in the
+    -- tooltip's RIGHT column, on the same line as the damage range, and the scan read only the left.
+    -- The mock modelled only the left too, so a broken parse passed. Both are fixed; this pins it.
+    it("finds the speed in the tooltip's RIGHT column, where the client actually puts it", function()
+      mock.inventory[16] = 229749
+      mock.itemInfo[229749] = { name = "Truthbearer", equipLoc = "INVTYPE_2HWEAPON" }
+      mock.tooltipLines[16] = { "Truthbearer", "Two-Hand", "132 - 199 Damage" }
+      mock.tooltipRight[16] = { nil, "Sword", "Speed 2.10" }
+      mock.attackSpeed = { 1.902, nil } -- what the live recording actually reported
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(2.10, state:weapon(16).speed,
+        "base speed lives in the right column; a left-only scan silently falls back to hasted")
+    end)
+
     it("falls back to the hasted value only when the tooltip has no speed line", function()
       mock.inventory[16] = 900401
       mock.itemInfo[900401] = { name = "Fixture Greatsword", equipLoc = "INVTYPE_2HWEAPON" }

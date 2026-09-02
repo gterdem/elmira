@@ -1,5 +1,9 @@
 # Changelog
 ## Unreleased
+- Weapon speed now actually reads the item's speed: it lives in the tooltip's right-hand column, which
+  the previous attempt did not read, so it had been silently falling back to the haste-modified value.
+- Recorded marks no longer lose `false` values — combat state and per-entry "usable" verdicts were
+  being saved as "not evaluated" instead of "no".
 - `/elm rec start` … `/elm rec stop` records a whole test session — combat start/end and gear swaps
   mark themselves — and one `/reload` writes it all out. Previously each snapshot cost its own reload
   or had to be copied out of the chat frame mid-fight.

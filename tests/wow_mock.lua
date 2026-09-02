@@ -26,7 +26,8 @@ local function defaults()
     power = { [0] = { 1000, 1000 } },
     inventory = {},          -- [slot] = itemID
     itemLinks = {},          -- [slot] = link string
-    tooltipLines = {},       -- [slot] = { "line", ... }
+    tooltipLines = {},       -- [slot] = { "line", ... }  (LEFT column)
+    tooltipRight = {},       -- [slot] = { "line", ... }  (RIGHT column, same line numbers)
     itemInfo = {},           -- [itemID] = { name, equipLoc, speed }
     runes = {},              -- [slot] = { name =, learnedAbilitySpellIDs = {...} }
     engravingEnabled = true,
@@ -171,11 +172,18 @@ function CreateFrame(frameType, name, parent, template)
   function frame:SetOwner() end
   function frame:ClearLines() lines = {} end
   function frame:NumLines() return #lines end
+  -- Models BOTH columns, because the client does: a weapon's "Speed 2.10" is right-column text on
+  -- the same line as its damage range. Modelling only the left let a left-only parse pass its test
+  -- and then find nothing in game. `tooltipLines[slot]` is the left column; `tooltipRight[slot]` the
+  -- right, indexed by the same line number.
   function frame:SetInventoryItem(unit, slot)
     lines = M.tooltipLines[slot] or {}
+    local right = M.tooltipRight[slot] or {}
     if name then
       for i = 1, 40 do
-        _G[name .. "TextLeft" .. i] = lines[i] and { GetText = function() return lines[i] end } or nil
+        local l, r = lines[i], right[i]
+        _G[name .. "TextLeft" .. i] = l and { GetText = function() return l end } or nil
+        _G[name .. "TextRight" .. i] = r and { GetText = function() return r end } or nil
       end
     end
   end

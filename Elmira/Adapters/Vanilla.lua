@@ -100,11 +100,17 @@ local function tooltipLines(slot)
   end
   scanTooltip:ClearLines()
   scanTooltip:SetInventoryItem("player", slot)
+  -- BOTH columns. A weapon tooltip puts "132 - 199 Damage" on the left and "Speed 2.10" on the
+  -- RIGHT of the same line, so a left-only scan silently never finds the speed — which is why the
+  -- first fix for base weapon speed did nothing in game and quietly fell back to the hasted value.
   local lines = {}
   for i = 1, scanTooltip:NumLines() do
-    local fs = _G[SCAN_NAME .. "TextLeft" .. i]
-    local text = fs and fs:GetText()
-    if text and text ~= "" then lines[#lines + 1] = text end
+    local left = _G[SCAN_NAME .. "TextLeft" .. i]
+    local leftText = left and left:GetText()
+    if leftText and leftText ~= "" then lines[#lines + 1] = leftText end
+    local right = _G[SCAN_NAME .. "TextRight" .. i]
+    local rightText = right and right:GetText()
+    if rightText and rightText ~= "" then lines[#lines + 1] = rightText end
   end
   return lines
 end
