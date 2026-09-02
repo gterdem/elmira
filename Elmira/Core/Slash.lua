@@ -15,6 +15,39 @@ ns.saveDump = ns.saveDump or function() end
 local Slash = {}
 local entries = {}
 
+-- One recorder mark. Deliberately NOT the full dump: 41 spell rows x40 marks would blow the
+-- SavedVariables budget for no benefit, since the spell table barely changes between marks. Keeps
+-- what actually distinguishes one gear state from another, plus the queue and every verdict.
+function ns.captureMark(pack)
+  if not (pack and ns.API) then return nil end
+  local state = ns.API.GetState()
+  local mark = { queues = ns.queueSnapshot(pack, 5) }
+
+  local ok, inCombat = pcall(function() return state:inCombat() end)
+  mark.inCombat = ok and inCombat or nil
+
+  local okW, weapon = pcall(function() return state:weapon(16) end)
+  if okW and weapon then mark.weapon = { type = weapon.type, speed = weapon.speed, itemID = weapon.itemID } end
+
+  local okS, soul = pcall(function() return state:enchant(3) end)
+  mark.soul = okS and soul or nil
+
+  -- Set counts are the whole point of a gear-swap test: this is what makes two marks comparable.
+  mark.sets = {}
+  for key in pairs(pack.sets or {}) do
+    local okC, n = pcall(function() return state:setCount(key) end)
+    if okC and n and n > 0 then mark.sets[key] = n end
+  end
+
+  -- Only cooldowns actually observed; nil ones say nothing and would triple the size.
+  mark.cooldowns = {}
+  for key in pairs(pack.spells or {}) do
+    local okD, cd = pcall(function() return state:cooldown(key) end)
+    if okD and cd and cd > 0 then mark.cooldowns[key] = cd end
+  end
+  return mark
+end
+
 -- Builds the queue for every registered build, as data rather than text, so `/elm debug dump` can
 -- persist it. Kept next to the slash command that prints it so the two can never diverge.
 function ns.queueSnapshot(pack, depth)
@@ -191,6 +224,50 @@ Slash.register{
       return lines
     end
     return { "Usage: /elm debug state|bars|perf|dump|queue [build] [depth]" }
+  end,
+}
+
+-- Two commands and a reload, instead of one reload per gear state. Combat and gear changes mark
+-- themselves (Core/Init.lua wires the events), so nothing needs typing mid-fight.
+Slash.register{
+  key = "rec", args = "start|mark [label]|stop|status|clear", desc = ns.L["Record snapshots for analysis"], order = 15,
+  run = function(rest)
+    local Recorder = ns.Recorder
+    if not Recorder then return { "rec: recorder not loaded" } end
+    -- NOT `rest and rest:match(...)`: Lua truncates the right-hand side of `and` to a single value,
+    -- so the second capture would always be nil and every mark would lose its label silently.
+    local sub, label
+    if rest then sub, label = rest:match("^(%S+)%s*(.*)$") end
+    local function pack()
+      local packs = ns.API and ns.API.GetProviders("dataPacks") or {}
+      local class = ns.Adapter and ns.Adapter.playerClass and ns.Adapter.playerClass()
+      return class and packs[class] or nil
+    end
+
+    if sub == "start" then
+      Recorder.clear()
+      Recorder.start(ns.now and ns.now() or 0)
+      return { "Recording. Play, swap gear, fight — combat and gear changes mark themselves.",
+               "Add your own marks with: /elm rec mark <label>",
+               "When done: /elm rec stop, then /reload to write the file." }
+    elseif sub == "stop" then
+      local n = Recorder.stop()
+      return { string.format("Stopped with %d mark(s). /reload now to write them to "
+        .. "WTF/Account/<ACCOUNT>/SavedVariables/Elmira.lua", n) }
+    elseif sub == "status" then
+      return { Recorder.status() }
+    elseif sub == "clear" then
+      Recorder.clear()
+      return { "Cleared." }
+    elseif sub == "mark" then
+      local p = pack()
+      if not p then return { "rec: no data pack registered" } end
+      local ok, err = Recorder.mark(label ~= "" and label or "mark", ns.now and ns.now() or 0,
+        function() return ns.captureMark(p) end)
+      if not ok then return { "rec: " .. tostring(err) } end
+      return { string.format("Marked %q (%d total).", label ~= "" and label or "mark", Recorder.count()) }
+    end
+    return { "Usage: /elm rec start|mark [label]|stop|status|clear" }
   end,
 }
 

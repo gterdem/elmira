@@ -21,6 +21,7 @@ Core\DB.lua
 Core\Schema.lua
 Core\Engine.lua
 Core\Simulation.lua
+Core\Recorder.lua
 Core\Slash.lua
 
 # Entry point last

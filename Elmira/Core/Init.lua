@@ -35,6 +35,16 @@ ns.saveDump = function(snapshot)
   return true
 end
 
+-- The recorder holds marks in memory; they only reach disk if something copies them into the DB
+-- before the client writes SavedVariables. PLAYER_LOGOUT fires late enough to catch a /reload too,
+-- so the player never has to remember to "save" — stop recording and reload is the whole ritual.
+ns.flushRecorder = function()
+  if not (NA.db and NA.db.global and ns.Recorder) then return false end
+  if ns.Recorder.count() == 0 then return false end
+  NA.db.global.recording = ns.Recorder.payload()
+  return true
+end
+
 -- AceDB profile scope is deliberately character-specific (no third `true` argument to :New, unlike
 -- the wow-addon-dev skill's generic skeleton): profile.activeBuild is class-specific, so a paladin
 -- and a mage sharing one "Default" profile would fight over the same key.
@@ -51,6 +61,40 @@ function NA:OnInitialize()
 
   self:RegisterChatCommand("elm", "OnSlash")
   self:RegisterChatCommand("elmira", "OnSlash")
+
+  self:RegisterEvent("PLAYER_REGEN_DISABLED", "OnCombatStart")
+  self:RegisterEvent("PLAYER_REGEN_ENABLED", "OnCombatEnd")
+  self:RegisterEvent("PLAYER_EQUIPMENT_CHANGED", "OnEquipChanged")
+  self:RegisterEvent("PLAYER_LOGOUT", function() ns.flushRecorder() end)
+end
+
+-- Automatic marks. The player asked not to have to type during a fight, and combat start/end plus
+-- gear swaps are exactly the moments a gear-scenario test cares about. All of this costs nothing
+-- while the recorder is stopped: Recorder.mark() returns immediately and never calls the capture.
+--
+-- Equipment changes are debounced because a single gear swap fires several events (one per slot),
+-- and marking each would fill the ring buffer with near-identical snapshots and evict the earlier
+-- states the test is actually comparing.
+local EQUIP_DEBOUNCE = 0.5
+
+function NA:RecordAuto(label)
+  if not (ns.Recorder and ns.Recorder.isRecording()) then return end
+  local packs = ns.API.GetProviders("dataPacks")
+  local class = ns.Adapter.playerClass()
+  local pack = class and packs[class]
+  if not pack then return end
+  ns.Recorder.mark(label, ns.now and ns.now() or 0, function() return ns.captureMark(pack) end)
+end
+
+function NA:OnCombatStart() self:RecordAuto("combat-start") end
+function NA:OnCombatEnd() self:RecordAuto("combat-end") end
+
+function NA:OnEquipChanged()
+  if self._equipTimer then self:CancelTimer(self._equipTimer, true) end
+  self._equipTimer = self:ScheduleTimer(function()
+    self._equipTimer = nil
+    self:RecordAuto("gear-changed")
+  end, EQUIP_DEBOUNCE)
 end
 
 function NA:OnProfileChanged()

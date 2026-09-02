@@ -116,6 +116,21 @@ describe("Core.Slash", function()
       assert.same({ "entry 1: bad" }, snap.PALADIN_EXODIN.error)
     end)
 
+    -- Caught by luacheck as "never set", but it was a real defect: `local a, b = x and x:match(...)`
+    -- truncates to one value, so every recorded mark would have been unlabelled.
+    it("keeps the label given to rec mark", function()
+      local ns = helper.ns()
+      ns.Recorder = helper.load("Elmira/Core/Recorder.lua")
+      ns.Recorder.reset(); ns.Recorder.start(0)
+      ns.Adapter = { playerClass = function() return "PALADIN" end }
+      ns.API = { GetProviders = function() return { PALADIN = { spells = {}, sets = {} } } end,
+                 GetState = function() return {} end }
+      ns.captureMark = function() return {} end
+
+      Slash.run("rec mark 4of9-t3")
+      assert.equal("4of9-t3", ns.Recorder.marks()[1].label)
+    end)
+
     it("lists queue as an available debug subcommand", function()
       local out = table.concat(Slash.run("debug"), "\n")
       assert.truthy(out:find("queue", 1, true), out)

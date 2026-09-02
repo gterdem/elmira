@@ -1,5 +1,8 @@
 # Changelog
 ## Unreleased
+- `/elm rec start` … `/elm rec stop` records a whole test session — combat start/end and gear swaps
+  mark themselves — and one `/reload` writes it all out. Previously each snapshot cost its own reload
+  or had to be copied out of the chat frame mid-fight.
 - Fixed the suggestion queue advancing no time: every slot was computed for the same instant, so the
   queue after the first suggestion was meaningless. Fixed the queue repeating "cast your seal" five
   times out of combat. Both were only visible on a live character.
