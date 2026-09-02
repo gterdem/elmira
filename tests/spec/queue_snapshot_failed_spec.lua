@@ -78,9 +78,15 @@ describe("ns.queueSnapshot entries[i].failed (Contract B)", function()
 
   it("labels an item condition with its slot number, e.g. `item_ready:13`", function()
     -- No item in slot 13, so item_ready fails.
+    -- Located by its item slot, NOT by its index in the list. This asserted `entries[13]` and broke
+    -- the moment two filler entries were inserted above it -- a positional lookup makes every build
+    -- reorder look like a regression in a test that is not about ordering at all.
     local snap = snapshotWith(FakeState.new{ bonusDefs = pack.bonuses })
-    local trinket = snap.entries[13]
-    assert.equal(13, trinket.item)
+    local trinket
+    for _, e in ipairs(snap.entries) do
+      if e.item == 13 then trinket = e break end
+    end
+    assert.is_not_nil(trinket, "no entry for trinket slot 13")
     assert.is_false(trinket.passes)
     assert.same({ "item_ready:13" }, trinket.failed)
   end)

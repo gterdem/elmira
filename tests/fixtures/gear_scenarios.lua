@@ -17,10 +17,13 @@ return {
     { name = "blues_no_runes", sets = {},
       usable = { CRUSADER_STRIKE = false, DIVINE_STORM = false, AVENGING_WRATH = false, AURA_MASTERY = false },
       seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
-      -- Only Exorcism (15s CD) and the baseline Consecration filler are known. Once both are cast,
-      -- nothing else is eligible within 3 GCDs (Exorcism/Consecration are both still on cooldown,
-      -- no trinket is equipped, no set bonus exists) — the queue legitimately truncates at 2.
-      expect = { "EXORCISM", "CONSECRATION" } },
+      -- Only Exorcism (15s CD) and the baseline Consecration filler are known abilities here.
+      -- This scenario used to expect a 2-slot queue and called the truncation legitimate. It was
+      -- not: a fresh 60 in blues has ~28 idle GCDs a minute and the build had nothing to offer for
+      -- them, which is exactly the hole the bottom-of-list Judgement filler was added to close
+      -- (docs/research/exodin-filler-policy.md Q1). Judgement now fills slot 2. If this ever
+      -- truncates to 2 again, the filler has stopped reaching the character who needs it most.
+      expect = { "EXORCISM", "JUDGEMENT", "CONSECRATION" } },
 
     -- All four gated runes engraved, no set bonuses yet.
     { name = "runes_only", sets = {}, seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
@@ -30,8 +33,21 @@ return {
     -- Note: Simulation's virtual state does not model Judgement consuming the seal aura (it only
     -- tracks cooldown/resource, per Core/Simulation.lua's newVirtualState) — see the report for why
     -- slot 2 is EXORCISM, not a re-triggered "Seal up", even though live gameplay would reseal here.
-    { name = "seal_expiring_no_t2", sets = {}, seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 2 } },
+    -- `remaining` is an input, not an expectation: the sourced window tightened from 3s to 1.5s
+    -- (wowsims uses 1-1.5s; the 3 was unsourced), so 2 no longer sits inside it. 1.0 keeps this
+    -- scenario exercising the behaviour its name claims. The expected queue is unchanged.
+    { name = "seal_expiring_no_t2", sets = {}, seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 1 } },
       expect = { "JUDGEMENT", "EXORCISM", "CRUSADER_STRIKE" } },
+
+    -- Boundary the 3s -> 1.5s tightening exists to protect: 2s used to sit INSIDE the old 3s window
+    -- (promoting "Seal expiring" Judgement to slot 1) and now sits OUTSIDE the 1.5s one. If the
+    -- window were ever widened back, this scenario is what would go red -- Judgement would jump back
+    -- ahead of Exorcism. The bottom-of-list filler still makes Judgement reachable somewhere in the
+    -- queue (seal is up throughout), but it must not outrank Exorcism/Crusader Strike/Divine Storm;
+    -- see paladin_exodin_filler_spec.lua for the direct "not ahead of Exorcism" assertion.
+    { name = "seal_expiring_outside_window", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 2.0 } },
+      expect = { "EXORCISM", "CRUSADER_STRIKE", "DIVINE_STORM" } },
 
     -- Radiant Judgement (T2) 2-set: Judgement no longer consumes the seal -> jumps to slot 1.
     { name = "t2_2p", sets = { PALADIN_T2_JUDGEMENT = 2 }, seal = "SEAL_OF_MARTYRDOM",
@@ -66,6 +82,42 @@ return {
     { name = "naxx_t3_4p_undead", sets = { PALADIN_T3_REDEMPTION = 4, PALADIN_T35_INQUISITION = 2 },
       targetType = "Undead", seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
       expect = { "EXORCISM", "CRUSADER_STRIKE", "HOLY_WRATH" } },
+
+    ---------------------------------------------------------------- Judgement filler self-throttling
+    -- Contract point 2 (bottom-of-list Judgement filler): fully geared -- T3 Redemption 4-set, T3.5
+    -- Inquisition 2-set, all four runes engraved -- with nothing on cooldown. No target-type override
+    -- needed: RUNE_PURIFYING_POWER alone satisfies Holy Wrath's `any` branch. Deliberately no
+    -- HOLY_POWER_BUFF here (unlike t35_2p/t35_4p) -- that buff is a separate, unrelated claim and
+    -- entangling it would leave this scenario proving the wrong thing. Judgement must NOT be in this
+    -- top-3: Exorcism, Crusader Strike and Holy Wrath all outrank it (Divine Storm is 4th, see
+    -- paladin_exodin_filler_spec.lua depth-5 assertion for that one -- top-3 alone cannot show it).
+    { name = "fully_geared_judgement_not_top3",
+      sets = { PALADIN_T3_REDEMPTION = 4, PALADIN_T35_INQUISITION = 2 },
+      runes = { RUNE_ART_OF_WAR = true, RUNE_CRUSADER_STRIKE = true, RUNE_DIVINE_STORM = true, RUNE_PURIFYING_POWER = true },
+      seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "EXORCISM", "CRUSADER_STRIKE", "HOLY_WRATH" } },
+
+    -- Contract point 3: same gear as above, but Exorcism/Crusader Strike/Divine Storm/Holy Wrath are
+    -- all on cooldown -- the idle-global case the filler exists for. Judgement must be slot 1. (Label
+    -- is asserted in paladin_exodin_filler_spec.lua -- this fixture only sees spell keys, and a
+    -- spell-only check can't tell "Filler" apart from "Seal expiring"; the seal has 25s remaining
+    -- here, well outside the 1.5s window, so this is unambiguously the filler in practice.)
+    { name = "fully_geared_judgement_slot1_when_idle",
+      sets = { PALADIN_T3_REDEMPTION = 4, PALADIN_T35_INQUISITION = 2 },
+      runes = { RUNE_ART_OF_WAR = true, RUNE_CRUSADER_STRIKE = true, RUNE_DIVINE_STORM = true, RUNE_PURIFYING_POWER = true },
+      seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      cooldowns = { EXORCISM = 10, CRUSADER_STRIKE = 10, DIVINE_STORM = 10, HOLY_WRATH = 10 },
+      expect = { "JUDGEMENT", "CONSECRATION" } },
+
+    -- Contract point 5: mana below the plain Consecration filler's 40% floor, core abilities on
+    -- cooldown. The plain filler drops out (gated on {"resource","MANA",minPct=40}); Judgement must
+    -- still be offered. The queue legitimately truncates to 1: Judgement's own 10s cooldown (from
+    -- Data/Spells.lua) takes it off the table for the rest of this simulated window too.
+    { name = "low_mana_judgement_still_offered", sets = {},
+      usable = { CRUSADER_STRIKE = false, DIVINE_STORM = false, AVENGING_WRATH = false, AURA_MASTERY = false },
+      seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      power = { MANA = { 300, 1000 } }, cooldowns = { EXORCISM = 10 },
+      expect = { "JUDGEMENT" } },
 
     -- Required by docs/04: best-in-slot Scarlet Enclave -- full Inquisition (T3.5) 6-set plus the
     -- soul Data/Advice/Paladin.lua recommends for this build (Soul of the Exile). The soul only

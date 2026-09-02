@@ -1,5 +1,12 @@
 # Changelog
 ## Unreleased
+- Exodin now suggests Judgement when nothing better is ready, instead of leaving you with nothing to
+  press. This matters most on a fresh level 60 with no runes, who previously had no suggestion for
+  most of their globals; at full gear the rest of the rotation still outranks it, so little changes.
+- Exodin moves Consecration up when there are 3 or more enemies. Single-target behaviour is
+  unchanged. (This has no effect yet — counting nearby enemies arrives in a later milestone.)
+- Exodin now judges only in the last 1.5 seconds of your seal rather than the last 3, so the seal is
+  kept up longer.
 - The recording now names Seal of Martyrdom's damage effect instead of logging an unrecognised spell
   id, and marks it as something the game casts for you rather than something you pressed.
 - Recording now captures **what you actually cast**, next to what Elmira was suggesting a moment

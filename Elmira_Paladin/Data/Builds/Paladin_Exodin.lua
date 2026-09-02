@@ -1,4 +1,6 @@
 -- Paladin Exodin (fast 2H, single seal). Source: Wowhead SoD Paladin DPS Rotation (dossier S1), upd. 2025-06-06.
+-- 2026-09-02: Judgement filler + Consecration AoE promotion + seal window 3s -> 1.5s, from
+-- docs/research/exodin-filler-policy.md (wowsims/sod phase presets decoded against our own IDs).
 -- Authored per ADR-0006: BASELINE (no sets, no runes, blues) + GATED UPGRADES the addon switches on when detected.
 -- Unknown spells (un-engraved runes) are skipped by the engine automatically.
 local ADDON, ns = ...
@@ -47,7 +49,10 @@ ns.Data.SoD.Builds.PALADIN_EXODIN = {
     -- UPGRADE: T2 Draconic 2-set -> Judgement never consumes the seal -> on cooldown.
     { spell = "JUDGEMENT", label = "Draconic 2p", when = { {"bonus","JUDGEMENT_NO_CONSUME"} } },
     -- BASELINE: judge only when the seal is about to expire, then reseal (next slot shows Seal up).
-    { spell = "JUDGEMENT", label = "Seal expiring", when = { {"seal","SEAL_OF_MARTYRDOM"}, {"buff","SEAL_OF_MARTYRDOM", maxRemaining = 3} } },
+    -- 1.5s, not the 3s this carried before: wowsims/sod uses 1-1.5s in every preset that has this
+    -- line, and no source was found for 3. A wider window judges the seal off earlier than it needs
+    -- to be, which costs seal uptime for nothing.
+    { spell = "JUDGEMENT", label = "Seal expiring", when = { {"seal","SEAL_OF_MARTYRDOM"}, {"buff","SEAL_OF_MARTYRDOM", maxRemaining = 1.5} } },
 
     ---------------------------------------------------------------- UPGRADE: T3.5 4-set consumes Holy Power
     { spell = "DIVINE_STORM", label = "3 HP", when = { {"buff","HOLY_POWER_BUFF", min = 3}, {"bonus","HOLY_POWER_CONSUME"} } },
@@ -64,7 +69,36 @@ ns.Data.SoD.Builds.PALADIN_EXODIN = {
     ---------------------------------------------------------------- AoE helper only when Holy Power exists
     { spell = "CONSECRATION", label = "AoE, 3 HP", when = { {"buff","HOLY_POWER_BUFF", min = 3}, {"cooldown_gt","DIVINE_STORM", 1} } },
 
+    ---------------------------------------------------------------- AoE: PROMOTE Consecration on 3+ targets
+    -- A promotion, not a gate. The baseline entry below still allows single-target Consecration:
+    -- wowsims/sod never target-count-gates its baseline eligibility in any phase preset, so
+    -- restricting it would remove value no source supports removing (docs/research/
+    -- exodin-filler-policy.md Q2).
+    -- Inert until nameplate counting lands at M5a: Adapters/Vanilla.lua's state:enemies() returns a
+    -- hardcoded 1, so `enemies min 3` is false everywhere today. A safe no-op, not a bug -- but it
+    -- means this line cannot be verified in game yet.
+    { spell = "CONSECRATION", label = "AoE (3+ targets)", when = { {"enemies", min = 3}, {"resource","MANA", minPct = 40} } },
+
+    ---------------------------------------------------------------- BASELINE filler: Judgement when nothing better is ready
+    -- No set or rune gate, deliberately. An entry is skipped while its spell is on cooldown, so a
+    -- bottom-of-list Judgement self-throttles by list POSITION alone: it fires nearly every global
+    -- for a fresh 60 with no runes (~28 idle GCDs a minute, because Crusader Strike and Divine Storm
+    -- are runes and Exorcism is on 15s without Art of War) and almost never at T3 4pc + full runes,
+    -- where the list already fills 94% of the GCD budget. That is exactly the split in wowsims/sod's
+    -- own presets -- p8-wrath (slow weapon, idle globals) keeps a Judgement filler, p8-exodin (fast
+    -- weapon, saturated) omits it -- arrived at with no gear condition at all.
+    -- Judging consumes the seal without the T2 2-set, so "Seal up" at the top of the list re-applies
+    -- it on the next global. That 2-GCD round trip is only worth paying when a global would
+    -- otherwise be idle, which is precisely when this entry is reachable.
+    -- POSITION: the dossier said "before the Consecration entries". Placed below the two AoE ones
+    -- instead -- above `AoE, 3 HP` it would shadow that entry on every global the seal is up and
+    -- silently kill it. Above the plain filler is what the sim evidence actually says (p8-wrath
+    -- ranks Judgement-filler over Consecration-filler).
+    { spell = "JUDGEMENT", label = "Filler (nothing else ready)", when = { {"seal","SEAL_OF_MARTYRDOM"} } },
+
     ---------------------------------------------------------------- BASELINE filler
+    -- minPct = 40 is UNSOURCED: it predates this research and nothing corroborates the number.
+    -- Left alone rather than replaced with another guess. Flagged for testing.
     { spell = "CONSECRATION", when = { {"resource","MANA", minPct = 40} } },
     { item  = 13, hold = true, label = "Trinket", when = { {"item_ready", 13} } },
     { item  = 14, hold = true, label = "Trinket", when = { {"item_ready", 14} } },
