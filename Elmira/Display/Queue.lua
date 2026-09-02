@@ -240,10 +240,20 @@ end
 function Queue.isLocked() return profile().locked and true or false end
 
 -- Renderer. Registered with Display/Driver, so it only runs when the queue actually changed.
-function Queue.Render(queue)
+-- `visible` comes from Display/Driver (Core/Visibility decides it). Passed in rather than read back
+-- out of Display so this stays a function of its arguments — and so the hidden case is one line in a
+-- spec instead of a fake combat state.
+function Queue.Render(queue, _key, visible)
   if not container then return end
   local p = profile()
-  if not p.enabled then container:Hide(); return end
+  if not p.enabled or visible == false then
+    container:Hide()
+    -- Releasing the glow matters more than hiding the strip: a bar button keeps glowing on its own
+    -- frame, so a hidden queue with a live glow leaves a lit button on the bars with nothing on
+    -- screen to explain it.
+    if ns.Glow then ns.Glow.SetNowSlot(nil, nil) end
+    return
+  end
   container:Show()
 
   local depth = math.max(1, math.min(MAX_SLOTS, p.depth or 3))

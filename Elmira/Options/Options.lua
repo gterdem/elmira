@@ -14,6 +14,14 @@ ns = ns or _G.__ELM_NS or {}
 local Options = {}
 local L = ns.L
 
+-- User-facing names for Core/Visibility's modes. They live here, not in Core: Core decides what the
+-- modes mean, Options decides what they are called, and only this side goes through AceLocale.
+local LABELS = {
+  always = "Always",
+  combat_or_target = "In combat, or when you have a target",
+  combat = "In combat only",
+}
+
 local function profile()
   return ns.db and ns.db.profile
 end
@@ -103,6 +111,27 @@ function Options.table()
             isPercent = true,
             get = function() return profile().scale end,
             set = function(_, v) profile().scale = v; redraw() end,
+          },
+          visibility = {
+            type = "select", order = 4, width = "full", name = L["Show the queue"],
+            desc = L["When the queue and its bar glow are on screen. Hiding it also stops the "
+                  .. "update loop, so a hidden queue costs nothing."],
+            values = function()
+              local out = {}
+              for _, mode in ipairs(ns.Visibility.MODES) do out[mode] = L[LABELS[mode]] end
+              return out
+            end,
+            sorting = function()
+              local out = {}
+              for i, mode in ipairs(ns.Visibility.MODES) do out[i] = mode end
+              return out
+            end,
+            get = function() return profile().visibility or ns.Visibility.DEFAULT end,
+            set = function(_, v)
+              profile().visibility = v
+              if ns.Glow then ns.Glow.StopAll() end   -- a mode change must not strand a lit button
+              redraw()
+            end,
           },
           learning = {
             type = "toggle", order = 5, width = "full", name = L["Learning mode"],

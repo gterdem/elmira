@@ -23,6 +23,7 @@ Core\Schema.lua
 Core\Engine.lua
 Core\Simulation.lua
 Core\Profiles.lua
+Core\Visibility.lua
 Core\Ticker.lua
 Core\Recorder.lua
 Core\Slash.lua

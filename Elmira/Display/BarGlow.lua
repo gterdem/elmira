@@ -38,6 +38,26 @@ local function spellInSlot(slot)
   return nil
 end
 
+-- A button that is not on screen cannot glow visibly, and a glow nobody can see is indistinguishable
+-- from no glow at all. ElvUI HIDES Blizzard's bars rather than removing them: `ActionButton1..12`
+-- still exist, still report the spell they hold, and still accept a glow. Without this filter the
+-- Blizzard fallback happily answers for an ElvUI user and the glow lands on an invisible frame.
+local function onScreen(button)
+  if type(button) ~= "table" and type(button) ~= "userdata" then return false end
+  if type(button.IsVisible) ~= "function" then return true end   -- unknown shape: do not filter it out
+  local ok, visible = pcall(button.IsVisible, button)
+  if not ok then return true end
+  return visible == true
+end
+
+local function onlyOnScreen(buttons)
+  local out = {}
+  for _, button in ipairs(buttons or {}) do
+    if onScreen(button) then out[#out + 1] = button end
+  end
+  return out
+end
+
 local function buildBlizzMap()
   local map = {}
   for _, prefix in ipairs(BLIZZ_BARS) do
@@ -74,21 +94,29 @@ local function providers()
   return list
 end
 
+-- Returns the buttons, and (second) where they came from — "ElvUI", "blizzard", or nil. The source
+-- is what makes `/elm debug bars` able to say WHICH link in the chain is empty; without it a silent
+-- fallback to hidden Blizzard buttons looks exactly like a working provider.
 function BarGlow.buttonsFor(spellKey)
   local id = spellIDFor(spellKey)
-  if not id then return {} end
+  if not id then return {}, nil end
 
   for _, p in ipairs(providers()) do
     if type(p.buttonsForSpell) == "function" then
       -- A provider reads another addon's internals; a change on their side must not take our
       -- display down with it.
       local ok, buttons = pcall(p.buttonsForSpell, id)
-      if ok and type(buttons) == "table" and #buttons > 0 then return buttons end
+      if ok and type(buttons) == "table" then
+        local visible = onlyOnScreen(buttons)
+        if #visible > 0 then return visible, p.name or "provider" end
+      end
     end
   end
 
   if not blizzMap then BarGlow.Rebuild() end
-  return blizzMap[id] or {}
+  local fallback = onlyOnScreen(blizzMap[id])
+  if #fallback > 0 then return fallback, "blizzard" end
+  return {}, nil
 end
 
 function BarGlow.keybindFor(spellKey)
@@ -111,6 +139,44 @@ function BarGlow.keybindFor(spellKey)
     if text and text ~= "" and text ~= RANGE_INDICATOR then return text end
   end
   return nil
+end
+
+-- The whole chain, per spell, for `/elm debug bars`. Answering "is the bar glow working" needs four
+-- separate facts — is a provider registered, does its library exist, did it find the spell, is that
+-- button on screen — and every one of them fails silently on its own.
+function BarGlow.describe(keys)
+  local out = { providers = {}, rows = {} }
+  for _, p in ipairs(providers()) do
+    local row = { name = p.name or "?", priority = p.priority or 0,
+                  buttonsForSpell = type(p.buttonsForSpell) == "function",
+                  keybindForSpell = type(p.keybindForSpell) == "function" }
+    if type(p.describe) == "function" then
+      local ok, info = pcall(p.describe)
+      if ok and type(info) == "table" then row.info = info end
+    end
+    out.providers[#out.providers + 1] = row
+  end
+
+  if not blizzMap then BarGlow.Rebuild() end
+  local n = 0
+  for _ in pairs(blizzMap) do n = n + 1 end
+  out.blizzard = n
+
+  for _, key in ipairs(keys or {}) do
+    local id = spellIDFor(key)
+    local buttons, source = BarGlow.buttonsFor(key)
+    local first = buttons[1]
+    local name
+    if first and type(first.GetName) == "function" then
+      local ok, got = pcall(first.GetName, first)
+      if ok then name = got end
+    end
+    out.rows[#out.rows + 1] = {
+      key = key, id = id, source = source, count = #buttons, button = name,
+      bind = BarGlow.keybindFor(key),
+    }
+  end
+  return out
 end
 
 function BarGlow.stats()

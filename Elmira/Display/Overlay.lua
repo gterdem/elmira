@@ -142,8 +142,12 @@ end
 -- Renderer. Fires only on a CHANGE of the now-slot, which is why `lastNow` is compared before
 -- anything else happens: this function runs on every render, and the whole design rests on it doing
 -- nothing the vast majority of the time.
-function Overlay.Render(queue)
-  local now = queue and queue[1] and queue[1].spell or nil
+-- The renderer contract is (queue, key, visible) since M3's visibility gating. This one works out
+-- correctly on the hidden path either way — Driver passes a nil queue, which already means "clear" —
+-- but naming `visible` here is deliberate: relying on nil-by-coincidence is how the next renderer
+-- fires a screen flare at someone whose display is switched off.
+function Overlay.Render(queue, _key, visible)
+  local now = (visible ~= false) and queue and queue[1] and queue[1].spell or nil
   if now == lastNow then return end
   lastNow = now
   if not now then return end

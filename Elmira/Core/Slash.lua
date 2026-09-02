@@ -319,11 +319,63 @@ Slash.register{
         "state: " .. tostring(d.state),
       }
     elseif sub == "bars" then
-      local providers = ns.API and ns.API.GetProviders("barProviders") or {}
-      local lines = { string.format("bar providers: %d", #providers) }
-      for _, p in ipairs(providers) do
-        lines[#lines + 1] = string.format("  %s  priority=%d  buttons=%s", p.name, p.priority or 0,
-          type(p.buttonsForSpell) == "function" and "stub" or "missing")
+      -- Walks the WHOLE chain, because "the bar glow does not work" has four independent causes and
+      -- the old version of this command could only report the first. Counting registered providers
+      -- says nothing about whether one found a button, and a provider that silently returns nothing
+      -- looks identical to a provider that is not there.
+      local p = ns.db and ns.db.profile
+      local lines = {}
+      if p and p.glow then
+        lines[#lines + 1] = string.format("glow: enabled=%s barGlow=%s style=%s active=%d",
+          tostring(p.glow.enabled), tostring(p.glow.barGlow), tostring(p.glow.style),
+          ns.Glow and ns.Glow.activeCount() or 0)
+        if p.glow.enabled == false then lines[#lines + 1] = "  -> glow is OFF in the options" end
+        if p.glow.barGlow == false then lines[#lines + 1] = "  -> bar glow is OFF in the options" end
+      end
+
+      local keys = {}
+      local queue = ns.Display and select(1, ns.Display.computeQueue(3))
+      for _, slot in ipairs(queue or {}) do
+        if slot.spell then keys[#keys + 1] = slot.spell end
+      end
+
+      -- Degrades rather than refusing: without Display loaded this still answers the Core half of
+      -- the question (which providers registered), which is the half a headless spec can reach.
+      local d = ns.BarGlow and ns.BarGlow.describe(keys)
+      if not d then
+        local registered = ns.API and ns.API.GetProviders("barProviders") or {}
+        lines[#lines + 1] = string.format("bar providers: %d", #registered)
+        for _, prov in ipairs(registered) do
+          lines[#lines + 1] = string.format("  %s  priority=%d", prov.name or "?", prov.priority or 0)
+        end
+        lines[#lines + 1] = "display not loaded, so no buttons were looked up"
+        return lines
+      end
+
+      lines[#lines + 1] = string.format("bar providers: %d", #d.providers)
+      for _, prov in ipairs(d.providers) do
+        lines[#lines + 1] = string.format("  %s  priority=%d  buttonsForSpell=%s keybindForSpell=%s",
+          prov.name, prov.priority, tostring(prov.buttonsForSpell), tostring(prov.keybindForSpell))
+        if prov.info then
+          lines[#lines + 1] = string.format("    %s: present=%s  %d button(s) registered, %d spell(s) mapped",
+            tostring(prov.info.library), tostring(prov.info.present),
+            prov.info.buttons or 0, prov.info.mapped or 0)
+        end
+      end
+      if #d.providers == 0 then
+        lines[#lines + 1] = "  none — is Elmira_ElvUI enabled in the AddOns list?"
+      end
+      lines[#lines + 1] = string.format("blizzard fallback: %d spell(s) mapped", d.blizzard or 0)
+
+      if #d.rows == 0 then
+        lines[#lines + 1] = "queue is empty, so there is nothing to look for on the bars"
+      end
+      for i, row in ipairs(d.rows) do
+        lines[#lines + 1] = string.format("%d. %s id=%s -> %s", i, row.key, tostring(row.id),
+          row.count > 0
+            and string.format("%d button(s) via %s (%s)%s", row.count, tostring(row.source),
+                  row.button or "unnamed", row.bind and (" key=" .. row.bind) or "")
+            or "NO VISIBLE BUTTON")
       end
       return lines
     elseif sub == "perf" then
@@ -346,6 +398,8 @@ Slash.register{
         lines[#lines + 1] = string.format("bar map: %d spells, %d provider(s), built=%s",
           b.mapped or 0, b.providers or 0, tostring(b.built))
       end
+      lines[#lines + 1] = string.format("visible: %s (%s), mode=%s",
+        tostring(s.visible), tostring(s.visibleReason), tostring(s.mode))
       if ns.Glow then
         lines[#lines + 1] = string.format("active glows: %d", ns.Glow.activeCount())
       end

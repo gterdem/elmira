@@ -1,5 +1,16 @@
 # Changelog
 ## Unreleased
+- **The queue now hides when you are not fighting.** New setting under Display: *Always*, *In
+  combat*, or *In combat, or when you have a target* (the default). Until now it was on screen from
+  login to logout, glowing your action bar while you stood in a city — there was no setting because
+  there was no rule. Hidden also stops the update loop, so a hidden queue costs nothing.
+- Fixed: with ElvUI, the bar glow could land on a hidden Blizzard action button. ElvUI hides those
+  bars rather than removing them, so Elmira found the spell, glowed the button, and nothing appeared
+  on screen. Only buttons that are actually visible are considered now.
+- `/elm debug bars` now walks the whole chain — which providers registered, whether ElvUI's button
+  library is present and how many buttons it holds, and for each spell in the queue whether a visible
+  button was found and which source answered. It used to report only the number of providers, which
+  is the one fact that was never the problem.
 - The suggestion strip can now actually be moved. `/elm lock` showed the drag panel, but the icons
   sitting on top of the frame swallowed every drag, so the strip could not be moved at all.
 - Choosing the **Autocast** glow style no longer breaks the display. It passed Elmira's name into a

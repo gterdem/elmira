@@ -24,6 +24,7 @@ local frame
 local lastQueue           -- the queue as rendered, for the change test
 local lastBuildKey
 local lastError = {}      -- renderer name -> the last error text reported, so it is said once
+local lastVisible         -- nil until the first tick decides; then true/false
 
 -- Renderers subscribe rather than the driver naming them: the queue strip, the bar glow and the
 -- overlay all want the same queue and must never each run their own loop.
@@ -72,6 +73,22 @@ function Display.activeBuild()
   return compiled, key, reason
 end
 
+-- Reads the live state, hands Core/Visibility booleans, returns show/hide plus the reason. The
+-- reason is carried so `/elm debug perf` can say why the screen is empty — "the addon is broken" and
+-- "you are standing in Ironforge with no target" look identical otherwise.
+function Display.shouldShow()
+  local profile = ns.db and ns.db.profile
+  if profile and profile.enabled == false then return false, "display disabled" end
+  local mode = (profile and profile.visibility) or ns.Visibility.DEFAULT
+  local state = ns.API and ns.API.GetState()
+  if not state then return true, "no state yet" end
+  local ok, ctx = pcall(function()
+    return { inCombat = state:inCombat() == true, hasTarget = state:targetExists() == true }
+  end)
+  if not ok then return true, "state unreadable" end
+  return ns.Visibility.shouldShow(mode, ctx)
+end
+
 function Display.computeQueue(depth)
   local compiled, key = Display.activeBuild()
   if not compiled then return nil, key end
@@ -79,27 +96,14 @@ function Display.computeQueue(depth)
   return ns.Simulation.queue(compiled, state, depth or 5), key
 end
 
--- One tick. Returns "rendered", "unchanged", or "skipped", which is what makes `/elm debug perf`
--- able to report work avoided rather than merely assert that some was.
-function Display.tick(now)
-  local t = Display.ticker()
-  if not t:shouldRun(now) then return "skipped" end
-
-  local profile = ns.db and ns.db.profile
-  local depth = (profile and profile.depth) or 3
-  local queue, key = Display.computeQueue(depth)
-
-  -- A build change must repaint even if the queue happens to look the same: the icons may be
-  -- identical while the reasons behind them are not.
-  local changed = (key ~= lastBuildKey) or ns.Ticker.queuesDiffer(lastQueue, queue)
-  if not changed then return "unchanged" end
-
-  lastQueue, lastBuildKey = queue, key
+-- Renders to every subscriber. `visible` is the third argument rather than a module flag the
+-- renderers read back out of Display, so a renderer is a pure function of what it was handed.
+local function renderAll(queue, key, visible)
   for _, r in ipairs(renderers) do
     -- One renderer erroring must not take the others down with it, and must not kill the OnUpdate
     -- handler — a dead OnUpdate is a display that silently stops updating, which is this codebase's
     -- characteristic failure shape.
-    local ok, err = pcall(r.render, queue, key)
+    local ok, err = pcall(r.render, queue, key, visible)
     if not ok then
       -- Once per distinct message. A renderer that errors does so on every queue change, which in
       -- combat is several times a second: the first report is a bug, the next two hundred are noise
@@ -113,6 +117,39 @@ function Display.tick(now)
       lastError[r.name] = nil
     end
   end
+end
+
+-- One tick. Returns "rendered", "unchanged", "hidden" or "skipped", which is what makes
+-- `/elm debug perf` able to report work avoided rather than merely assert that some was.
+function Display.tick(now)
+  local t = Display.ticker()
+  if not t:shouldRun(now) then return "skipped" end
+
+  -- Hidden costs one boolean read and no queue computation at all — which is the point, since for
+  -- most of a session the answer is "hidden". The transition is painted once so the strip actually
+  -- disappears and any bar glow is released; after that a hidden tick does nothing.
+  local visible = Display.shouldShow()
+  if not visible then
+    if lastVisible ~= false then
+      lastVisible = false
+      lastQueue, lastBuildKey = nil, nil
+      renderAll(nil, nil, false)
+    end
+    return "hidden"
+  end
+  lastVisible = true
+
+  local profile = ns.db and ns.db.profile
+  local depth = (profile and profile.depth) or 3
+  local queue, key = Display.computeQueue(depth)
+
+  -- A build change must repaint even if the queue happens to look the same: the icons may be
+  -- identical while the reasons behind them are not.
+  local changed = (key ~= lastBuildKey) or ns.Ticker.queuesDiffer(lastQueue, queue)
+  if not changed then return "unchanged" end
+
+  lastQueue, lastBuildKey = queue, key
+  renderAll(queue, key, true)
   return "rendered"
 end
 
@@ -142,7 +179,7 @@ end
 -- Forces the next tick to recompute AND repaint, regardless of whether the queue changed. Used by
 -- anything that alters how the queue is drawn rather than what it contains (scale, depth, a colour).
 function Display.refresh()
-  lastQueue, lastBuildKey = nil, nil
+  lastQueue, lastBuildKey, lastVisible = nil, nil, nil
   Display.invalidate()
 end
 
@@ -150,6 +187,8 @@ function Display.stats()
   local s = Display.ticker():stats()
   s.renderers = #renderers
   s.build = lastBuildKey
+  s.visible, s.visibleReason = Display.shouldShow()
+  s.mode = (ns.db and ns.db.profile and ns.db.profile.visibility) or ns.Visibility.DEFAULT
   return s
 end
 

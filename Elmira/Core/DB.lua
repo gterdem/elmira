@@ -20,6 +20,10 @@ DB.defaults = {
     locked = true,
     scale = 1.0,
     mode = "Auto",
+    -- Core/Visibility.lua owns the meaning; the default is "in combat, or when you have a target".
+    -- Not a boolean: "always" and "in combat only" are both things people genuinely want, and a
+    -- two-state switch would have to pick which one it is not.
+    visibility = "combat_or_target",
     learning = false,
     activeBuild = false,
     anchor = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },

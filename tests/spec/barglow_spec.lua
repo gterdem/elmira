@@ -199,4 +199,81 @@ describe("Display.BarGlow", function()
       assert.same({}, after)
     end)
   end)
+
+  -- ElvUI does not delete Blizzard's bars, it hides them. The buttons still exist, still report the
+  -- spell they hold, and still accept a glow that lands on an invisible frame -- which is exactly
+  -- what "the bar glow does not work at all" looks like from the player's chair.
+  describe("buttons that are not on screen", function()
+    local function button(name, visible, action)
+      local b = { action = action, IsVisible = function() return visible end,
+                  GetName = function() return name end }
+      setButton(name, b)
+      return b
+    end
+
+    it("skips a hidden Blizzard button instead of glowing it invisibly", function()
+      mock.actionInfo[1] = { "spell", 415073 }
+      button("ActionButton1", false, 1)
+      local buttons, source = BarGlow.buttonsFor("EXORCISM")
+      assert.equal(0, #buttons)
+      assert.is_nil(source)
+    end)
+
+    it("keeps a visible one and names where it came from", function()
+      mock.actionInfo[1] = { "spell", 415073 }
+      button("ActionButton1", true, 1)
+      local buttons, source = BarGlow.buttonsFor("EXORCISM")
+      assert.equal(1, #buttons)
+      assert.equal("blizzard", source)
+    end)
+
+    it("a provider that returns only hidden buttons falls through to the fallback", function()
+      local hidden = { IsVisible = function() return false end }
+      API.RegisterBarProvider{ name = "Ghost", priority = 10,
+        buttonsForSpell = function() return { hidden } end }
+      mock.actionInfo[1] = { "spell", 415073 }
+      button("ActionButton1", true, 1)
+      local buttons, source = BarGlow.buttonsFor("EXORCISM")
+      assert.equal(1, #buttons)
+      assert.equal("blizzard", source)
+    end)
+
+    it("a button with no IsVisible is kept, not silently dropped", function()
+      -- Some bar addons hand back plain tables. Filtering those out would break them for a
+      -- guess about a method they never had.
+      API.RegisterBarProvider{ name = "Plain", priority = 5,
+        buttonsForSpell = function() return { { plain = true } } end }
+      local buttons, source = BarGlow.buttonsFor("EXORCISM")
+      assert.equal(1, #buttons)
+      assert.equal("Plain", source)
+    end)
+  end)
+
+  describe("describe()", function()
+    it("reports the chain: providers, the fallback size, and one row per spell", function()
+      API.RegisterBarProvider{ name = "ElvUI", priority = 10,
+        buttonsForSpell = function() return {} end,
+        describe = function() return { library = "LibActionButton-1.0-ElvUI", present = true,
+                                       buttons = 62, mapped = 14 } end }
+      local d = BarGlow.describe({ "EXORCISM" })
+      assert.equal(1, #d.providers)
+      assert.equal("ElvUI", d.providers[1].name)
+      assert.is_true(d.providers[1].buttonsForSpell)
+      assert.equal(62, d.providers[1].info.buttons)
+      assert.equal(1, #d.rows)
+      assert.equal("EXORCISM", d.rows[1].key)
+      assert.equal(415073, d.rows[1].id)
+      assert.equal(0, d.rows[1].count)
+      assert.is_nil(d.rows[1].source)
+    end)
+
+    it("a provider whose describe() errors does not take the diagnostic down", function()
+      API.RegisterBarProvider{ name = "Rude", priority = 10,
+        buttonsForSpell = function() return {} end,
+        describe = function() error("no") end }
+      local d = BarGlow.describe({ "EXORCISM" })
+      assert.equal(1, #d.providers)
+      assert.is_nil(d.providers[1].info)
+    end)
+  end)
 end)

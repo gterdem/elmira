@@ -165,4 +165,23 @@ describe("Display.Overlay", function()
       assert.is_false(Overlay.isEnabled(cue))
     end)
   end)
+
+  describe("Render() while the display is hidden", function()
+    it("fires no cue when the driver says hidden, even with a queue", function()
+      local flared = {}
+      -- Records a table, not the edge: this cue's stored setting has no edge, and
+      -- `flared[#flared+1] = nil` would leave the list empty however many times it fired.
+      Overlay.Flare = function(edge) flared[#flared + 1] = { edge = edge } end
+      stubActiveBuild{
+        { event = "now_slot", spell = "EXORCISM", color = {0.9,0.2,0.2}, edge = "left",
+          reason = "Exorcism came off cooldown" },
+      }
+      ns.db.profile.overlay.cues = { ["now_slot:EXORCISM"] = { enabled = true } }
+      Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", false)
+      assert.equal(0, #flared)
+      -- and the memory is cleared, so it fires on the way back rather than being swallowed
+      Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.equal(1, #flared)
+    end)
+  end)
 end)

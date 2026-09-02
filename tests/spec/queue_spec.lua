@@ -225,4 +225,29 @@ describe("Display.Queue", function()
       assert.equal(0, #tooltip.lines)
     end)
   end)
+
+  describe("visibility", function()
+    it("hides the strip and releases the glow when the driver says hidden", function()
+      local stopped = {}
+      ns.Glow = { SetNowSlot = function(button, slot) stopped[#stopped + 1] = { button, slot } end }
+      Queue.Create()
+      Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", false)
+      assert.is_false(container().shown)
+      -- Releasing matters more than hiding: the bar glow lives on ElvUI's frame, not ours, so a
+      -- hidden strip with a live glow leaves a lit button and nothing on screen to explain it.
+      assert.equal(1, #stopped)
+      assert.is_nil(stopped[1][1])
+      assert.is_nil(stopped[1][2])
+    end)
+
+    it("shows it again when visible, and omitting the argument still means visible", function()
+      ns.Glow = { SetNowSlot = function() end }
+      Queue.Create()
+      Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", false)
+      Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.is_true(container().shown)
+      Queue.Render({ { spell = "EXORCISM" } })
+      assert.is_true(container().shown)
+    end)
+  end)
 end)

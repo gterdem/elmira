@@ -94,6 +94,25 @@ API.RegisterBarProvider{
     if text and text ~= "" and text ~= RANGE_INDICATOR then return text end
     return nil
   end,
+  -- Optional in the provider contract (docs/08). Exists so `/elm debug bars` can distinguish the
+  -- three ways this provider comes up empty: the library missing (ElvUI changed its bundled name),
+  -- the library present but holding no buttons (asked before ElvUI built its bars), and buttons
+  -- present but none of them holding the spell (the player has not placed it).
+  describe = function()
+    local lib = LAB()
+    local registered = 0
+    if lib and lib.GetAllButtons then
+      local ok, buttons = pcall(lib.GetAllButtons, lib)
+      if ok and type(buttons) == "table" then
+        for _ in pairs(buttons) do registered = registered + 1 end
+      end
+    end
+    if not map then rebuild() end
+    local mapped = 0
+    for _ in pairs(map or {}) do mapped = mapped + 1 end
+    return { library = "LibActionButton-1.0-ElvUI", present = lib ~= nil,
+             buttons = registered, mapped = mapped }
+  end,
   onLayoutChanged = function(cb)
     if type(cb) == "function" then listeners[#listeners + 1] = cb end
   end,
