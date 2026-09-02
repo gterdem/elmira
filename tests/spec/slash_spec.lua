@@ -131,6 +131,31 @@ describe("Core.Slash", function()
       assert.equal("4of9-t3", ns.Recorder.marks()[1].label)
     end)
 
+    -- The first live run was started mid-combat, so its baseline mark was a combat snapshot and
+    -- meant something different from every mark after it.
+    it("refuses to start recording while in combat", function()
+      local ns = helper.ns()
+      ns.Recorder = helper.load("Elmira/Core/Recorder.lua")
+      ns.Recorder.reset()
+      ns.API = { GetState = function() return { inCombat = function() return true end } end,
+                 GetProviders = function() return {} end }
+      local out = table.concat(Slash.run("rec start"), "\n")
+      assert.truthy(out:find("in combat", 1, true), out)
+      assert.is_false(ns.Recorder.isRecording())
+    end)
+
+    it("starts out of combat and prints the plan", function()
+      local ns = helper.ns()
+      ns.Recorder = helper.load("Elmira/Core/Recorder.lua")
+      ns.Recorder.reset()
+      ns.API = { GetState = function() return { inCombat = function() return false end } end,
+                 GetProviders = function() return {} end }
+      local out = table.concat(Slash.run("rec start"), "\n")
+      assert.is_true(ns.Recorder.isRecording())
+      assert.truthy(out:find("baseline", 1, true), out)
+      assert.truthy(out:find("/reload", 1, true), out)
+    end)
+
     it("lists queue as an available debug subcommand", function()
       local out = table.concat(Slash.run("debug"), "\n")
       assert.truthy(out:find("queue", 1, true), out)

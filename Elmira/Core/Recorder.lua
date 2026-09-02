@@ -21,10 +21,10 @@ local Recorder = {}
 -- rather than refusing to record: losing the start of a long session beats silently stopping.
 Recorder.MAX_MARKS = 40
 
-local state = { active = false, marks = {}, dropped = 0, startedAt = nil }
+local state = { active = false, marks = {}, dropped = 0, deduped = 0, startedAt = nil, lastKey = nil }
 
 function Recorder.reset()
-  state = { active = false, marks = {}, dropped = 0, startedAt = nil }
+  state = { active = false, marks = {}, dropped = 0, deduped = 0, startedAt = nil, lastKey = nil }
 end
 
 function Recorder.isRecording() return state.active end
@@ -43,12 +43,22 @@ end
 -- `capture` is a function returning the trimmed snapshot for this instant. Called ONLY when
 -- recording, so a stopped recorder costs nothing — this can be wired to combat events without
 -- paying for a snapshot on every fight.
-function Recorder.mark(label, now, capture)
+-- `dedupeKey` is optional and only passed by AUTOMATIC marks. Consecutive auto-marks with the same
+-- key are skipped: repeatedly pulling a dummy produced 20+ identical combat-start/combat-end pairs in
+-- the first real recording, which filled a 40-slot buffer with noise and would have evicted the gear
+-- states the test actually compares. A manual `/elm rec mark` passes no key and is never skipped —
+-- if the player deliberately marked something, it is wanted.
+function Recorder.mark(label, now, capture, dedupeKey)
   if not state.active then return false, "not recording" end
   if type(capture) ~= "function" then return false, "no capture function" end
+  if dedupeKey ~= nil and state.lastKey ~= nil and dedupeKey == state.lastKey then
+    state.deduped = (state.deduped or 0) + 1
+    return false, "unchanged since last mark"
+  end
 
   local snapshot = capture()
   if snapshot == nil then return false, "capture returned nothing" end
+  state.lastKey = dedupeKey
 
   snapshot.label = label or "mark"
   snapshot.at = now
@@ -67,10 +77,13 @@ end
 function Recorder.marks() return state.marks end
 function Recorder.count() return #state.marks end
 function Recorder.dropped() return state.dropped end
+function Recorder.deduped() return state.deduped or 0 end
 
 function Recorder.clear()
   state.marks = {}
   state.dropped = 0
+  state.deduped = 0
+  state.lastKey = nil
 end
 
 -- What goes to SavedVariables. Includes `dropped` so a truncated session says so rather than looking
@@ -80,6 +93,7 @@ function Recorder.payload()
     startedAt = state.startedAt,
     recording = state.active,
     dropped = state.dropped,
+    deduped = state.deduped or 0,
     count = #state.marks,
     marks = state.marks,
   }

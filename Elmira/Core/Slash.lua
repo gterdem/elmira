@@ -250,15 +250,39 @@ Slash.register{
     end
 
     if sub == "start" then
+      -- The first real recording was started mid-combat, so its baseline mark was a combat snapshot
+      -- and the first gear state was never captured cleanly. Refuse rather than silently record a
+      -- run whose first mark means something different from every later one.
+      local st = ns.API and ns.API.GetState()
+      local inCombat = st and st.inCombat and st:inCombat()
+      if inCombat then
+        return { "Not started: you are in combat.",
+                 "The first mark is the baseline for everything after it, so it has to be taken at rest.",
+                 "Step away, let combat drop, then /elm rec start again." }
+      end
       Recorder.clear()
       Recorder.start(ns.now and ns.now() or 0)
-      return { "Recording. Play, swap gear, fight — combat and gear changes mark themselves.",
-               "Add your own marks with: /elm rec mark <label>",
-               "When done: /elm rec stop, then /reload to write the file." }
+      -- Print the plan here rather than relying on a document on another machine.
+      return {
+        "Recording started. Combat and gear swaps mark themselves; no copying needed.",
+        "Run these in order — after each gear change, wait a second, then label it:",
+        "  1) /elm rec mark baseline",
+        "  2) hit a dummy ~20s, let combat end        (auto)",
+        "  3) remove ONE tier-3 piece   -> /elm rec mark t3-minus-one",
+        "  4) put it back               -> /elm rec mark t3-restored",
+        "  5) remove your shoulder      -> /elm rec mark no-shoulder",
+        "  6) put it back               -> /elm rec mark shoulder-back",
+        "  7) hit the dummy again ~20s                (auto)",
+        "Then: /elm rec stop, then /reload. /elm rec status shows progress.",
+      }
     elseif sub == "stop" then
       local n = Recorder.stop()
-      return { string.format("Stopped with %d mark(s). /reload now to write them to "
-        .. "WTF/Account/<ACCOUNT>/SavedVariables/Elmira.lua", n) }
+      local lines = { string.format("Stopped with %d mark(s).", n) }
+      if n == 0 then
+        lines[#lines + 1] = "Nothing was captured — did you swap any gear or enter combat?"
+      end
+      lines[#lines + 1] = "/reload NOW to write them out. Without it nothing is saved."
+      return lines
     elseif sub == "status" then
       return { Recorder.status() }
     elseif sub == "clear" then
@@ -267,6 +291,7 @@ Slash.register{
     elseif sub == "mark" then
       local p = pack()
       if not p then return { "rec: no data pack registered" } end
+      -- No dedupe key: a mark the player asked for is always recorded, even if nothing changed.
       local ok, err = Recorder.mark(label ~= "" and label or "mark", ns.now and ns.now() or 0,
         function() return ns.captureMark(p) end)
       if not ok then return { "rec: " .. tostring(err) } end

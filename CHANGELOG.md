@@ -1,5 +1,8 @@
 # Changelog
 ## Unreleased
+- `/elm rec start` now refuses to begin while you are in combat, and prints the run steps in chat so
+  you do not need a document open on another screen. Repeated identical snapshots are no longer
+  recorded, so pulling a dummy several times cannot bury the gear states you are comparing.
 - Weapon speed now actually reads the item's speed: it lives in the tooltip's right-hand column, which
   the previous attempt did not read, so it had been silently falling back to the haste-modified value.
 - Recorded marks no longer lose `false` values — combat state and per-entry "usable" verdicts were
