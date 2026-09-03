@@ -18,6 +18,13 @@ jobs:
             if [ -e "$f" ]; then echo "::error::$f must not be committed to the public repo"; exit 1; fi
           done
       # tools/ gates the rest of CI, so a bug in it silently weakens every check below.
+      # Elmira/Libs/ is gitignored -- the packager supplies it -- but tests/spec/init_spec.lua runs
+      # Core/Init.lua against the REAL Ace3 rather than a fake of it, so the suite needs the libraries
+      # present. Without this, `make test` fails on a fresh checkout while passing on every developer
+      # machine that has run `make libs`.
+      - name: Fetch embedded libraries (init_spec runs against the real Ace3)
+        run: make libs
+
       - name: Shellcheck the quality gates
         run: shellcheck tools/*.sh
 

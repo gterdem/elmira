@@ -38,7 +38,12 @@ describe("Core.Init", function()
   local function loadRealAce3()
     _G.LibStub = nil
     for _, path in ipairs(ACE_LIBS) do
-      local chunk = assert(loadfile(path))
+      -- Elmira/Libs/ is gitignored and supplied by the packager, so a fresh checkout does not have
+      -- it. Say that outright: "cannot open .../LibStub.lua" sends the reader hunting a missing file
+      -- rather than running the one command that creates it.
+      local chunk, err = loadfile(path)
+      assert(chunk, "Core/Init.lua runs on the real Ace3, which lives in the gitignored Elmira/Libs/."
+                 .. " Run `make libs` once to populate it. (" .. tostring(err) .. ")")
       chunk()
     end
   end
