@@ -14,4 +14,11 @@ jobs:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}   # also attaches the zip to the GitHub release
         with:
-          args: -w 0 -o 0   # disable WoWInterface and Wago uploads (CurseForge only)
+          # -w 0 = no WoWInterface, -a 0 = no Wago. NOT `-o 0`: `-o` takes no argument (it means
+          # "overwrite the release directory") and the stray 0 was ignored, so this line did not do
+          # what it claimed. Wago was skipped anyway only because no Wago id is set.
+          #
+          # CurseForge upload requires `## X-Curse-Project-ID: <numeric id>` in Elmira/Elmira_Vanilla.toc.
+          # Without it `slug` is empty and release.sh's upload_curseforge() returns 0 immediately --
+          # the tag builds, attaches to a GitHub release, prints nothing and exits 0. See M4b.
+          args: -w 0 -a 0
