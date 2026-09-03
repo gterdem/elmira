@@ -320,4 +320,43 @@ describe("Display.BarGlow", function()
       assert.equal("3", BarGlow.keybindFor("EXORCISM"))
     end)
   end)
+
+  -- The owner's own words: "glowing actionbar buttons is much better than the glowing queue
+  -- buttons... you see the icon in the queue but still look after in your actionbars." So a bar glow
+  -- that cannot find its button is the MOST important failure in the display, and until now it was
+  -- the quietest — it degraded to the queue icon and said nothing, which is how a rank mismatch
+  -- survived a whole build.
+  describe("noteMissing()", function()
+    before_each(function()
+      helper.ns().db = { profile = { glow = { enabled = true, barGlow = true } } }
+      helper.ns().log = function(...) helper.ns()._logged = { ... } end
+      BarGlow.resetAnnouncements()
+    end)
+
+    it("says which spell has no button", function()
+      assert.is_true(BarGlow.noteMissing("EXORCISM"))
+      assert.truthy(table.concat(helper.ns()._logged, " "):find("EXORCISM", 1, true))
+    end)
+
+    it("says it once per spell, not once per render", function()
+      assert.is_true(BarGlow.noteMissing("EXORCISM"))
+      assert.is_false(BarGlow.noteMissing("EXORCISM"))
+      assert.is_false(BarGlow.noteMissing("EXORCISM"))
+    end)
+
+    it("stays quiet when the user has turned bar glow off", function()
+      helper.ns().db.profile.glow.barGlow = false
+      assert.is_false(BarGlow.noteMissing("EXORCISM"))
+      helper.ns().db.profile.glow.barGlow = true
+      helper.ns().db.profile.glow.enabled = false
+      BarGlow.resetAnnouncements()
+      assert.is_false(BarGlow.noteMissing("JUDGEMENT"))
+    end)
+
+    it("will speak again after the bars change, because the spell may have been placed", function()
+      assert.is_true(BarGlow.noteMissing("EXORCISM"))
+      BarGlow.Invalidate()
+      assert.is_true(BarGlow.noteMissing("EXORCISM"))
+    end)
+  end)
 end)

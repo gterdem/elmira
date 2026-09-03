@@ -39,6 +39,7 @@ Display\Overlay.lua
 
 # Setup
 Setup\Detect.lua
+Setup\Wizard.lua
 
 # Options
 Options\Options.lua

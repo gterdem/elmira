@@ -285,6 +285,14 @@ function NA:StartDisplay()
 
   if ns.Options then ns.Options.Register() end
   self:SetupMinimapButton()
+
+  -- Offering setup must never be able to break the display that has just been started. The wizard
+  -- is the newest and least-exercised code in the addon and it runs on every login of every
+  -- character, which is the worst possible combination for an unguarded call.
+  if ns.Wizard then
+    local ok, err = pcall(ns.Wizard.OfferOnLogin)
+    if not ok then ns.log("Elmira: setup offer failed (%s); everything else is unaffected.", tostring(err)) end
+  end
 end
 
 -- LibDataBroker object + LibDBIcon button. Both are already vendored. The icon is our own TGA

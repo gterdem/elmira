@@ -138,4 +138,44 @@ describe("Display.Glow", function()
       assert.equal("AutoCastGlow_Start", calls[3].fn)
     end)
   end)
+
+  -- Wiring, not behaviour. `BarGlow.noteMissing` was covered in barglow_spec and the CALL to it from
+  -- here was not, so deleting the call broke no test at all — "correct code that is never reached"
+  -- is this codebase's most reliable failure, and a spec that cannot notice it is decoration.
+  describe("SetNowSlot reports a suggestion with no bar button", function()
+    local missing
+
+    before_each(function()
+      missing = {}
+      ns.db = { profile = { glow = { enabled = true, style = "PIXEL", barGlow = true } } }
+      ns.BarGlow = {
+        buttonsFor = function() return {}, nil end,
+        noteMissing = function(key) missing[#missing + 1] = key end,
+      }
+    end)
+
+    it("tells BarGlow which spell it could not place", function()
+      Glow.SetNowSlot(frame("queue"), { spell = "EXORCISM" })
+      assert.same({ "EXORCISM" }, missing)
+    end)
+
+    it("says nothing when a button WAS found", function()
+      ns.BarGlow.buttonsFor = function() return { frame("bar") }, "ElvUI" end
+      Glow.SetNowSlot(frame("queue"), { spell = "EXORCISM" })
+      assert.same({}, missing)
+    end)
+
+    it("says nothing when the user has bar glow switched off", function()
+      ns.db.profile.glow.barGlow = false
+      Glow.SetNowSlot(frame("queue"), { spell = "EXORCISM" })
+      assert.same({}, missing)
+    end)
+
+    it("still glows the queue icon when the bar lookup finds nothing", function()
+      -- Degrading is correct; degrading SILENTLY was the problem.
+      local queue = frame("queue")
+      Glow.SetNowSlot(queue, { spell = "EXORCISM" })
+      assert.equal(1, Glow.activeCount())
+    end)
+  end)
 end)

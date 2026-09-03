@@ -637,7 +637,14 @@ Slash.register{
     return { "config: options are not loaded" }
   end,
 }
-Slash.register{ key = "setup", desc = ns.L["Run the setup wizard"], order = 100, run = unavailableNamed("setup", 4) }
+Slash.register{
+  key = "setup", desc = ns.L["Run the setup wizard"], order = 100,
+  run = function()
+    if not ns.Wizard then return { "setup: the wizard is not loaded" } end
+    if ns.Wizard.Open() then return {} end   -- the window IS the output
+    return { "setup: could not open the window (AceGUI-3.0 missing?)" }
+  end,
+}
 Slash.register{
   key = "lock", desc = ns.L["Lock/unlock frames"], order = 101,
   run = function()
@@ -651,8 +658,70 @@ Slash.register{
     return { "Frames unlocked — drag the queue to move it. /elm lock again to lock." }
   end,
 }
-Slash.register{ key = "profile", args = "<key>", desc = ns.L["Pin a build"], order = 102, run = unavailableNamed("profile", 4) }
-Slash.register{ key = "advise", desc = ns.L["Gear advisor"], order = 103, run = unavailableNamed("advise", 4) }
+Slash.register{
+  key = "profile", args = "<key>", desc = ns.L["Pin a build"], order = 102,
+  run = function(rest)
+    local pack = ns.Display and ns.Display.currentPack()
+    if not (pack and pack.builds) then return { "profile: no data pack for your class" } end
+    local keys = {}
+    for key in pairs(pack.builds) do keys[#keys + 1] = key end
+    table.sort(keys)
+
+    local wanted = rest and rest:match("^(%S+)")
+    if not wanted then
+      -- Naming the current one matters as much as listing them: `activeBuild` may have been chosen
+      -- by a rule the user never saw, and "which am I on" is otherwise unanswerable.
+      local _, active, why = nil, nil, nil
+      if ns.Display then _, active, why = ns.Display.activeBuild() end
+      local lines = { "Builds: " .. table.concat(keys, ", ") }
+      lines[#lines + 1] = string.format("Active: %s (%s)", tostring(active), tostring(why))
+      lines[#lines + 1] = "Usage: /elm profile <key>, or /elm profile auto to unpin."
+      return lines
+    end
+
+    local profile = ns.db and ns.db.profile
+    if not profile then return { "profile: no profile loaded" } end
+    if wanted == "auto" then
+      profile.activeBuild = false          -- the DB's documented "unset" sentinel, never nil
+      if ns.Display then ns.Display.refresh() end
+      return { "Unpinned. Elmira will choose a build for you again." }
+    end
+    if not pack.builds[wanted] then
+      return { string.format("No build %q. Available: %s", wanted, table.concat(keys, ", ")) }
+    end
+    profile.activeBuild = wanted
+    if ns.Display then ns.Display.refresh() end
+    return { "Pinned to " .. wanted .. ". /elm profile auto to undo." }
+  end,
+}
+Slash.register{
+  key = "advise", desc = ns.L["Gear advisor"], order = 103,
+  run = function()
+    if not (ns.Advisor and ns.Detect and ns.API) then return { "advise: the advisor is not loaded" } end
+    local pack = ns.Display and ns.Display.currentPack()
+    if not pack then return { "advise: no data pack for your class" } end
+    local _, buildKey = ns.Display.activeBuild()
+    if not buildKey then return { "advise: no active build" } end
+
+    local advice = pack.advice and pack.class and pack.advice[pack.class]
+      and pack.advice[pack.class][buildKey]
+    if not advice then
+      -- A build with no advice entry is a data gap, not an error, and saying which build it is
+      -- makes it actionable instead of mysterious.
+      return { string.format("No gear advice has been written for %s yet.", buildKey) }
+    end
+
+    local state = ns.API.GetState()
+    local detection = ns.Detect.gather(state, ns.Adapter, pack)
+    local rec = ns.Advisor.recommend(advice, state,
+      { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses },
+      { soul = detection.soul, weapon = detection.weapon, build = buildKey })
+    local lines = { "Gear advice for " .. buildKey .. ":" }
+    for _, line in ipairs(ns.Advisor.lines(rec, ns.L)) do lines[#lines + 1] = "  " .. line end
+    if #lines == 1 then lines[#lines + 1] = "  Nothing to change." end
+    return lines
+  end,
+}
 Slash.register{ key = "sim", desc = ns.L["Export to WoWSims"], order = 104, run = unavailableNamed("sim", "5c") }
 Slash.register{ key = "history", desc = ns.L["Encounter history"], order = 105, run = unavailableNamed("history", "5f") }
 Slash.register{ key = "rotdiag", desc = ns.L["Paste-friendly diagnostic snapshot"], order = 106, run = unavailableNamed("rotdiag", "5a") }

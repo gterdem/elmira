@@ -103,8 +103,14 @@ function Glow.SetNowSlot(queueButton, slot)
   if p.glow and p.glow.enabled and slot then
     if queueButton then wanted[queueButton] = true end
     if p.glow.barGlow and slot.spell and ns.BarGlow then
-      for _, button in ipairs(ns.BarGlow.buttonsFor(slot.spell) or {}) do
+      local buttons = ns.BarGlow.buttonsFor(slot.spell)
+      for _, button in ipairs(buttons or {}) do
         wanted[button] = true
+      end
+      -- Say so when there is nothing to glow. Silently showing only the queue icon makes the most
+      -- valuable half of the display fail in the way least likely to be noticed.
+      if #(buttons or {}) == 0 and ns.BarGlow.noteMissing then
+        ns.BarGlow.noteMissing(slot.spell)
       end
     end
   end

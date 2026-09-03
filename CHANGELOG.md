@@ -1,8 +1,17 @@
 # Changelog
 ## Unreleased
-- Elmira can now tell you what to **change**: which shoulder soul your build wants, which runes it
-  expects, and whether the weapon you are holding suits it. Recommendations are conditional on the
-  gear you actually have, and they are advice — nothing here changes what the rotation suggests.
+- **A setup window.** `/elm setup` (or the button in the options) shows what Elmira thinks your
+  character is and lists the playstyles that have shipped for your class, recommended first, each
+  with what it expects of your gear. A playstyle you do not currently meet is marked, not hidden —
+  you can still pick it. Offered once on a new character, and once more if the shipped list changes.
+- `/elm profile` lists the builds, says which one is active and why, and pins one.
+  `/elm profile auto` hands the choice back to Elmira.
+- `/elm advise` tells you what to **change**: which shoulder soul your build wants, which runes it
+  expects, and whether the weapon you are holding suits it. Conditional on the gear you actually
+  have, and advice only — nothing here changes what the rotation suggests.
+- **Elmira now tells you when it cannot find a spell on your bars**, once per spell, instead of
+  quietly showing only the queue icon. That failure was invisible before, which is how the rank
+  problem lasted a whole build.
 - When Elmira cannot read something, it now says so instead of guessing. An unreadable shoulder
   enchant or weapon speed shows as "could not tell", never as "wrong" — so you are never sent to fix
   something that is already fine.

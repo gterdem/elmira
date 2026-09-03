@@ -13,4 +13,7 @@ end
 API.RegisterDataPack{ class = "PALADIN", flavor = "SoD", spells = D.Spells, sets = D.Sets, souls = D.Souls,
                       bonuses = D.Bonuses, builds = D.Builds, catalog = D.Catalog, advice = D.Advice,
                       -- Absent constant = feature inert, never a default guess (Data/Timing.lua).
-                      sealLingerWindow = D.Timing and D.Timing.sealLingerWindow }
+                      sealLingerWindow = D.Timing and D.Timing.sealLingerWindow,
+                      -- The wizard re-offers itself once when this rises (docs/01 §5b). It lives on
+                      -- the catalog table, so a refresh that bumps it cannot forget to bump this.
+                      catalogVersion = D.Catalog and D.Catalog.version }

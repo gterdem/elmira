@@ -112,6 +112,12 @@ function Options.table()
             get = function() return profile().scale end,
             set = function(_, v) profile().scale = v; redraw() end,
           },
+          setup = {
+            type = "execute", order = 0, name = L["Run setup again"],
+            desc = L["Pick a playstyle for this character."],
+            func = function() if ns.Wizard then ns.Wizard.Open() end end,
+            hidden = function() return ns.Wizard == nil end,
+          },
           visibility = {
             type = "select", order = 4, width = "full", name = L["Show the queue"],
             desc = L["When the queue and its bar glow are on screen. Hiding it also stops the "

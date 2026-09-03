@@ -58,10 +58,18 @@ describe("Core.Slash", function()
     assert.equal("Unknown command 'nonsense'. Type /elm for help.", lines[1])
   end)
 
-  it("'setup' returns the not-yet-available line naming its milestone", function()
+  -- Was "not available yet (M4)" until M4 landed. Rewritten rather than deleted: the property worth
+  -- keeping is that the command DEGRADES with a designed line instead of erroring when the module
+  -- behind it is absent, which is what this spec's Core-only harness reproduces.
+  it("'setup' degrades with a designed line when the wizard is not loaded", function()
     local lines = Slash.run("setup")
     assert.equal(1, #lines)
-    assert.matches("not available yet %(M4%)", lines[1])
+    assert.equal("setup: the wizard is not loaded", lines[1])
+  end)
+
+  it("'profile' and 'advise' degrade the same way rather than erroring", function()
+    assert.equal("profile: no data pack for your class", Slash.run("profile")[1])
+    assert.equal("advise: the advisor is not loaded", Slash.run("advise")[1])
   end)
 
   it("'sim' names a non-integer milestone label correctly", function()

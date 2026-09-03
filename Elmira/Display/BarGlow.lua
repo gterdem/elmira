@@ -16,6 +16,11 @@ ns = ns or _G.__ELM_NS or {}
 local BarGlow = {}
 local blizzMap = nil        -- spellID -> { buttons }, lazily built, invalidated by bar events
 local blizzByName = nil     -- spell NAME -> { buttons }; Classic has ranks, see nameOf()
+-- Spells we have already said we could not find a button for. Declared HERE, above every use:
+-- `BarGlow.Invalidate` clears it and sits further up the file, and a `local` at the definition site
+-- would leave that reference resolving to a nil global — the exact shape that made Schema's
+-- condition labels come back empty an hour ago.
+local announced = {}
 
 local BLIZZ_BARS = {
   "ActionButton", "MultiBarBottomLeftButton", "MultiBarBottomRightButton",
@@ -105,6 +110,9 @@ end
 -- set. A stale map glows a button that no longer holds the spell, which is worse than not glowing.
 function BarGlow.Invalidate()
   blizzMap, blizzByName = nil, nil
+  -- Bars changed, so a spell we complained about may now be placed. Complaining again after that is
+  -- correct; staying silent about a real regression is not.
+  announced = {}
 end
 
 function BarGlow.Rebuild()
@@ -199,6 +207,30 @@ function BarGlow.describe(keys)
     }
   end
   return out
+end
+
+-- Says, once per spell per session, that we could not find a button for the suggestion.
+--
+-- The bar glow is the channel that matters most — the queue tells you WHAT and the bar tells you
+-- WHERE, and hunting your own bars is the work the addon is supposed to remove. Until now, failing
+-- to find the button degraded silently to the queue icon: the most important output failed in the
+-- way least likely to be noticed, which is how a rank mismatch survived an entire build.
+--
+-- Once per spell, not once per attempt: this is reached from the render path.
+function BarGlow.noteMissing(spellKey)
+  if not spellKey or announced[spellKey] then return false end
+  announced[spellKey] = true
+  local profileGlow = ns.db and ns.db.profile and ns.db.profile.glow
+  if not (profileGlow and profileGlow.enabled and profileGlow.barGlow) then return false end
+  if ns.log then
+    ns.log("Elmira: no visible action-bar button holds %s, so only the queue icon can glow. "
+        .. "/elm debug bars explains why.", tostring(spellKey))
+  end
+  return true
+end
+
+function BarGlow.resetAnnouncements()
+  announced = {}
 end
 
 function BarGlow.stats()
