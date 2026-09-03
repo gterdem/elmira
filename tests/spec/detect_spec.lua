@@ -70,6 +70,28 @@ describe("Setup.Detect", function()
       assert.is_nil(none.specIndex)
     end)
 
+    -- The wizard shipped telling a level-60 paladin "SEAL_OF_MARTYRDOM not known" for an ability it
+    -- has had since level 10, because `Detect.check` read `detection.spells` and `gather` never
+    -- wrote it. A lookup against a table nobody populates: the same shape as the hover tooltip's
+    -- `slot.index`, in the same milestone. This is the spec that would have caught it.
+    it("populates the known-spell set that check() reads", function()
+      local state = FakeState.new{}
+      local known = { EXORCISM = true, SEAL_OF_MARTYRDOM = false }
+      local a = { playerClass = function() return "PALADIN" end,
+                  talents = function() return nil end,
+                  knownSpells = function() return known end }
+      local d = Detect.gather(state, a, PACK)
+      assert.is_true(d.spells.EXORCISM)
+      assert.is_false(d.spells.SEAL_OF_MARTYRDOM)
+    end)
+
+    it("leaves it nil when the adapter cannot answer, rather than an empty set", function()
+      -- An empty set would read as "you know nothing", which is a claim; nil is the absence of one.
+      local d = Detect.gather(FakeState.new{},
+        { playerClass = function() return "PALADIN" end, talents = function() return nil end }, PACK)
+      assert.is_nil(d.spells)
+    end)
+
     it("returns a usable record with no state at all rather than erroring", function()
       local d = Detect.gather(nil, nil, nil)
       assert.same({}, d.runes)
@@ -111,6 +133,31 @@ describe("Setup.Detect", function()
         { sets = { PALADIN_T2_JUDGEMENT = 4 } }, PACK)
       assert.is_false(checks[1].ok)
       assert.truthy(checks[1].text:find("2/4", 1, true))
+    end)
+
+    describe("requires.spells", function()
+      local REQ = { spells = { "SEAL_OF_MARTYRDOM" } }
+
+      it("passes a spell the character knows", function()
+        local c = Detect.check({ spells = { SEAL_OF_MARTYRDOM = true } }, REQ, PACK)[1]
+        assert.is_true(c.ok)
+        assert.truthy(c.text:find("known", 1, true))
+      end)
+
+      it("fails one it genuinely does not know", function()
+        local c = Detect.check({ spells = { SEAL_OF_MARTYRDOM = false } }, REQ, PACK)[1]
+        assert.is_false(c.ok)
+        assert.truthy(c.text:find("NOT known", 1, true))
+      end)
+
+      it("says it could not READ the spellbook rather than claiming the spell is missing", function()
+        -- The marker and the text must agree. `?` next to "not known" tells the user a fact we do
+        -- not have, and that is exactly what shipped.
+        local c = Detect.check({}, REQ, PACK)[1]
+        assert.is_nil(c.ok)
+        assert.truthy(c.text:find("could not read", 1, true))
+        assert.is_nil(c.text:find("NOT known", 1, true))
+      end)
     end)
 
     it("returns nothing at all for a build with no requires", function()

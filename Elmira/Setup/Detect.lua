@@ -47,6 +47,12 @@ function Detect.gather(state, adapter, pack)
     d.talentPoints = talents.total
   end
 
+  -- Populated because `Detect.check` reads it. It did not exist until the wizard shipped a line
+  -- reading `SEAL_OF_MARTYRDOM not known` for a character that has had the ability since level 10:
+  -- the lookup was against a table nobody wrote, so every `requires.spells` entry read nil forever.
+  -- Same shape as the hover-tooltip's `slot.index`, in the same milestone.
+  d.spells = safe(adapter.knownSpells, pack.spells) or nil
+
   d.weapon = safe(function() return state:weapon(MAINHAND) end)
   d.offhand = safe(function() return state:weapon(OFFHAND) end)
   d.soul = safe(function() return state:enchant(SHOULDER) end)
@@ -115,8 +121,16 @@ function Detect.check(detection, requires, pack)
   -- unknown spell means every entry needing it is skipped, which is the difference between a build
   -- that plays and one with almost nothing to suggest.
   for _, key in ipairs(requires.spells or {}) do
+    -- Three states, and the TEXT must agree with the marker. `nil` means we could not read the
+    -- spellbook; rendering that as "not known" states a fact we do not have, which is how the wizard
+    -- told a level-60 paladin it lacked an ability it has had since level 10.
     local known = detection.spells and detection.spells[key]
-    out[#out + 1] = { key = key, ok = known, text = key .. (known and " known" or " not known") }
+    local name = pack.spells and pack.spells[key] and pack.spells[key].name or key
+    local text
+    if known == true then text = name .. " known"
+    elseif known == false then text = name .. " NOT known"
+    else text = name .. ": could not read your spellbook" end
+    out[#out + 1] = { key = key, ok = known, text = text }
   end
 
   for key, min in pairs(requires.sets or {}) do

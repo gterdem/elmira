@@ -94,6 +94,25 @@ function Vanilla.talents()
   return { tabs = tabs, total = total, top = top, topPoints = topPoints }
 end
 
+-- Which of the pack's spells this character actually knows. An adapter EXTRA for the same reason
+-- talents are one: no condition in docs/02 asks it, only the wizard's requirement check does.
+--
+-- `known` is NOT `usable`. The State's `usable()` answers "can I cast this right now", which is
+-- false when out of mana or out of range — a fine answer for the engine and a terrible one for
+-- "do you have this ability", which is what a requirement means.
+function Vanilla.knownSpells(spells)
+  if not (IsPlayerSpell and type(spells) == "table") then return nil end
+  local out = {}
+  for key, record in pairs(spells) do
+    local id = type(record) == "table" and record.id
+    if type(id) == "number" and id > 0 then
+      local ok, known = pcall(IsPlayerSpell, id)
+      out[key] = ok and known == true or false
+    end
+  end
+  return out
+end
+
 function Vanilla.loadClassPack(class)
   if not (class and C_AddOns and C_AddOns.GetNumAddOns) then return false end
   for i = 1, C_AddOns.GetNumAddOns() do
