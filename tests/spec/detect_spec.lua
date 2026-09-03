@@ -128,6 +128,55 @@ describe("Setup.Detect", function()
       assert.truthy(checks[1].text:find("Art of War", 1, true))
     end)
 
+    -- ADR-0013 §2: a build is written for its runes, so a missing rune is a purchase, not a mismatch.
+    describe("requires.runes as a shopping list", function()
+      local REQ = { runes = { "RUNE_ART_OF_WAR" } }
+
+      it("phrases a missing rune as something to engrave, naming the slot", function()
+        local checks = Detect.check({ runes = { RUNE_ART_OF_WAR = false } }, REQ, PACK)
+        assert.equal("Engrave Art of War (feet)", checks[1].text)
+        assert.equal("rune", checks[1].kind)
+        assert.equal("feet", checks[1].slot)
+        assert.equal("Art of War (feet)", checks[1].engrave)
+        assert.is_false(checks[1].ok)
+      end)
+
+      it("carries no `engrave` item when the rune is present or unreadable", function()
+        assert.is_nil(Detect.check({ runes = { RUNE_ART_OF_WAR = true } }, REQ, PACK)[1].engrave)
+        assert.is_nil(Detect.check({ runes = {} }, REQ, PACK)[1].engrave)
+      end)
+
+      it("reads 'engraved' when it is", function()
+        local checks = Detect.check({ runes = { RUNE_ART_OF_WAR = true } }, REQ, PACK)
+        assert.equal("Art of War engraved", checks[1].text)
+        assert.is_true(checks[1].ok)
+      end)
+
+      -- The old wording rendered nil as "not engraved" -- the spellbook defect in a second place.
+      it("says the runes could not be read rather than calling one not engraved", function()
+        local checks = Detect.check({ runes = {} }, REQ, PACK)
+        assert.is_nil(checks[1].ok)
+        assert.truthy(checks[1].text:find("could not read", 1, true))
+        assert.is_nil(checks[1].text:find("Engrave", 1, true))
+      end)
+
+      it("derives a readable name from the key when the pack record has none", function()
+        local pack = { spells = { RUNE_HAND_OF_RECKONING = { id = 9, rune = "hands" } } }
+        local checks = Detect.check({ runes = { RUNE_HAND_OF_RECKONING = false } },
+          { runes = { "RUNE_HAND_OF_RECKONING" } }, pack)
+        assert.equal("Engrave Hand Of Reckoning (hands)", checks[1].text)
+        assert.equal("Art of War", Detect.readableName("RUNE_ART_OF_WAR", { name = "Art of War" }))
+        assert.equal("Hand Of Reckoning", Detect.readableName("RUNE_HAND_OF_RECKONING", nil))
+      end)
+
+      it("leaves the slot off when the pack does not know it", function()
+        local checks = Detect.check({ runes = { RUNE_MYSTERY = false } },
+          { runes = { "RUNE_MYSTERY" } }, { spells = {} })
+        assert.equal("Engrave Mystery", checks[1].text)
+        assert.is_nil(checks[1].slot)
+      end)
+    end)
+
     it("counts set pieces against the threshold", function()
       local checks = Detect.check({ sets = { PALADIN_T2_JUDGEMENT = 2 } },
         { sets = { PALADIN_T2_JUDGEMENT = 4 } }, PACK)

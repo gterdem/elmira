@@ -83,6 +83,142 @@ describe("Setup.Wizard", function()
       assert.is_nil(choices[1].checks[1].ok)
     end)
 
+    -- ADR-0013 §2: the runes a build is written for are a shopping list on the row, by readable
+    -- name, only for the ones actually missing -- and never for ones we could not read.
+    describe("rune shopping list", function()
+      local function packNeedingRunes()
+        local p = packWith{
+          { build = "PALADIN_EXODIN", available = true,
+            requires = { runes = { "RUNE_ART_OF_WAR", "RUNE_DIVINE_STORM" } } },
+        }
+        p.spells = {
+          RUNE_ART_OF_WAR = { id = 1, rune = "feet", name = "Art of War" },
+          RUNE_DIVINE_STORM = { id = 2, rune = "hands", name = "Divine Storm" },
+        }
+        return p
+      end
+
+      it("lists only the missing runes, by readable name, and still marks the row as not fitting", function()
+        install(packNeedingRunes())
+        local choices = Wizard.choices({ runes = { RUNE_ART_OF_WAR = false, RUNE_DIVINE_STORM = true } })
+        assert.same({ "Art of War (feet)" }, choices[1].runesToEngrave)
+        assert.is_false(choices[1].fits)
+      end)
+
+      it("lists nothing when the runes could not be read -- an unknown is not a purchase", function()
+        install(packNeedingRunes())
+        local choices = Wizard.choices({})
+        assert.same({}, choices[1].runesToEngrave)
+        assert.is_true(choices[1].fits)
+      end)
+
+      it("carries the same list on the summary shown before applying", function()
+        install(packNeedingRunes())
+        local summary = Wizard.summary("PALADIN_EXODIN",
+          { runes = { RUNE_ART_OF_WAR = false, RUNE_DIVINE_STORM = false } })
+        assert.same({ "Art of War (feet)", "Divine Storm (hands)" }, summary.runesToEngrave)
+      end)
+
+      it("renders the shopping line once, under the checks, naming the Rune Broker", function()
+        install(packNeedingRunes())
+        local choice = Wizard.choices({ runes = { RUNE_ART_OF_WAR = false, RUNE_DIVINE_STORM = true } })[1]
+        local lines = Wizard.choiceLines(choice)
+        -- two check lines (one per required rune) then the shopping line; no summary on this entry
+        assert.equal(3, #lines)
+        assert.truthy(lines[3]:find("Engrave first: Art of War (feet).", 1, true))
+        assert.truthy(lines[3]:find("Rune Broker", 1, true))
+        assert.truthy(lines[1]:find("Engrave Art of War (feet)", 1, true))
+        assert.truthy(lines[2]:find("Divine Storm engraved", 1, true))
+      end)
+
+      it("joins several missing runes with a comma, in requires order", function()
+        install(packNeedingRunes())
+        local choice = Wizard.choices({ runes = { RUNE_ART_OF_WAR = false, RUNE_DIVINE_STORM = false } })[1]
+        local lines = Wizard.choiceLines(choice)
+        assert.truthy(lines[#lines]:find("Engrave first: Art of War (feet), Divine Storm (hands).", 1, true))
+      end)
+
+      it("renders no shopping line when nothing is missing, and the summary first when present", function()
+        local p = packNeedingRunes(); p.catalog.PALADIN[1].summary = "Fast 2H."; install(p)
+        local choice = Wizard.choices({ runes = { RUNE_ART_OF_WAR = true, RUNE_DIVINE_STORM = true } })[1]
+        local lines = Wizard.choiceLines(choice)
+        assert.equal(3, #lines)
+        assert.equal("Fast 2H.", lines[1])
+        for _, line in ipairs(lines) do assert.is_nil(line:find("Engrave first", 1, true)) end
+      end)
+    end)
+
+    -- The row itself, through a recording fake of the two AceGUI calls it makes. This is the only
+    -- test of addChoice: before it, the button wording and the click wiring were verified in game or
+    -- not at all.
+    describe("addChoice()", function()
+      local function fakeGui()
+        local created = {}
+        local function widget(kind)
+          local w = { kind = kind, children = {}, calls = {} }
+          function w:SetFullWidth(v) self.fullWidth = v end
+          function w:SetTitle(t) self.title = t end
+          function w:SetText(t) self.text = t end
+          function w:AddChild(c) self.children[#self.children + 1] = c end
+          function w:SetCallback(name, fn) self.calls[name] = fn end
+          return w
+        end
+        return { Create = function(_, kind) local w = widget(kind); created[#created + 1] = w; return w end,
+                 created = created }, widget("Container")
+      end
+
+      local function rowFor(detection, entryExtra)
+        local entry = { build = "PALADIN_EXODIN", available = true, playstyle = "Exodin",
+                        requires = { runes = { "RUNE_ART_OF_WAR" } } }
+        for k, v in pairs(entryExtra or {}) do entry[k] = v end
+        local p = packWith{ entry }
+        p.spells = { RUNE_ART_OF_WAR = { id = 1, rune = "feet", name = "Art of War" } }
+        install(p)
+        return Wizard.choices(detection)[1]
+      end
+
+      it("renders one label per line, then a button, inside a titled group added to the container", function()
+        local gui, container = fakeGui()
+        local choice = rowFor({ runes = { RUNE_ART_OF_WAR = false } }, { recommended = true })
+        Wizard.addChoice(gui, container, choice, function() end)
+        local group = container.children[1]
+        assert.equal("InlineGroup", group.kind)
+        assert.is_true(group.fullWidth)
+        assert.truthy(group.title:find("Exodin", 1, true))
+        assert.truthy(group.title:find("recommended", 1, true))
+        local lines = Wizard.choiceLines(choice)
+        assert.equal(#lines + 1, #group.children)
+        for i, text in ipairs(lines) do
+          assert.equal("Label", group.children[i].kind)
+          assert.equal(text, group.children[i].text)
+          assert.is_true(group.children[i].fullWidth)
+        end
+        assert.equal("Button", group.children[#group.children].kind)
+      end)
+
+      it("says 'Use this anyway' when the row does not fit, and 'Use this' when it does", function()
+        local gui, container = fakeGui()
+        Wizard.addChoice(gui, container, rowFor({ runes = { RUNE_ART_OF_WAR = false } }), function() end)
+        local button = container.children[1].children[#container.children[1].children]
+        assert.equal("Use this anyway", button.text)
+
+        gui, container = fakeGui()
+        Wizard.addChoice(gui, container, rowFor({ runes = { RUNE_ART_OF_WAR = true } }), function() end)
+        button = container.children[1].children[#container.children[1].children]
+        assert.equal("Use this", button.text)
+      end)
+
+      it("marks an experimental row, and clicking the button picks that row's build", function()
+        local gui, container = fakeGui()
+        local picked
+        Wizard.addChoice(gui, container, rowFor({}, { experimental = true }), function(b) picked = b end)
+        local group = container.children[1]
+        assert.truthy(group.title:find("experimental", 1, true))
+        group.children[#group.children].calls.OnClick()
+        assert.equal("PALADIN_EXODIN", picked)
+      end)
+    end)
+
     it("returns an empty list, not an error, with no pack at all", function()
       ns.Display = { currentPack = function() return nil end }
       assert.same({}, Wizard.choices())

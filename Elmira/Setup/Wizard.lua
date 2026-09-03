@@ -53,6 +53,17 @@ function Wizard.detection()
   return ns.Detect.gather(ns.API.GetState(), ns.Adapter, p)
 end
 
+-- ADR-0013 §2: the runes a build is written for are a shopping list, not a warning. Collected from
+-- the checks so the renderer needs no requirement logic of its own; empty when everything the build
+-- asks for is engraved, or when the rune API could not be read (an unknown is not a purchase).
+function Wizard.runesToEngrave(checks)
+  local out = {}
+  for _, check in ipairs(checks or {}) do
+    if check.kind == "rune" and check.engrave then out[#out + 1] = check.engrave end
+  end
+  return out
+end
+
 -- Step 2: the playstyles on offer, in the order docs/01 §5b specifies — recommended first, then by
 -- `updated` descending. Each carries its own requirement check, so the list can be coloured without
 -- the renderer knowing anything about requirements.
@@ -77,6 +88,7 @@ function Wizard.choices(detection)
         experimental = entry.experimental,
         recommended = entry.recommended,
         checks = checks,
+        runesToEngrave = Wizard.runesToEngrave(checks),
         -- Three states again: fits / does not fit / could not tell. A yellow row is not a red one,
         -- and neither of them stops the user picking it — `requires` is advisory (hard rule 8).
         fits = not (ns.Detect and ns.Detect.hasFailures(checks)),
@@ -103,6 +115,7 @@ function Wizard.summary(buildKey, detection)
     if entry.build == buildKey then
       out.playstyle = entry.playstyle
       out.checks = ns.Detect and ns.Detect.check(detection, entry.requires, p) or {}
+      out.runesToEngrave = Wizard.runesToEngrave(out.checks)
     end
   end
 
@@ -180,8 +193,27 @@ local function checkLine(check)
   return ns.Colors.wrap(color, mark .. " " .. check.text)
 end
 
-local function addChoice(container, choice, onPick)
-  local gui = AceGUI()
+-- Everything a choice row says, as coloured text, in order: the summary, one line per requirement
+-- check, and -- ADR-0013 §2 -- the rune shopping list once, under the checks. Runes are 1c at the
+-- Rune Broker, so this is the one requirement a player can satisfy before the next pull; it is
+-- said as an instruction rather than left as a red mark. Pure, so the wording is testable; addChoice
+-- only turns each line into a Label, and nothing about the UI toolkit is needed to check what it says.
+function Wizard.choiceLines(choice)
+  local lines = {}
+  if choice.summary then lines[#lines + 1] = choice.summary end
+  for _, check in ipairs(choice.checks or {}) do lines[#lines + 1] = checkLine(check) end
+  if choice.runesToEngrave and #choice.runesToEngrave > 0 then
+    lines[#lines + 1] = ns.Colors.wrap(ns.Colors.BRAND, string.format(
+      L["Engrave first: %s. The Rune Broker in every starting zone sells runes for 1c."],
+      table.concat(choice.runesToEngrave, ", ")))
+  end
+  return lines
+end
+
+-- One playstyle row. `gui` is injected rather than fetched here so a spec can hand in a recording
+-- fake and check what the row actually says and does -- until it could, the "Use this anyway"
+-- wording and the OnClick wiring had never been exercised by anything but a person in game.
+function Wizard.addChoice(gui, container, choice, onPick)
   local group = gui:Create("InlineGroup")
   group:SetFullWidth(true)
   local title = choice.playstyle
@@ -189,17 +221,10 @@ local function addChoice(container, choice, onPick)
   if choice.experimental then title = title .. "  " .. ns.Colors.wrap(ns.Colors.WARN, L["experimental"]) end
   group:SetTitle(title)
 
-  if choice.summary then
+  for _, text in ipairs(Wizard.choiceLines(choice)) do
     local label = gui:Create("Label")
     label:SetFullWidth(true)
-    label:SetText(choice.summary)
-    group:AddChild(label)
-  end
-
-  for _, check in ipairs(choice.checks or {}) do
-    local label = gui:Create("Label")
-    label:SetFullWidth(true)
-    label:SetText(checkLine(check))
+    label:SetText(text)
     group:AddChild(label)
   end
 
@@ -249,7 +274,7 @@ function Wizard.Open()
   end
 
   for _, choice in ipairs(choices) do
-    addChoice(frame, choice, function(buildKey)
+    Wizard.addChoice(gui, frame, choice, function(buildKey)
       local ok, message = Wizard.apply(buildKey)
       if ok then
         ns.log("Elmira: playstyle set to %s. /elm setup to change it.", message)

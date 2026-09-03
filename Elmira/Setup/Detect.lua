@@ -11,6 +11,9 @@
 -- wizard can say "I could not tell" instead of guessing wrong on the user's behalf.
 local ADDON, ns = ...
 ns = ns or _G.__ELM_NS or {}
+-- Same identity shim Core/API.lua installs, so this file stays dofile-able on its own.
+ns.L = ns.L or setmetatable({}, { __index = function(_, k) return k end })
+local L = ns.L
 
 local Detect = {}
 
@@ -72,6 +75,15 @@ function Detect.gather(state, adapter, pack)
   return d
 end
 
+-- A shipped spell record carries an id and a src, not a display name (the client owns names), so a
+-- shopping list built from keys would read "RUNE_HAND_OF_RECKONING". Derive something a person can
+-- act on: an explicit `name` wins; otherwise strip the RUNE_ prefix and title-case the words.
+function Detect.readableName(key, spell)
+  if spell and type(spell.name) == "string" then return spell.name end
+  local s = tostring(key):gsub("^RUNE_", ""):lower():gsub("_", " ")
+  return (s:gsub("(%a)([%w]*)", function(a, b) return a:upper() .. b end))
+end
+
 -- Detect.check(detection, requires, pack) -> { {ok=, text=}, ... }
 --
 -- PRD F14: requirement checks WARN, they never block. `requires` is advisory by hard rule 8 and
@@ -110,11 +122,26 @@ function Detect.check(detection, requires, pack)
         speed and (speed .. "s") or "not readable") }
   end
 
+  -- ADR-0013 §2: a build is WRITTEN for its runes, so a missing one is not a mismatch to warn
+  -- about but a thing to go and buy -- the Rune Broker in every starting zone sells them for 1c.
+  -- The entry therefore reads as an instruction ("Engrave X (hands)"), carries `kind`/`slot` so the
+  -- wizard can collect a shopping list, and keeps ok=false so `fits` still says "not yet".
+  -- Three states here too: `nil` means the rune API could not be read, and rendering that as
+  -- "not engraved" states a fact we do not have -- the same defect the spellbook check had.
   for _, key in ipairs(requires.runes or {}) do
     local have = detection.runes and detection.runes[key]
-    out[#out + 1] = { key = key, ok = have,
-      text = (pack.spells and pack.spells[key] and pack.spells[key].name or key) ..
-             (have and " engraved" or " not engraved") }
+    local spell = pack.spells and pack.spells[key]
+    local name = Detect.readableName(key, spell)
+    local slot = spell and spell.rune
+    -- `engrave` is the shopping-list item ("Art of War (feet)") as data, so the wizard never has to
+    -- scrape it back out of a localised sentence.
+    local engrave = slot and string.format(L["%s (%s)"], name, slot) or name
+    local text -- mutants: equivalent deleting the declaration leaves a global write the suite cannot see; luacheck catches it
+    if have == true then text = string.format(L["%s engraved"], name)
+    elseif have == false then text = string.format(L["Engrave %s"], engrave)
+    else text = string.format(L["%s: could not read your runes"], name) end
+    out[#out + 1] = { key = key, kind = "rune", slot = slot, ok = have, text = text,
+                      engrave = (have == false) and engrave or nil }
   end
 
   -- `spells` in `requires` names abilities that are not runes and not granted by levelling. An

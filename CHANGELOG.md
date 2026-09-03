@@ -1,5 +1,11 @@
 # Changelog
 ## Unreleased
+- **The setup window now tells you which runes to engrave, instead of marking them as missing.**
+  In Season of Discovery a playstyle is built around its runes, and they cost 1c at the Rune Broker
+  in any starting zone — so a rune you have not engraved yet is a quick errand, not a reason the
+  playstyle does not fit you. Each playstyle's row now ends with "Engrave first: …" listing exactly
+  the missing ones by name and slot. When Elmira cannot read your runes at all, it says that, rather
+  than claiming you lack them.
 - **One addon folder instead of two.** Paladin data used to ship as a separate `Elmira_Paladin`
   addon that Elmira loaded on demand. It is now part of Elmira itself, so there is one thing to
   install, one thing to enable and one version number. Nothing changes for you in game: the same
