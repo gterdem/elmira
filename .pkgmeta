@@ -33,7 +33,9 @@ ignore:
   - .claude
   - .github
   - Makefile
+  - tools
   - .luacheckrc
+  - .luacov
   - .editorconfig
   - README.md
   - collected

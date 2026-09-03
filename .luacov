@@ -1,0 +1,6 @@
+-- luacov configuration. Only shipped addon code is measured: tests/ is the oracle (100% by
+-- construction, and meaningless), Libs/ is vendored, and busted's own internals are noise.
+statsfile = "luacov.stats.out"
+reportfile = "luacov.report.out"
+include = { "^Elmira" }
+exclude = { "/Libs/", "^tests", "^/usr" }

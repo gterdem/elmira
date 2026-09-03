@@ -5,14 +5,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        # Full history: the mutation gate diffs against the push/PR base, which a depth-1 checkout
+        # does not have.
+        with: { fetch-depth: 0 }
       - uses: leafo/gh-actions-lua@v10
         with: { luaVersion: "5.1" }
       - uses: leafo/gh-actions-luarocks@v4
-      - run: luarocks install busted && luarocks install luacheck
+      - run: luarocks install busted && luarocks install luacheck && luarocks install luacov
       - name: Guard — no private development material in the public repo
         run: |
           for f in CLAUDE.md CLAUDE.local.md .claude docs research README-WORKSPACE.md; do
             if [ -e "$f" ]; then echo "::error::$f must not be committed to the public repo"; exit 1; fi
           done
+      # tools/ gates the rest of CI, so a bug in it silently weakens every check below.
+      - name: Shellcheck the quality gates
+        run: shellcheck tools/*.sh
+
       - run: make lint
       - run: make test
+
+      # `make test` proves the suite is green. These two prove the suite would NOTICE a regression,
+      # which is a different question and the one this project keeps getting wrong: a covered function
+      # whose call site nothing exercises passes every check above while doing nothing.
+      - name: Coverage — no shipped file may be unreachable from the suite
+        run: make coverage
+
+      # Diff-scoped, so it costs seconds: every line this push changed is deleted in a throwaway copy
+      # and the suite must go red. A survivor is a changed line no test actually checks.
+      - name: Mutation gate — every changed line must be protected by a test
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          # First push of a branch reports an all-zero "before"; fall back to the parent commit.
+          case "$BASE" in ""|0000000*) BASE="$(git rev-parse HEAD~1 2>/dev/null || echo HEAD)" ;; esac
+          BASE="$BASE" JOBS=4 make mutants

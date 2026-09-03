@@ -1,0 +1,13 @@
+# Files tools/coverage.sh may skip, one per line, each with the reason it cannot have a spec yet.
+# An entry here is a claim someone made and can be argued with. An undeclared gap is just a silence,
+# which is what this file exists to prevent -- so keep it short and delete entries as they are earned.
+#
+# NOT exempt, deliberately, though they are currently uncovered:
+#   Elmira/Core/Init.lua        332 lines of wiring -- the registrations, the load order, the pack
+#                               attach. Precisely where a "looks right, does nothing" defect hides.
+#   Elmira_ElvUI/Provider.lua   has already shipped two silent bar-glow bugs.
+#   Elmira_Paladin/Register.lua 19 lines, trivially loadable.
+
+Elmira_Insights/Insights.lua   stub until M7 (docs/12); 10 lines, registers a provider and returns.
+Elmira_WoWSims/Exporter.lua    stub until M5c (docs/09); real export format not written yet.
+Elmira_WoWSims/APLImport.lua   stub until M8 (docs/09); real APL translation not written yet.

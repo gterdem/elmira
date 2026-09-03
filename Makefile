@@ -9,10 +9,24 @@ REPORTS_DIR ?= /mnt/d/Addon-Testing/Elmira/reports
 PKGDIR      := .release
 ADDONS      := $(notdir $(wildcard Elmira*))
 
-.PHONY: test lint package libs deploy deploy-package release-zip collect
+.PHONY: test lint mutants coverage package libs deploy deploy-package release-zip collect
 
 test:
 	busted --lua=$(LUA) tests/spec
+
+# The two gates that answer "is this line actually tested?", which `test` alone cannot.
+#
+# mutants  deletes each changed line and requires the suite to go red. A line that survives is not
+#          protected by any test -- this project's characteristic defect (a function with a spec and
+#          no call site) is invisible to everything else, including review. See tools/mutants.sh.
+#          Scoped to the diff by default so it runs in seconds; ALL=1 sweeps the whole tree.
+# coverage per-file, and treats a file NO spec loads as 0% rather than omitting it the way luacov
+#          does. Exemptions are declared with a reason in tools/coverage-exempt.txt.
+mutants:
+	@./tools/mutants.sh
+
+coverage:
+	@./tools/coverage.sh
 
 lint:
 	luacheck . --no-color
