@@ -1,5 +1,9 @@
 # Changelog
 ## Unreleased
+- Fixed: the setup window claimed you did not know Seal of Martyrdom even when you did — it was
+  checking a list of your spells that was never filled in, so every ability requirement read as
+  missing. It now reads your spellbook, and when it genuinely cannot, it says so instead of telling
+  you something is wrong.
 - **A setup window.** `/elm setup` (or the button in the options) shows what Elmira thinks your
   character is and lists the playstyles that have shipped for your class, recommended first, each
   with what it expects of your gear. A playstyle you do not currently meet is marked, not hidden —

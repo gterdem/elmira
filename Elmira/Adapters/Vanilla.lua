@@ -106,8 +106,11 @@ function Vanilla.knownSpells(spells)
   for key, record in pairs(spells) do
     local id = type(record) == "table" and record.id
     if type(id) == "number" and id > 0 then
+      -- A failed call leaves the key ABSENT, not false. Folding it to false would say "you do not
+      -- know this" on the strength of a call that did not answer — the same conflation this whole
+      -- record exists to avoid, just at per-key granularity instead of per-table.
       local ok, known = pcall(IsPlayerSpell, id)
-      out[key] = ok and known == true or false
+      if ok then out[key] = known == true end
     end
   end
   return out
