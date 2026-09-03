@@ -29,7 +29,7 @@ Protection; seal twisting experimental) plus a Mage build to prove the engine is
 
 ## Modules
 Elmira ships as a family — install the package and only the relevant parts load:
-`Elmira` (core), `Elmira_Paladin` (class data), `Elmira_ElvUI`, `Elmira_ItemRack`, `Elmira_WoWSims`, `Elmira_Insights`.
+`Elmira` (core, including all class data), `Elmira_ElvUI`, `Elmira_ItemRack`, `Elmira_WoWSims`, `Elmira_Insights`.
 
 ## Install
 Via the CurseForge app (recommended) or download the release zip and extract into `Interface/AddOns`.
@@ -38,7 +38,7 @@ Type `/elm` in game for help, `/elm setup` to run the wizard again.
 ## Development
 - Lua 5.1, Ace3. Headless tests: `make test` (busted). Lint: `make lint`.
 - Packaging: BigWigs packager via GitHub Actions on version tags.
-- Contributions welcome — class data packs are pure data; see `Elmira_Paladin/` for the shape.
+- Contributions welcome — class data is pure data; see `Elmira/Classes/Paladin.lua` for the shape.
 
 ## FAQ
 **Can it press the buttons for me?** No — by design and by Blizzard's API. Requests for automation are declined.

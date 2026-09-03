@@ -1,8 +1,8 @@
 -- tests/fixtures/paladin_exodin.lua — a build fixture for Core specs, shaped exactly like a shipped
 -- build (docs/02-CONDITION-SCHEMA.md) and structured after the staged Exodin priority.
 --
--- This is TEST DATA, not a shipped build: it is not in the catalog, and the real
--- Elmira_Paladin/Data/Builds/Paladin_Exodin.lua arrives at M2 once its IDs are verified. It exists to
+-- This is TEST DATA, not a shipped build: it is not in the catalog, and the real shipped
+-- PALADIN_EXODIN build arrives at M2 once its IDs are verified. It exists to
 -- exercise the engine, so it deliberately covers the awkward shapes — a gated duplicate of an entry
 -- that also appears ungated below it (ADR-0006: gated variant above, baseline below), nested any/not,
 -- a variadic condition, an item entry, and a `hold` entry.

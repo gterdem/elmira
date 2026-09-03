@@ -2,65 +2,26 @@
 --
 -- For every shipped build, walks tests/fixtures/gear_scenarios.lua and asserts the actual top-3
 -- Simulation.queue() output for a state built from the scenario's gear/rune/soul description. Uses
--- the REAL shipped Elmira_Paladin/Data/ files (not a fixture copy of them) so this breaks the moment
+-- the REAL shipped Elmira/Classes/ data (not a fixture copy of it) so this breaks the moment
 -- the data changes underneath a build, per the task brief.
 --
 -- Two structural guards, both because this project's history is "looks right, does nothing":
---   1. every build actually shipped under Elmira_*/Data/Builds/*.lua must have a fixture entry;
+--   1. every build actually shipped under Elmira/Classes/*.lua must have a fixture entry;
 --   2. every fixture scenario must be well-formed (name + either `expect` or `adviseExpected`) or the
 --      suite fails loudly instead of silently skipping it.
 local helper = require("tests.helper")
 
--- ---------------------------------------------------------------- filesystem discovery
--- `ls` rather than LuaFileSystem: tests/spec/toc_spec.lua already relies on io.popen for exactly this
--- (enumerating Elmira_*/ module folders and Elmira/Core|Adapters/*.lua), so this follows the same,
--- already-sanctioned pattern rather than adding a new dependency for one spec.
-local function listFiles(globPattern)
-  local files = {}
-  local pipe = io.popen("ls " .. globPattern .. " 2>/dev/null")
-  if pipe then
-    for line in pipe:lines() do files[#files + 1] = line end
-    pipe:close()
-  end
-  table.sort(files)
-  return files
-end
-
--- Loads one class pack's data files (Spells/Sets/Souls, then every file under Data/Builds/) into a
--- fresh, private ns — mirroring tests/spec/data_sourcing_spec.lua's loadPack, extended to also pull
--- in Builds/, Advice/<Class>.lua and Catalog.lua. Each class pack gets its OWN ns table, exactly as
--- the WoW client hands each LoadOnDemand addon its own private `...` namespace; Elmira_Paladin's
--- Register.lua is the only thing that ever hands this data to Core; the spec bypasses it and speaks
--- to the raw Data/ files directly, same as data_sourcing_spec.lua does.
-local function loadClassPack(dir, className)
-  local ns = { Data = { SoD = {} } }
-  for _, file in ipairs({ "Spells.lua", "Sets.lua", "Souls.lua" }) do
-    local path = dir .. "/Data/" .. file
-    local chunk = loadfile(path)
-    if chunk then chunk(dir, ns) end
-  end
-  for _, path in ipairs(listFiles(dir .. "/Data/Builds/*.lua")) do
-    local chunk = assert(loadfile(path), path .. " does not load")
-    chunk(dir, ns)
-  end
-  local advicePath = dir .. "/Data/Advice/" .. className .. ".lua"
-  local adviceChunk = loadfile(advicePath)
-  if adviceChunk then adviceChunk(dir, ns) end
-  return ns.Data.SoD
-end
-
--- Every Elmira_*/ folder that actually ships a Data/Builds/ directory is a class pack under test.
--- Elmira/ (no trailing class suffix) is the core addon, never a class pack.
+-- Every Elmira/Classes/*.lua is a shipped class pack under test (ADR-0011). Discovered, never
+-- listed: a Classes/Mage.lua added later inherits this whole matrix without anyone editing this
+-- file. The count check is the vacuous-pass guard — a glob that found nothing would make the
+-- "every build has a fixture" test below pass by having no builds to check.
 local function discoverClassPacks()
   local packs = {}
-  for _, dirLine in ipairs(listFiles("-d Elmira_*/")) do
-    local dir = dirLine:gsub("/$", "")
-    local buildFiles = listFiles(dir .. "/Data/Builds/*.lua")
-    if #buildFiles > 0 then
-      local className = dir:match("^Elmira_(.+)$")
-      packs[#packs + 1] = { dir = dir, class = className, buildFiles = buildFiles }
-    end
+  for _, path in ipairs(helper.classFiles()) do
+    local className = path:match("([^/]+)%.lua$")
+    packs[#packs + 1] = { class = className, data = helper.classPack(className) }
   end
+  assert(#packs > 0, "no shipped class packs found under Elmira/Classes/")
   return packs
 end
 
@@ -73,8 +34,7 @@ describe("gear_scenarios.lua fixture integrity", function()
   it("gives every shipped build at least one gear scenario", function()
     local uncovered = {}
     for _, pack in ipairs(discoverClassPacks()) do
-      local data = loadClassPack(pack.dir, pack.class)
-      for key in pairs(data.Builds or {}) do
+      for key in pairs(pack.data.builds or {}) do
         local list = scenarios[key]
         if type(list) ~= "table" or #list == 0 then
           uncovered[#uncovered + 1] = key
@@ -146,7 +106,7 @@ describe("Gear matrix: PALADIN_EXODIN", function()
       if not NON_STATE_FIELDS[k] then opts[k] = v end
     end
     opts.gcd = opts.gcd or 1.5
-    opts.bonusDefs = pack.Bonuses
+    opts.bonusDefs = pack.bonuses
     return FakeState.new(opts)
   end
 
@@ -186,8 +146,8 @@ describe("Gear matrix: PALADIN_EXODIN", function()
     Advisor = helper.load("Elmira/Core/Advisor.lua")
     FakeState = dofile("tests/fake_state.lua")
 
-    pack = loadClassPack("Elmira_Paladin", "Paladin")
-    build = compileBuild(pack.Builds.PALADIN_EXODIN, { spells = pack.Spells, sets = pack.Sets, bonuses = pack.Bonuses })
+    pack = helper.classPack("Paladin")
+    build = compileBuild(pack.builds.PALADIN_EXODIN, { spells = pack.spells, sets = pack.sets, bonuses = pack.bonuses })
   end)
 
   for _, scenario in ipairs(scenarios.PALADIN_EXODIN) do
@@ -247,7 +207,7 @@ describe("Gear matrix: PALADIN_EXODIN", function()
 
     if scenario.adviseExpected then
       it(scenario.name .. ": advisor recommendation", function()
-        local advice = pack.Advice and pack.Advice.PALADIN and pack.Advice.PALADIN[scenario.build]
+        local advice = pack.advice and pack.advice.PALADIN and pack.advice.PALADIN[scenario.build]
         assert.is_not_nil(advice, "no Data/Advice/Paladin.lua entry for " .. tostring(scenario.build))
         -- Real Core/Advisor.lua now, not the stand-in that could not evaluate `when`. It goes
         -- through the scenario's actual state, so a gear-conditional soul rule is genuinely
@@ -255,7 +215,7 @@ describe("Gear matrix: PALADIN_EXODIN", function()
         local wearing = scenario.souls and scenario.souls[1]
         assert.is_not_nil(wearing, "advisor_wrong_soul scenario needs `souls`")
         local rec = Advisor.recommend(advice, stateFromScenario(scenario),
-          { spells = pack.Spells, sets = pack.Sets, souls = pack.Souls, bonuses = pack.Bonuses },
+          { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses },
           { soul = wearing, build = scenario.build })
         assert.equal(scenario.adviseExpected.soul, rec.soul.pick)
         -- The scenario's own equipped soul must actually differ, or this isn't a "wrong soul" case.

@@ -3,7 +3,7 @@ WOW_ADDONS  ?= /mnt/d/Blizzard/World of Warcraft/_classic_era_/Interface/AddOns
 BUILDS_DIR  ?= /mnt/d/Addon-Testing/Elmira/builds
 REPORTS_DIR ?= /mnt/d/Addon-Testing/Elmira/reports
 # The packager's move-folders step (.pkgmeta) collapses the checkout's Elmira/ core folder onto
-# .release/Elmira directly, as a sibling of .release/Elmira_Paladin, .release/Elmira_ElvUI, etc —
+# .release/Elmira directly, as a sibling of .release/Elmira_ElvUI, .release/Elmira_ItemRack, etc —
 # confirmed empirically via a full dry run, not assumed. The release zip lands at this same
 # top level.
 PKGDIR      := .release
@@ -36,11 +36,16 @@ selftest:
 
 lint:
 	luacheck . --no-color
-	@# Armed against Elmira_*/ (data packs and builds). Live since M2 restored Elmira_Paladin/Data/,
-	@# so this now guards real shipped ids rather than an empty directory. Note it also fires on the
-	@# `local function UNVERIFIED` scaffold and on prose mentioning the marker, which is why both are
-	@# stripped on restore rather than left in place.
-	@! grep -rn "UNVERIFIED(" Elmira_*/ 2>/dev/null || (echo "ERROR: unverified IDs remain" && exit 1)
+	@# Armed against Elmira/Classes/ (shipped class data since M4b) AND Elmira_*/ (integration
+	@# modules, plus any future in-repo pack). Note it also fires on the `local function UNVERIFIED`
+	@# scaffold and on prose mentioning the marker, which is why both are stripped on restore.
+	@#
+	@# The directory check is not defensive noise: before M4b this line scanned Elmira_*/ only, and
+	@# the class data moving to Elmira/Classes/ would have left it grepping folders that contain no
+	@# ids at all -- passing green forever while guarding nothing. A gate that can silently stop
+	@# covering its target has to fail when its target is missing.
+	@test -d Elmira/Classes || (echo "ERROR: Elmira/Classes/ is missing; the UNVERIFIED gate is scanning nothing" && exit 1)
+	@! grep -rn "UNVERIFIED(" Elmira/Classes/ Elmira_*/ 2>/dev/null || (echo "ERROR: unverified IDs remain" && exit 1)
 
 # -d skips uploading (this is always a local dry run); no -z, so a zip IS produced (that flag means
 # "skip zip creation", the opposite of what its letter suggests) — release-zip depends on it existing.
@@ -59,6 +64,19 @@ libs: package
 # and the client reports "Couldn't open Elmira\Libs\..." on every one.
 deploy:
 	@[ -d Elmira/Libs ] || (echo "ERROR: Elmira/Libs missing — run 'make libs' first" && exit 1)
+	@# Prune Elmira* folders the repo no longer ships BEFORE copying. Without this, retiring a folder
+	@# leaves the old copy installed and running: Elmira_Paladin (retired at M4b) still declares
+	@# `## X-Elmira-Class: PALADIN`, so core's scan finds it, loads it, and its RegisterDataPack call
+	@# runs AFTER the built-in one and silently OVERRIDES the shipped data with a stale copy. The
+	@# addon looks fine and serves pre-migration rotations. Only ever touches Elmira* names.
+	@for installed in "$(WOW_ADDONS)"/Elmira*; do \
+		[ -e "$$installed" ] || continue; \
+		name="$$(basename "$$installed")"; \
+		case " $(ADDONS) " in \
+			*" $$name "*) ;; \
+			*) echo "  pruning stale $$name (no longer in the repo)"; rm -rf "$$installed" ;; \
+		esac; \
+	done
 	@for addon in $(ADDONS); do \
 		rm -rf "$(WOW_ADDONS)/$$addon"; \
 		cp -r "$$addon" "$(WOW_ADDONS)/$$addon"; \

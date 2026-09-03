@@ -13,7 +13,7 @@ local NA = LibStub("AceAddon-3.0"):NewAddon(ADDON, "AceEvent-3.0", "AceTimer-3.0
 ns.addon = NA
 
 -- Published at FILE LOAD TIME, not inside OnInitialize. Dependency modules run their own file scope
--- before anyone's ADDON_LOADED fires, and Elmira_Paladin/Register.lua reads Elmira.API at file scope
+-- before anyone's ADDON_LOADED fires, and an external class pack reads Elmira.API at file scope
 -- too — publishing inside OnInitialize would make that a nil index and crash on login. This only
 -- helps modules the TOC actually orders after core: see docs/08-MODULE-API.md on why no module may
 -- use `## LoadWith:`.
@@ -243,12 +243,29 @@ function NA:OnProfileChanged()
   ns.DB.migrateProfile(self.db.profile)
 end
 
--- Order matters: loadClassPack() triggers the pack's Register.lua at file scope, which is what calls
--- API.RegisterDataPack. Only after that has run can the adapter be given real data, so attaching
+-- Order matters: both pack sources must have run before the adapter is given data, so attaching
 -- earlier would silently bind an empty pack and every symbolic key would resolve to nil forever.
+--
+-- Two sources, in this order (ADR-0011):
+--   1. the built-in thunk from Elmira/Classes/<Class>.lua, called here and only here;
+--   2. an external LoadOnDemand addon claiming the class via `## X-Elmira-Class`, whose own file
+--      scope calls API.RegisterDataPack.
+-- External runs second and therefore wins. That is deliberate: a user who installed a third-party
+-- pack for their class asked for it, and RegisterDataPack cannot tell the two apart by design (§3).
 function NA:OnEnable()
   local class = ns.Adapter.playerClass()
-  ns.Adapter.loadClassPack(class)
+
+  local builtin = ns.Packs and ns.Packs.BuiltinPack(class)
+  if builtin then ns.API.RegisterDataPack(builtin) end
+
+  -- LoadAddOn's second return is the reason it failed. Dropping it made "no pack for your class",
+  -- "the pack is disabled" and "the pack errored" one indistinguishable log line, which is what
+  -- ADR-0011 §Context names as a cost of the folder split. Only worth saying when there is no
+  -- built-in pack to fall back on -- otherwise the addon is working and this is noise.
+  local loaded, reason, name = ns.Adapter.loadClassPack(class)
+  if not loaded and not builtin and reason and reason ~= "no-pack" then
+    ns.log("Elmira: %s claims %s but did not load (%s).", tostring(name), tostring(class), tostring(reason))
+  end
 
   local pack = class and ns.API.GetProviders("dataPacks")[class]
   if not pack then

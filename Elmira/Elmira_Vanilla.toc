@@ -19,6 +19,7 @@ Adapters\Collector.lua
 # Core — pure Lua, no WoW API (hard rule 3)
 Core\Colors.lua
 Core\API.lua
+Core\Packs.lua
 Core\DB.lua
 Core\Schema.lua
 Core\Engine.lua
@@ -43,6 +44,12 @@ Setup\Wizard.lua
 
 # Options
 Options\Options.lua
+
+# Shipped class data (ADR-0011). Each file registers a THUNK -- it must construct nothing at load,
+# because WoW executes every file here on every character regardless of class. Ordered after the
+# Core file that defines ns.RegisterBuiltinPack, and before the entry point that calls the thunk.
+# (Naming those two files here would break toc_spec, which locates entries by their first mention.)
+Classes\Paladin.lua
 
 # Entry point last
 Core\Init.lua

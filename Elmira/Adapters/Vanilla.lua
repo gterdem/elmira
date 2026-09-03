@@ -144,15 +144,24 @@ function Vanilla.knownSpells(spells)
   return out
 end
 
+-- Loads an EXTERNAL class pack -- a separate addon claiming this class with `## X-Elmira-Class`.
+-- Shipped classes come from Elmira/Classes/<Class>.lua and never take this path (ADR-0011 §3 keeps
+-- the scan anyway: it is the whole third-party extension route).
+--
+-- Returns `loaded, reason, name`. The reason is LoadAddOn's own failure token when an addon claims
+-- the class and fails to load, and the distinct "no-pack" when nothing claims it at all. Those are
+-- different problems -- one is a broken install, the other is the normal case for eight of nine
+-- classes -- and returning only `false` for both is what made them one log line.
 function Vanilla.loadClassPack(class)
-  if not (class and C_AddOns and C_AddOns.GetNumAddOns) then return false end
+  if not (class and C_AddOns and C_AddOns.GetNumAddOns) then return false, "no-scan" end
   for i = 1, C_AddOns.GetNumAddOns() do
     local name = C_AddOns.GetAddOnInfo(i)
     if C_AddOns.GetAddOnMetadata(name, "X-Elmira-Class") == class then
-      return C_AddOns.LoadAddOn(name)
+      local loaded, reason = C_AddOns.LoadAddOn(name)
+      return loaded, reason, name
     end
   end
-  return false
+  return false, "no-pack"
 end
 
 -- ---------------------------------------------------------------------------------------------

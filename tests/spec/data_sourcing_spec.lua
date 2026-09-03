@@ -9,25 +9,25 @@
 -- Policy, in one sentence: an id ships either with a Wowhead `src`, or with a non-Wowhead `src` AND
 -- `verify = "in-game"` marking it provisional. There is no third option.
 local helper = require("tests.helper")
-local DATA = "Elmira_Paladin/Data/"
 
-local function loadPack()
-  local ns = { Data = { SoD = {} } }
-  for _, file in ipairs({ "Spells.lua", "Sets.lua", "Souls.lua" }) do
-    local chunk = assert(loadfile(DATA .. file), DATA .. file .. " does not load")
-    chunk("Elmira_Paladin", ns)
+-- Every shipped class pack, discovered rather than listed (ADR-0011: Elmira/Classes/<Class>.lua).
+-- The policy below applies per class, so a Classes/Mage.lua added later is policed automatically.
+local function shippedPacks()
+  local packs = {}
+  for _, path in ipairs(helper.classFiles()) do
+    local class = path:match("([^/]+)%.lua$")
+    packs[#packs + 1] = { class = class, path = path, data = helper.classPack(class) }
   end
-  return ns.Data.SoD
+  assert(#packs > 0, "no shipped class packs found under Elmira/Classes/")
+  return packs
 end
 
-local function buildFiles()
-  local out = {}
-  local p = io.popen("ls " .. DATA .. "Builds/*.lua 2>/dev/null")
-  if p then
-    for line in p:lines() do out[#out + 1] = line end
-    p:close()
-  end
-  return out
+-- The source text of every class file, for the assertions that are about what is WRITTEN (src lines,
+-- provenance sentences) rather than about the values the thunk produces.
+local function sourceOf(path)
+  local f = assert(io.open(path, "r"), path .. " is missing")
+  local text = f:read("*a"); f:close()
+  return text
 end
 
 local function isWowhead(src)
@@ -37,19 +37,37 @@ end
 describe("Data sourcing policy (docs/03)", function()
   local pack
 
-  setup(function() pack = loadPack() end)
+  setup(function() pack = helper.classPack("Paladin") end)
   before_each(function() helper.reset() end)
 
+  -- The pack's IDENTITY fields, which Core keys everything off. These were covered by
+  -- Elmira_Paladin/Register.lua's spec until M4b retired that file with the folder; the fields moved
+  -- into the thunk's return block and the mutation gate immediately reported them as unprotected,
+  -- which is exactly what it is for. `class` is the registry key -- get it wrong and the pack
+  -- registers under a class nobody plays, silently. `flavor` is required by RegisterDataPack, so a
+  -- missing one is a rejected registration and a null state.
+  it("carries the identity fields Core registers the pack under", function()
+    assert.equal("PALADIN", pack.class)
+    assert.equal("SoD", pack.flavor)
+  end)
+
+  -- The wizard re-offers itself once when this rises (docs/01 §5b). Absent, it never re-offers and a
+  -- refreshed catalog is never shown to anyone who already ran setup -- a silent no-op with no error.
+  it("exposes the catalog version the wizard watches, and keeps it in step with the catalog", function()
+    assert.is_number(pack.catalogVersion)
+    assert.equal(pack.catalog.version, pack.catalogVersion)
+  end)
+
   it("loads the shipped paladin pack", function()
-    assert.is_table(pack.Spells)
-    assert.is_table(pack.Sets)
-    assert.is_table(pack.Souls)
+    assert.is_table(pack.spells)
+    assert.is_table(pack.sets)
+    assert.is_table(pack.souls)
   end)
 
   -- Hard rule 2: every id carries the page it came from.
   it("gives every spell id a non-empty src", function()
     local missing = {}
-    for key, record in pairs(pack.Spells) do
+    for key, record in pairs(pack.spells) do
       if type(record) == "table" and type(record.id) == "number" then
         if type(record.src) ~= "string" or record.src == "" then missing[#missing + 1] = key end
       end
@@ -62,7 +80,7 @@ describe("Data sourcing policy (docs/03)", function()
   -- says out loud that it is still awaiting in-game confirmation.
   it("requires verify=\"in-game\" on any spell whose src is not a Wowhead page", function()
     local untagged = {}
-    for key, record in pairs(pack.Spells) do
+    for key, record in pairs(pack.spells) do
       if type(record) == "table" and type(record.id) == "number" then
         if not isWowhead(record.src) and record.verify ~= "in-game" then
           untagged[#untagged + 1] = key .. " (src: " .. tostring(record.src) .. ")"
@@ -75,7 +93,7 @@ describe("Data sourcing policy (docs/03)", function()
 
   -- The converse: a provisional tag with no source at all is not a citation, it is a shrug.
   it("requires a src alongside verify=\"in-game\"", function()
-    for key, record in pairs(pack.Spells) do
+    for key, record in pairs(pack.spells) do
       if type(record) == "table" and record.verify == "in-game" then
         assert.is_true(type(record.src) == "string" and record.src ~= "",
           key .. ' is verify="in-game" but cites no source')
@@ -87,10 +105,10 @@ describe("Data sourcing policy (docs/03)", function()
   -- than visibly — the opposite of what an unknown value should do.
   it("never writes an unknown id as 0", function()
     local zeroed = {}
-    for key, record in pairs(pack.Spells) do
+    for key, record in pairs(pack.spells) do
       if type(record) == "table" and record.id == 0 then zeroed[#zeroed + 1] = key end
     end
-    for key, soul in pairs(pack.Souls) do
+    for key, soul in pairs(pack.souls) do
       if type(soul) == "table" and soul.itemID == 0 then zeroed[#zeroed + 1] = key end
     end
     table.sort(zeroed)
@@ -101,7 +119,7 @@ describe("Data sourcing policy (docs/03)", function()
   -- implicitly, which meant ~11 shipped ids were never policed by anything.
   it("gives every set bonus spell its own src", function()
     local missing = {}
-    for key, set in pairs(pack.Sets) do
+    for key, set in pairs(pack.sets) do
       for threshold, bonus in pairs(set.bonuses or {}) do
         if bonus.spell and not isWowhead(bonus.src) and bonus.verify ~= "in-game" then
           missing[#missing + 1] = string.format("%s [%s] spell=%s", key, tostring(threshold), tostring(bonus.spell))
@@ -115,11 +133,10 @@ describe("Data sourcing policy (docs/03)", function()
   -- Nothing loaded the shipped BUILD or CATALOG, so a malformed one could ship silently.
   it("validates every shipped build against the real data pack", function()
     local Schema = helper.load("Elmira/Core/Schema.lua")
-    local ctx = { spells = pack.Spells, sets = pack.Sets, souls = pack.Souls, bonuses = pack.Bonuses }
-    for _, path in ipairs(buildFiles()) do
-      local ns = { Data = { SoD = { Builds = {} } } }
-      assert(loadfile(path), path .. " does not load")("Elmira_Paladin", ns)
-      for key, build in pairs(ns.Data.SoD.Builds or {}) do
+    for _, entry in ipairs(shippedPacks()) do
+      local data = entry.data
+      local ctx = { spells = data.spells, sets = data.sets, souls = data.souls, bonuses = data.bonuses }
+      for key, build in pairs(data.builds or {}) do
         local ok, errors = Schema.validate(build, ctx)
         assert.is_true(ok, key .. ": " .. table.concat(Schema.errorLines(errors or {}), "; "))
       end
@@ -131,13 +148,11 @@ describe("Data sourcing policy (docs/03)", function()
   -- opt-in flare silently dead. Found by corrupting a cue and watching the suite stay green.
   it("resolves every overlay cue's spell key to a real spell", function()
     local dangling = {}
-    for _, path in ipairs(buildFiles()) do
-      local ns = { Data = { SoD = { Builds = {} } } }
-      assert(loadfile(path), path .. " does not load")("Elmira_Paladin", ns)
-      for key, build in pairs(ns.Data.SoD.Builds or {}) do
+    for _, entry in ipairs(shippedPacks()) do
+      for key, build in pairs(entry.data.builds or {}) do
         local cues = (build.visuals and build.visuals.cues) or build.overlayCues or build.cues or {}
         for _, cue in ipairs(cues) do
-          if type(cue.spell) == "string" and pack.Spells[cue.spell] == nil then
+          if type(cue.spell) == "string" and entry.data.spells[cue.spell] == nil then
             dangling[#dangling + 1] = key .. " cue -> " .. cue.spell
           end
         end
@@ -150,18 +165,17 @@ describe("Data sourcing policy (docs/03)", function()
   -- The catalog is the wizard's ONLY list (rule 7). An entry the wizard can offer whose
   -- build file does not exist resolves to nil and the user picks a playstyle that does nothing.
   it("marks a catalog entry available only when its build actually ships", function()
-    local ns = { Data = { SoD = {} } }
-    assert(loadfile(DATA .. "Catalog.lua"), "Catalog.lua does not load")("Elmira_Paladin", ns)
-
+    -- Every build any shipped pack provides. A catalog entry may legitimately name a build that
+    -- lives in another class's file, so the shipped set is collected across all of them first.
     local shipped = {}
-    for _, path in ipairs(buildFiles()) do
-      local bns = { Data = { SoD = { Builds = {} } } }
-      assert(loadfile(path))("Elmira_Paladin", bns)
-      for key in pairs(bns.Data.SoD.Builds or {}) do shipped[key] = true end
+    local catalog = {}
+    for _, entry in ipairs(shippedPacks()) do
+      for key in pairs(entry.data.builds or {}) do shipped[key] = true end
+      for class, list in pairs(entry.data.catalog or {}) do catalog[class] = list end
     end
 
     local offered = {}
-    for class, entries in pairs(ns.Data.SoD.Catalog or {}) do
+    for class, entries in pairs(catalog) do
       if type(entries) == "table" and type(class) == "string" and class:upper() == class then
         for _, entry in ipairs(entries) do
           if entry.available ~= false and not shipped[entry.build] then
@@ -175,7 +189,7 @@ describe("Data sourcing policy (docs/03)", function()
   end)
 
   it("gives every set a src and non-zero item ids", function()
-    for key, set in pairs(pack.Sets) do
+    for key, set in pairs(pack.sets) do
       assert.is_true(type(set.src) == "string" and set.src ~= "", key .. " has no src")
       for i, item in ipairs(set.items or {}) do
         assert.is_true(type(item) == "number" and item > 0,
@@ -192,7 +206,7 @@ describe("Data sourcing policy (docs/03)", function()
   -- but cannot detect it yet" visible in the data, instead of it hiding as a `kind` nobody honours.
   it("names the applied aura for every bonus declared kind=\"aura\"", function()
     local missing = {}
-    for key, set in pairs(pack.Sets) do
+    for key, set in pairs(pack.sets) do
       for threshold, bonus in pairs(set.bonuses or {}) do
         if bonus.kind == "aura" and bonus.aura == nil and bonus.verify ~= "in-game" then
           missing[#missing + 1] = string.format("%s [%d]", key, threshold)
@@ -208,7 +222,7 @@ describe("Data sourcing policy (docs/03)", function()
   -- documented, so one can never be added or quietly resolved without a deliberate edit here.
   it("has exactly the provisional entries we expect", function()
     local pending = {}
-    for key, record in pairs(pack.Spells) do
+    for key, record in pairs(pack.spells) do
       if type(record) == "table" and record.verify == "in-game" then pending[#pending + 1] = key end
     end
     table.sort(pending)
@@ -221,9 +235,9 @@ describe("Data sourcing policy (docs/03)", function()
   -- condition quietly never passes.
   it("resolves every named bonus aura to a real spell key", function()
     local dangling = {}
-    for key, set in pairs(pack.Sets) do
+    for key, set in pairs(pack.sets) do
       for threshold, bonus in pairs(set.bonuses or {}) do
-        if type(bonus.aura) == "string" and pack.Spells[bonus.aura] == nil then
+        if type(bonus.aura) == "string" and pack.spells[bonus.aura] == nil then
           dangling[#dangling + 1] = string.format("%s [%d] -> %s", key, threshold, bonus.aura)
         end
       end
@@ -238,46 +252,29 @@ describe("Data sourcing policy (docs/03)", function()
   -- Blizzard-published — the hotfix note says "a short time" and gives no figure — so the file must
   -- carry where 0.4 actually came from, or the next person to read it will assume Blizzard said so.
   describe("timing constants", function()
-    local TIMING = DATA .. "Timing.lua"
+    -- The constants moved into Elmira/Classes/Paladin.lua with the rest of the data (ADR-0011), so
+    -- the provenance assertions read that file's text; the value assertions read the built pack.
+    local function timingSource() return sourceOf("Elmira/Classes/Paladin.lua") end
 
-    local function timingSource()
-      local f = io.open(TIMING, "r")
-      if not f then return nil end
-      local text = f:read("*a")
-      f:close()
-      return text
-    end
-
-    it("ships a Timing.lua that loads and exposes only sourced numbers", function()
-      local text = timingSource()
-      assert.is_string(text, "Elmira_Paladin/Data/Timing.lua is missing")
-      local ns = { Data = { SoD = {} } }
-      local chunk = assert(loadfile(TIMING), TIMING .. " does not load")
-      chunk("Elmira_Paladin", ns)
-      local timing = ns.Data.SoD.Timing
-      assert.is_table(timing)
-      for key, value in pairs(timing) do
-        assert.equal("number", type(value), key .. " must be a number")
-        assert.is_true(value > 0, key .. " must be positive")
-      end
+    it("exposes only sourced, positive numbers", function()
+      assert.is_number(pack.sealLingerWindow, "the pack exposes no sealLingerWindow")
+      assert.is_true(pack.sealLingerWindow > 0, "sealLingerWindow must be positive")
     end)
 
     it("carries a src line for every constant, and says the window is not Blizzard-published", function()
       local text = timingSource()
-      assert.truthy(text:find("-- src:", 1, true), "Timing.lua carries no src line")
+      assert.truthy(text:find("-- src:", 1, true), "the class file carries no src line")
       -- The provenance sentence is load-bearing, not decoration: 0.4 is sim-derived, and a reader who
       -- thinks Blizzard published it will not re-measure when it drifts.
       assert.truthy(text:lower():find("not blizzard%-confirmed")
         or text:lower():find("no number"),
-        "Timing.lua must state that the linger window is not a published Blizzard figure")
+        "the class file must state that the linger window is not a published Blizzard figure")
     end)
 
     it("leaves the window inert rather than guessed if it is ever removed", function()
       -- Documents the contract the adapter relies on: absent constant -> sealLinger() answers nil ->
       -- seal_linger reads false. Nothing may substitute a default.
-      local ns = { Data = { SoD = {} } }
-      assert(loadfile(TIMING))("Elmira_Paladin", ns)
-      local window = ns.Data.SoD.Timing.sealLingerWindow
+      local window = pack.sealLingerWindow
       assert.is_number(window)
       assert.is_true(window > 0 and window < 5, "a linger window outside 0-5s is a typo, not a tuning")
     end)

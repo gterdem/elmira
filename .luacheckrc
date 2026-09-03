@@ -54,14 +54,16 @@ files["Elmira/Setup/"] = { read_globals = { "CreateFrame", "UIParent", "UnitClas
   "GetTalentTabInfo", "C_Engraving" } }
 files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent" } }
 
--- Data packs: data only. A WoW API call here is as wrong as one in Core/.
-files["Elmira_Paladin/"] = { read_globals = {} }
-
+-- Shipped class data (ADR-0011): data only, and held to Core's bar. A WoW API call here is as wrong
+-- as one in Core/ — these files are inside the core addon now, and hard rule 3 does not soften
+-- because the contents happen to be tables.
+--
 -- Data ROWS are exempt from the line limit, for the same reason tests/ fixtures are: one row carries
 -- a key, an id, a full Wowhead src URL (hard rule 2) and usually a note. Wrapping that across three
--- lines makes the table harder to read and much harder to diff when an id changes. The limit still
--- applies to Register.lua and to any real code in a class pack — this exempts Data/ only.
-files["Elmira_Paladin/Data/"] = { read_globals = {}, max_line_length = false }
+-- lines makes the table harder to read and much harder to diff when an id changes. The exemption is
+-- wider than it was before M4b (it used to cover Data/ but not Register.lua) because the two are now
+-- one file; the read_globals = {} half is what still holds the line that matters.
+files["Elmira/Classes/"] = { read_globals = {}, max_line_length = false }
 
 files["Elmira_ElvUI/"] = { read_globals = { "ElvUI", "GetActionInfo", "GetMacroSpell", "CreateFrame",
   -- Classic has spell ranks, so a bar can hold a different id for the same ability than the data

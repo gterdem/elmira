@@ -44,19 +44,41 @@ describe("Core.Slash", function()
   -- This command exists to answer "is Elmira expensive" — it used to open with the WHOLE client's
   -- Lua heap under a bare "lua memory:" label, which read as if Elmira itself used 300 MB.
   describe("'debug perf' memory reporting", function()
+    -- The capability, not the accessor's mere presence, is what decides the wording. Those are two
+    -- different facts about the client and the user gets a different sentence for each.
+    local function adapterWith(caps, kb)
+      return { capabilities = function() return caps end, addonMemoryKB = function() return kb end }
+    end
+
     it("prints Elmira's own figure first when the adapter reports one", function()
       local ns = helper.ns()
-      ns.Adapter = { addonMemoryKB = function() return 1234 end }
+      ns.Adapter = adapterWith({ addonMemory = true }, 1234)
       local lines = Slash.run("debug perf")
       assert.is_true(hasLineMatching(lines, "^Elmira memory: 1234 KB$"))
     end)
 
-    it("says it could not tell when the adapter cannot report per-addon usage", function()
+    it("says it could not tell when the client cannot report per-addon usage at all", function()
       local ns = helper.ns()
-      ns.Adapter = { addonMemoryKB = function() return nil end }
+      ns.Adapter = adapterWith({ addonMemory = false }, 1234)
       local lines = Slash.run("debug perf")
       assert.is_true(hasLineMatching(lines,
         "^Elmira memory: could not tell %(this client does not report per%-addon usage%)$"))
+    end)
+
+    -- A capable client whose read failed is a DIFFERENT answer: permanent limitation vs retry.
+    -- Collapsing the two is what let the addonMemory capability ship with no reader at all.
+    it("says to try again when the client is capable but the read returned nothing", function()
+      local ns = helper.ns()
+      ns.Adapter = adapterWith({ addonMemory = true }, nil)
+      local lines = Slash.run("debug perf")
+      assert.is_true(hasLineMatching(lines, "^Elmira memory: could not read it just now %(try again%)$"))
+    end)
+
+    it("ignores a stale accessor when the capability says the client cannot report", function()
+      local ns = helper.ns()
+      ns.Adapter = adapterWith({ addonMemory = false }, 9999)
+      local lines = Slash.run("debug perf")
+      assert.is_false(hasLineMatching(lines, "9999"))
     end)
 
     it("says it could not tell when there is no adapter loaded at all", function()
@@ -66,7 +88,7 @@ describe("Core.Slash", function()
 
     it("no longer prints the old bare 'lua memory:' line", function()
       local ns = helper.ns()
-      ns.Adapter = { addonMemoryKB = function() return 1234 end }
+      ns.Adapter = adapterWith({ addonMemory = true }, 1234)
       local lines = Slash.run("debug perf")
       assert.is_false(hasLineMatching(lines, "^lua memory:"))
     end)

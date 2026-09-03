@@ -6,7 +6,7 @@
 -- nothing else is castable — Simulation documents that it "shortens rather than repeating or
 -- erroring" once every entry is exhausted, and gear_matrix_spec asserts the queue's real length.
 --
--- Every `expect` here was hand-derived by walking Elmira_Paladin/Data/Builds/Paladin_Exodin.lua's
+-- Every `expect` here was hand-derived by walking Elmira/Classes/Paladin.lua's PALADIN_EXODIN
 -- entries top-to-bottom against Engine.eligible + Simulation.applyCast's actual cooldown/resource
 -- bookkeeping, not copied from whatever the engine happens to output — see the gear_matrix_spec.lua
 -- report for the ones that changed from what was staged here before reconciliation.

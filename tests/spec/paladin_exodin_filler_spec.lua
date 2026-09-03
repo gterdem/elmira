@@ -23,37 +23,9 @@
 --     the most direct way to prove a promotion is an inert no-op rather than trusting a hand-derived
 --     array to have gotten the same non-effect right by coincidence.
 --
--- Uses the REAL shipped Elmira_Paladin/Data/ files, same loader shape as gear_matrix_spec.lua's
--- loadClassPack (each class pack gets its own private ns, mirroring a LoadOnDemand addon).
+-- Uses the REAL shipped Elmira/Classes/Paladin.lua data via helper.classPack, which calls the
+-- registered thunk and returns the pack exactly as Core/Init.lua receives it (ADR-0011).
 local helper = require("tests.helper")
-
-local function listFiles(globPattern)
-  local files = {}
-  local pipe = io.popen("ls " .. globPattern .. " 2>/dev/null")
-  if pipe then
-    for line in pipe:lines() do files[#files + 1] = line end
-    pipe:close()
-  end
-  table.sort(files)
-  return files
-end
-
-local function loadClassPack(dir, className)
-  local ns = { Data = { SoD = {} } }
-  for _, file in ipairs({ "Spells.lua", "Sets.lua", "Souls.lua" }) do
-    local path = dir .. "/Data/" .. file
-    local chunk = loadfile(path)
-    if chunk then chunk(dir, ns) end
-  end
-  for _, path in ipairs(listFiles(dir .. "/Data/Builds/*.lua")) do
-    local chunk = assert(loadfile(path), path .. " does not load")
-    chunk(dir, ns)
-  end
-  local advicePath = dir .. "/Data/Advice/" .. className .. ".lua"
-  local adviceChunk = loadfile(advicePath)
-  if adviceChunk then adviceChunk(dir, ns) end
-  return ns.Data.SoD
-end
 
 describe("PALADIN_EXODIN: 2026-09-02 filler/promotion contract", function()
   local Schema, Engine, Simulation, FakeState, pack, build
@@ -62,7 +34,7 @@ describe("PALADIN_EXODIN: 2026-09-02 filler/promotion contract", function()
   local FULL_RUNES = { RUNE_ART_OF_WAR = true, RUNE_CRUSADER_STRIKE = true, RUNE_DIVINE_STORM = true, RUNE_PURIFYING_POWER = true }
 
   local function stateOf(opts)
-    opts.bonusDefs = opts.bonusDefs or pack.Bonuses
+    opts.bonusDefs = opts.bonusDefs or pack.bonuses
     opts.gcd = opts.gcd or 1.5
     return FakeState.new(opts)
   end
@@ -81,9 +53,9 @@ describe("PALADIN_EXODIN: 2026-09-02 filler/promotion contract", function()
     Simulation = helper.load("Elmira/Core/Simulation.lua")
     FakeState = dofile("tests/fake_state.lua")
 
-    pack = loadClassPack("Elmira_Paladin", "Paladin")
-    local compiled, errors = Schema.compile(pack.Builds.PALADIN_EXODIN,
-      { spells = pack.Spells, sets = pack.Sets, bonuses = pack.Bonuses })
+    pack = helper.classPack("Paladin")
+    local compiled, errors = Schema.compile(pack.builds.PALADIN_EXODIN,
+      { spells = pack.spells, sets = pack.sets, bonuses = pack.bonuses })
     assert.is_not_nil(compiled, table.concat(Schema.errorLines(errors or {}), "; "))
     build = compiled
   end)

@@ -4,25 +4,11 @@
 -- Written from the contract text: a compiled entry's `failed` is a list of short labels naming the
 -- conditions that REJECTED it, nil when the entry passed, and the two never disagree with `passes`.
 -- Labels for a nested condition render their children, e.g. "any(target_type:Undead,rune:RUNE_..)".
--- This drives the REAL shipped Elmira_Paladin PALADIN_EXODIN build (not a fixture copy), because the
+-- This drives the REAL shipped PALADIN_EXODIN build (not a fixture copy), because the
 -- contract explicitly asks for the passes/failed invariant to be checked "against the real shipped
 -- Exodin build across a few different fake states".
 local helper = require("tests.helper")
 local FakeState = dofile("tests/fake_state.lua")
-
--- Same loading pattern as tests/spec/gear_matrix_spec.lua's loadClassPack: each class pack gets its
--- own private ns, mirroring how the WoW client hands a LoadOnDemand addon its own namespace. Trimmed
--- to just what PALADIN_EXODIN's conditions reference (Spells/Sets/Souls) — no Advice/Catalog needed.
-local function loadPaladinData()
-  local dataNs = { Data = { SoD = {} } }
-  for _, file in ipairs({ "Spells.lua", "Sets.lua", "Souls.lua" }) do
-    local chunk = loadfile("Elmira_Paladin/Data/" .. file)
-    if chunk then chunk("Elmira_Paladin", dataNs) end
-  end
-  local chunk = assert(loadfile("Elmira_Paladin/Data/Builds/Paladin_Exodin.lua"))
-  chunk("Elmira_Paladin", dataNs)
-  return dataNs.Data.SoD
-end
 
 describe("ns.queueSnapshot entries[i].failed (Contract B)", function()
   local ns, pack
@@ -40,12 +26,13 @@ describe("ns.queueSnapshot entries[i].failed (Contract B)", function()
     ns = helper.ns()
     ns.API = { GetState = function() return ns._state end }
 
-    -- The pack table handed to Core is the lowercase shape Elmira_Paladin/Register.lua builds, per
-    -- the harness note, NOT the capitalised Data.SoD keys the raw Data/ files export.
-    local data = loadPaladinData()
+    -- helper.classPack returns the pack exactly as Core/Init.lua receives it, so this spec no longer
+    -- reassembles the lowercase shape by hand and cannot drift from what the addon actually builds.
+    -- Builds is narrowed to PALADIN_EXODIN: this spec is about one build's conditions.
+    local shipped = helper.classPack("Paladin")
     pack = {
-      spells = data.Spells, sets = data.Sets, souls = data.Souls, bonuses = data.Bonuses,
-      builds = { PALADIN_EXODIN = data.Builds.PALADIN_EXODIN },
+      spells = shipped.spells, sets = shipped.sets, souls = shipped.souls, bonuses = shipped.bonuses,
+      builds = { PALADIN_EXODIN = shipped.builds.PALADIN_EXODIN },
     }
   end)
 

@@ -226,11 +226,20 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
   describe("addonMemoryKB() — Elmira's own memory, not the whole client's Lua heap (`/elm debug perf`)", function()
     it("sums only addons whose name starts with 'Elmira', ignoring every other addon", function()
       mock.addons[1] = { name = "Elmira", memory = 100 }
-      mock.addons[2] = { name = "Elmira_Paladin", memory = 50 }
-      mock.addons[3] = { name = "Elmira_ElvUI", memory = 20 }
+      mock.addons[2] = { name = "Elmira_ElvUI", memory = 50 }
+      mock.addons[3] = { name = "Elmira_ItemRack", memory = 20 }
       mock.addons[4] = { name = "Recount", memory = 99999 }
       mock.addons[5] = { name = "ElvUI", memory = 5000 }
       assert.equal(170, Vanilla.addonMemoryKB())
+    end)
+
+    -- The prefix BOUNDARY, not just the concept. Narrowing the filter to "Elmir" survived the whole
+    -- suite before this case existed: every name that should match started with "Elmira" and every
+    -- name that should not was nowhere near it, so the exact length was never pinned.
+    it("does not count an unrelated addon that merely shares the first five letters", function()
+      mock.addons[1] = { name = "Elmira", memory = 100 }
+      mock.addons[2] = { name = "Elmirror", memory = 7000 }
+      assert.equal(100, Vanilla.addonMemoryKB())
     end)
 
     it("calls UpdateAddOnMemoryUsage BEFORE reading, so the figures are not stale", function()
@@ -887,6 +896,81 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       sealUp("SoM")
       assert.equal("SEAL_OF_MARTYRDOM", state:seal())
       assert.is_nil(state:sealLinger())
+    end)
+  end)
+
+  -- ============================================================ loadClassPack() (M4b, ADR-0011 §3)
+  -- The scan for an EXTERNAL class pack -- a separate addon carrying `## X-Elmira-Class`. Shipped
+  -- classes never take this path; this is the only-remaining-extension-point half of ADR-0011.
+  -- Three distinct return shapes, and Init.lua's own logging depends on telling them apart (docs/07's
+  -- "no pack for your class" / "pack disabled" / "pack failed to load" used to be one indistinguishable
+  -- line) -- so this pins the THIRD return value (the addon name) as well as `loaded`/`reason`.
+  describe("loadClassPack(class) — external X-Elmira-Class scan (ADR-0011 §3)", function()
+    it("answers false, 'no-scan' when the client exposes no C_AddOns enumeration at all", function()
+      -- `_G.` is load-bearing here, not decoration: busted runs each `it` under its own environment
+      -- that shadows plain global writes, so a bare `C_AddOns = nil` would leave the real global
+      -- Vanilla.lua actually reads untouched and this test would pass for the wrong reason (or, as
+      -- discovered while writing it, fail for the wrong reason — silently comparing against 'no-pack').
+      local saved = _G.C_AddOns
+      _G.C_AddOns = nil
+      local loaded, reason, name = Vanilla.loadClassPack("PALADIN")
+      _G.C_AddOns = saved
+      assert.is_false(loaded)
+      assert.equal("no-scan", reason)
+      assert.is_nil(name)
+    end)
+
+    it("answers false, 'no-scan' when GetNumAddOns specifically is missing", function()
+      local saved = C_AddOns.GetNumAddOns
+      C_AddOns.GetNumAddOns = nil
+      local loaded, reason, name = Vanilla.loadClassPack("PALADIN")
+      C_AddOns.GetNumAddOns = saved
+      assert.is_false(loaded)
+      assert.equal("no-scan", reason)
+      assert.is_nil(name)
+    end)
+
+    it("answers false, 'no-pack' when no installed addon carries a matching X-Elmira-Class", function()
+      mock.addons[1] = { name = "Elmira_ElvUI", metadata = { ["X-Elmira-Class"] = "MAGE" } }
+      mock.addons[2] = { name = "SomeOtherAddon" }
+      local loaded, reason, name = Vanilla.loadClassPack("PALADIN")
+      assert.is_false(loaded)
+      assert.equal("no-pack", reason)
+      assert.is_nil(name)
+    end)
+
+    it("answers false, 'no-pack' when C_AddOns exists but nothing is installed at all", function()
+      local loaded, reason, name = Vanilla.loadClassPack("PALADIN")
+      assert.is_false(loaded)
+      assert.equal("no-pack", reason)
+      assert.is_nil(name)
+    end)
+
+    it("loads the matching addon and forwards LoadAddOn's own loaded/reason, plus the addon's name", function()
+      mock.addons[1] = { name = "Elmira_Paladin", metadata = { ["X-Elmira-Class"] = "PALADIN" },
+                          load = { true, nil } }
+      local loaded, reason, name = Vanilla.loadClassPack("PALADIN")
+      assert.is_true(loaded)
+      assert.is_nil(reason)
+      assert.equal("Elmira_Paladin", name)
+    end)
+
+    it("forwards LoadAddOn's failure reason and the claiming addon's name when the load fails", function()
+      mock.addons[1] = { name = "Elmira_BrokenPaladin", metadata = { ["X-Elmira-Class"] = "PALADIN" },
+                          load = { false, "DISABLED" } }
+      local loaded, reason, name = Vanilla.loadClassPack("PALADIN")
+      assert.is_false(loaded)
+      assert.equal("DISABLED", reason)
+      assert.equal("Elmira_BrokenPaladin", name)
+    end)
+
+    it("matches the FIRST addon carrying the class, ignoring addons for other classes", function()
+      mock.addons[1] = { name = "Elmira_ElvUI", metadata = { ["X-Elmira-Class"] = "MAGE" } }
+      mock.addons[2] = { name = "Elmira_Paladin", metadata = { ["X-Elmira-Class"] = "PALADIN" },
+                          load = { true, nil } }
+      local loaded, _, name = Vanilla.loadClassPack("PALADIN")
+      assert.is_true(loaded)
+      assert.equal("Elmira_Paladin", name)
     end)
   end)
 

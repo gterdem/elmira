@@ -459,11 +459,19 @@ Slash.register{
       -- 300 MB. Elmira's own figure comes first now; the heap total stays, labelled as what it is,
       -- because it is still the right denominator.
       local lines = {}
-      local mem = ns.Adapter and ns.Adapter.addonMemoryKB and ns.Adapter.addonMemoryKB()
+      -- Asks the CAPABILITY, not just whether the accessor happens to exist. Those are two different
+      -- answers: a client that cannot report per-addon memory at all is a permanent fact worth
+      -- telling the user, while a present accessor returning nil is a transient read failure they
+      -- can retry. Duck-typing `addonMemoryKB and addonMemoryKB()` collapsed both into one line and
+      -- left `addonMemory` in Interface.CAPABILITIES with no reader outside the spec that lists it.
+      local caps = (ns.Adapter and ns.Adapter.capabilities and ns.Adapter.capabilities()) or {}
+      local mem = caps.addonMemory and ns.Adapter.addonMemoryKB and ns.Adapter.addonMemoryKB()
       if mem then
         lines[#lines + 1] = string.format("Elmira memory: %d KB", math.floor(mem))
-      else
+      elseif not caps.addonMemory then
         lines[#lines + 1] = "Elmira memory: could not tell (this client does not report per-addon usage)"
+      else
+        lines[#lines + 1] = "Elmira memory: could not read it just now (try again)"
       end
       lines[#lines + 1] = string.format("client Lua heap, ALL addons: %d KB",
         math.floor(collectgarbage("count")))

@@ -1,5 +1,20 @@
 # Changelog
 ## Unreleased
+- **One addon folder instead of two.** Paladin data used to ship as a separate `Elmira_Paladin`
+  addon that Elmira loaded on demand. It is now part of Elmira itself, so there is one thing to
+  install, one thing to enable and one version number. Nothing changes for you in game: the same
+  playstyles, the same queue. If you have an old `Elmira_Paladin` folder in your AddOns directory you
+  can delete it. Third-party class packs are unaffected — the public API they register through is
+  unchanged, and one installed for your class still takes precedence over the shipped data.
+- Fixed: when a class pack failed to load, Elmira said only that it had no data for your class. It
+  now says which addon failed and why, and stays quiet when it has shipped data to fall back on.
+- `/elm debug perf` now opens with Elmira's own memory instead of the whole client's Lua heap. The
+  old line read `lua memory: 327094 KB`, which is every addon you have loaded and made it look as
+  though Elmira were using 300 MB. The heap total is still there, labelled as what it is. On a client
+  that cannot report per-addon usage it says so, and it now tells that apart from a read that simply
+  failed this time.
+- `/elm debug perf` also resolves which playstyle is active while the display is hidden, instead of
+  reporting none.
 - **Every screen-edge cue now has its own colour, edge and intensity.** Previously a cue flared in
   whatever the playstyle suggested and only on the edge it named, which is no use if you want two
   cues on different sides of the screen or you cannot pick that particular red out of your peripheral

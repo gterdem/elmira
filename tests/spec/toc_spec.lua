@@ -8,7 +8,7 @@
 -- remembering to edit this file. EXPECTED guards the discovery itself — a glob that silently found
 -- nothing would turn every assertion below into a vacuous pass, which is the same class of silent
 -- no-op this spec exists to prevent.
-local EXPECTED = 5
+local EXPECTED = 4
 
 local function modules()
   local pipe = assert(io.popen("ls -d Elmira_*/ 2>/dev/null"), "cannot enumerate module folders")
@@ -47,8 +47,15 @@ describe("module TOCs", function()
     end
   end)
 
-  it("keeps the class pack load-on-demand so core selects it by class", function()
-    assert.is_not_nil(modules()["Elmira_Paladin"]:match("##%s*LoadOnDemand:%s*1"))
+  -- The shipped class pack is no longer one of these folders (ADR-0011): it is
+  -- Elmira/Classes/Paladin.lua inside core. What remains here are the integration modules, which
+  -- hard-depend on a FOREIGN addon and so keep their own folders. An external third-party class
+  -- pack still uses `## X-Elmira-Class` + LoadOnDemand; there just is not one in this repo.
+  it("ships no folder-level class pack, since shipped class data lives in Elmira/Classes", function()
+    for name, toc in pairs(modules()) do
+      assert.is_nil(toc:match("##%s*X%-Elmira%-Class:"),
+        name .. " declares X-Elmira-Class; shipped class data belongs in Elmira/Classes (ADR-0011)")
+    end
   end)
 end)
 
@@ -67,8 +74,12 @@ describe("core TOC", function()
     -- Display/ and Options/ are included deliberately: this spec's whole point is that a file the
     -- suite can dofile but the game never loads looks identical from here. That applies to a
     -- renderer just as much as to a Core module.
+    -- Classes/ and Setup/ are in this list for the same reason: a Classes/Mage.lua added to the
+    -- repo but not to the TOC registers nothing, in a way no other spec can see (the suite loads it
+    -- by path and it works perfectly). That is the M0 LoadWith bug's exact shape.
     local pipe = assert(io.popen(
-      "ls Elmira/Core/*.lua Elmira/Adapters/*.lua Elmira/Display/*.lua Elmira/Options/*.lua 2>/dev/null"))
+      "ls Elmira/Core/*.lua Elmira/Adapters/*.lua Elmira/Display/*.lua Elmira/Options/*.lua " ..
+      "Elmira/Setup/*.lua Elmira/Classes/*.lua 2>/dev/null"))
     local found = {}
     for path in pipe:lines() do found[#found + 1] = path end
     pipe:close()
@@ -97,5 +108,57 @@ describe("core TOC", function()
         assert.is_true(at < initAt, entry .. " must load before Core\\Init.lua")
       end
     end
+  end)
+end)
+
+-- Custom `## X-` TOC keys are metadata nothing validates: the client accepts any of them, the
+-- packager ignores the ones it does not know, and a key with a typo -- or one whose reader was
+-- deleted -- is indistinguishable from a working one. That is a silent no-op with a config file
+-- for a body, and this repo has shipped that shape before, so every shipped key must be either
+-- read by our own Lua or a key we deliberately publish for someone else to read.
+describe("custom TOC keys", function()
+  -- Keys consumed OUTSIDE our Lua. Each needs a reason, because "add it to the allowlist" is the
+  -- easy way to defeat this test.
+  local EXTERNAL = {
+    ["X-License"]          = "CurseForge project metadata",
+    ["X-Category"]         = "CurseForge project metadata",
+    ["X-Curse-Project-ID"] = "release.sh's upload_curseforge(); without it the upload silently no-ops",
+  }
+
+  local function tocFiles()
+    local pipe = assert(io.popen("ls Elmira*/*.toc 2>/dev/null"), "cannot enumerate TOC files")
+    local found = {}
+    for path in pipe:lines() do found[#found + 1] = path end
+    pipe:close()
+    assert.is_true(#found > 0, "no TOC files found; this test would pass vacuously")
+    return found
+  end
+
+  local function luaSources()
+    local pipe = assert(io.popen("find Elmira* -name '*.lua' -not -path '*/Libs/*' 2>/dev/null"))
+    local text = {}
+    for path in pipe:lines() do
+      local f = io.open(path, "r")
+      if f then text[#text + 1] = f:read("*a"); f:close() end
+    end
+    pipe:close()
+    return table.concat(text, "\n")
+  end
+
+  it("gives every shipped X- key either a reader in our Lua or a documented external consumer", function()
+    local sources = luaSources()
+    local orphans = {}
+    for _, path in ipairs(tocFiles()) do
+      local f = assert(io.open(path, "r"))
+      local body = f:read("*a"); f:close()
+      for key in body:gmatch("##%s*(X%-[%w%-]+)%s*:") do
+        if not EXTERNAL[key] and not sources:find(key, 1, true) then
+          orphans[#orphans + 1] = path .. ": " .. key
+        end
+      end
+    end
+    table.sort(orphans)
+    assert.same({}, orphans,
+      "a TOC key nothing reads is inert; add the reader, drop the key, or document it in EXTERNAL")
   end)
 end)

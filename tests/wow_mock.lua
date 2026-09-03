@@ -53,10 +53,14 @@ local function defaults()
     latency = 0,
     actionInfo = {},           -- [slot] = { kind, id }, e.g. {"spell", 415073} or {"macro", 3}
     macroSpells = {},          -- [macroIndex] = spellID; nil means the macro resolves to nothing
-    -- [i] = { name =, memory =, pendingMemory = }. `memory` is the STALE snapshot GetAddOnMemoryUsage
-    -- reports until UpdateAddOnMemoryUsage() copies `pendingMemory` into it — the client only
-    -- refreshes these figures on request, which is exactly the trap `/elm debug perf` exists to not
-    -- fall into. A spec that never sets `pendingMemory` sees `memory` unchanged either way.
+    -- [i] = { name =, memory =, pendingMemory =, metadata = { [field] = value }, load = { loaded, reason } }.
+    -- `memory` is the STALE snapshot GetAddOnMemoryUsage reports until UpdateAddOnMemoryUsage() copies
+    -- `pendingMemory` into it — the client only refreshes these figures on request, which is exactly
+    -- the trap `/elm debug perf` exists to not fall into. A spec that never sets `pendingMemory` sees
+    -- `memory` unchanged either way. `metadata`/`load` back GetAddOnMetadata/LoadAddOn for
+    -- Vanilla.loadClassPack's `X-Elmira-Class` scan (ADR-0011 §3); an addon entry with neither set
+    -- behaves as one with no TOC metadata and a bare successful load, matching an addon nobody asked
+    -- anything of.
     addons = {},
   }
 end
@@ -278,6 +282,15 @@ end
 function UpdateAddOnMemoryUsage() updateAddOnMemoryUsage() end
 function GetAddOnMemoryUsage(i) return getAddOnMemoryUsage(i) end
 
+-- By NAME, matching the real API (and Vanilla.loadClassPack's own call shape: it resolves a name via
+-- GetAddOnInfo(i) first, then asks GetAddOnMetadata(name, field) — never GetAddOnMetadata(i, field)).
+local function findAddonByName(name)
+  for _, a in ipairs(M.addons) do
+    if a.name == name then return a end
+  end
+  return nil
+end
+
 C_AddOns = {
   GetNumAddOns = function() return #M.addons end,
   GetAddOnInfo = function(i)
@@ -286,6 +299,18 @@ C_AddOns = {
   end,
   UpdateAddOnMemoryUsage = function() updateAddOnMemoryUsage() end,
   GetAddOnMemoryUsage = function(i) return getAddOnMemoryUsage(i) end,
+  GetAddOnMetadata = function(name, field)
+    local a = findAddonByName(name)
+    return a and a.metadata and a.metadata[field] or nil
+  end,
+  -- Defaults to a plain success when a fixture named an addon but never configured `load`, so a spec
+  -- only needs to set `load` when it cares about a specific failure reason.
+  LoadAddOn = function(name)
+    local a = findAddonByName(name)
+    if not a then return nil, "MISSING" end
+    local load = a.load or { true, nil }
+    return load[1], load[2]
+  end,
 }
 
 UIParent = {}

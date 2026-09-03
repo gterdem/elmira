@@ -3,7 +3,6 @@ enable-nolib-creation: no
 # Multi-addon repo: the packager copies every top-level addon folder; libraries are fetched into the core.
 move-folders:
   Elmira/Elmira: Elmira
-  Elmira/Elmira_Paladin: Elmira_Paladin
   Elmira/Elmira_ElvUI: Elmira_ElvUI
   Elmira/Elmira_ItemRack: Elmira_ItemRack
   Elmira/Elmira_WoWSims: Elmira_WoWSims
