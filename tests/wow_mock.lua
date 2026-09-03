@@ -206,6 +206,25 @@ C_Engraving = {
 function CreateFrame(frameType, name, parent, template)
   local frame = {}
   local lines = {}
+  -- Real RegisterEvent/SetScript bookkeeping, not the generic no-op fallback below: without this,
+  -- a frame-driven watcher (e.g. Elmira_ElvUI/Provider.lua's `watcher:SetScript("OnEvent", fn)`)
+  -- cannot be proven wired at all — the call would succeed silently whether or not it did anything.
+  local scripts, registered = {}, {}
+  function frame:RegisterEvent(event) registered[event] = true end
+  function frame:UnregisterEvent(event) registered[event] = nil end
+  function frame:IsEventRegistered(event) return registered[event] == true end
+  function frame:SetScript(event, handler) scripts[event] = handler end
+  function frame:GetScript(event) return scripts[event] end
+  -- NOT a real WoW frame method. A spec-only hook to simulate the client delivering a REGISTERED
+  -- event to this frame, mirroring how the client actually dispatches: every event, whichever one
+  -- fired, is delivered through the single "OnEvent" script (not a script named after the event),
+  -- and only if RegisterEvent(event) was called. A frame that never registered `event` stays quiet,
+  -- same as in game.
+  function frame:Fire(event, ...)
+    if not registered[event] then return end
+    local handler = scripts.OnEvent
+    if handler then return handler(frame, event, ...) end
+  end
   function frame:SetOwner() end
   function frame:ClearLines() lines = {} end
   function frame:NumLines() return #lines end
@@ -224,7 +243,12 @@ function CreateFrame(frameType, name, parent, template)
       end
     end
   end
-  return setmetatable(frame, { __index = function() return function() end end })
+  setmetatable(frame, { __index = function() return function() end end })
+  -- NOT a real WoW global. A file that builds its own event-watcher frame at load time (e.g.
+  -- Elmira_ElvUI/Provider.lua) gives a spec no other handle on it; this is the cheapest way to
+  -- reach "the frame that file just made" without inventing a return value CreateFrame never has.
+  _G.__lastFrame = frame
+  return frame
 end
 
 -- down, up, lagHome, lagWorld. Only the 4th is ever read: home latency is the chat/realm server and
@@ -234,6 +258,41 @@ function GetNetStats() return 0, 0, 0, M.latency end
 UIParent = {}
 Enum = { PowerType = { Mana = 0, Rage = 1, Energy = 3 } }
 WOW_PROJECT_ID, WOW_PROJECT_CLASSIC = 2, 2
+
+-- The Ace3 surface below is for specs that load the REAL vendored Ace3 libraries (Elmira/Libs/) --
+-- e.g. tests/spec/init_spec.lua, which is Core/Init.lua's composition root and the one file
+-- permitted to touch LibStub. Everything here is what those libraries read at their own file scope
+-- or on every call; none of it is Elmira-specific behaviour, so faking it here (rather than in the
+-- spec) is mirroring the client, not inventing a fixture that asserts the spec's own assumptions.
+-- LibStub itself expects this WoW string-library alias (`strmatch(minor, "%d+")` in NewLibrary).
+strmatch = string.match
+function geterrorhandler() return function(err) return err end end
+function IsLoggedIn() return true end
+function GetLocale() return "enUS" end
+-- AceDB-3.0 builds its per-character/per-realm/per-faction profile keys from these at file scope.
+-- Values are fixed and arbitrary (no spec depends on a particular realm/race/faction), unlike
+-- `M.class`, which adapter specs do depend on and which already has its own real accessor above.
+function GetRealmName() return "TestRealm" end
+function UnitName(u) return "TestChar" end
+function UnitRace(u) return "Human", "Human" end
+function UnitFactionGroup(u) return "Alliance" end
+function GetCurrentRegion() return 1 end
+function GetCurrentRegionName() return "US" end
+-- AceConsole-3.0 writes RegisterChatCommand entries into these; both are read/write tables the
+-- client provides, never rebuilt per-spec (mirrors SLASH_* globals, which nothing ever resets either).
+SlashCmdList = {}
+hash_SlashCmdList = {}
+-- CallbackHandler-1.0's Dispatch() runs every registered callback through this. The real one is a
+-- taint boundary; headless code has no taint to guard against, so a straight pass-through is
+-- behaviourally identical for a spec's purposes.
+function securecallfunction(f, ...) return f(...) end
+-- AceTimer-3.0 captures `C_Timer.After` as a file-scope upvalue, so the table must exist (with an
+-- `.After` field) before that file loads, even though nothing in Core/Init.lua's own tests fires a
+-- scheduled timer.
+C_Timer = { After = function() end }
+
+-- AceConsole-3.0 falls back to this when a caller doesn't hand it its own chat frame.
+DEFAULT_CHAT_FRAME = CreateFrame("Frame")
 
 M.GCD = GCD
 return M.reset()

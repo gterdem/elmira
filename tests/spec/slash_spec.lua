@@ -435,5 +435,47 @@ describe("Core.Slash", function()
       assert.equal(0, calls)
       assert.is_true(hasLineMatching(lines, "no cue 99"))
     end)
+
+    -- Mutation regression: a cue that is off must be REPORTED as off, never as on. This is the
+    -- diagnostic command's whole job — a cue that reads "on" while actually disabled is a
+    -- diagnostic lying about the thing it exists to diagnose. Cue 1 is fireable (now_slot) but is
+    -- never passed to enableCue() in this test, so it stays out of the profile entirely.
+    it("an off cue is reported as off, never as on", function()
+      local lines = Slash.run("debug cues")
+      assert.is_true(hasLineMatching(lines, "1%. Exorcism up"))
+      assert.is_false(hasLineMatching(lines, "on  edge="),
+        "a cue that was never enabled must not render as on")
+      assert.is_true(hasLineMatching(lines, "^   off"))
+    end)
+
+    -- Mutation regression: when a build suggests zero cues, the command must SAY so rather than
+    -- silently printing nothing past the header line — an empty list and "nothing to report" look
+    -- identical on screen otherwise.
+    it("says the build suggests no cues when its cue list is empty", function()
+      ns.Display.activeBuild = function() return { visuals = { cues = {} } } end
+      local lines = Slash.run("debug cues")
+      assert.is_true(hasLineMatching(lines, "no cues"))
+    end)
+
+    -- Mutation regression: the header line is the only place the build key and now-slot are named,
+    -- which is what makes a stale/wrong build diagnosable at all. Checked as substrings (information
+    -- content), not the exact line format.
+    it("names the build key and now-slot on the header line", function()
+      local clock = { _now = 50 }
+      function clock:now() return self._now end
+      ns.API = { GetState = function() return clock end }
+      enableCue("now_slot:EXORCISM")
+      ns.Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      local lines = Slash.run("debug cues")
+      assert.is_true(hasLineMatching(lines, "build=PALADIN_EXODIN"))
+      assert.is_true(hasLineMatching(lines, "now%-slot=EXORCISM"))
+    end)
+
+    -- Mutation regression: the output must tell the user how to test-fire a cue, or the feature is
+    -- undiscoverable from inside the command that lists the cues.
+    it("tells the user how to test-fire a cue", function()
+      local lines = Slash.run("debug cues")
+      assert.is_true(hasLineMatching(lines, "test%-fires"))
+    end)
   end)
 end)

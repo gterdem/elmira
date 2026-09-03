@@ -90,5 +90,11 @@ files["tests/"] = {
     "GetTalentTabInfo", "C_Engraving", "UIParent", "UnitAffectingCombat",
     -- M3b: the swing adapter reads GetNetStats and reaches its library through LibStub.
     "GetNetStats",
+    -- init_spec.lua loads the real vendored Ace3 stack (Elmira/Libs/) against Core/Init.lua, the one
+    -- file allowed to touch LibStub. These are what those libraries read at file scope or per call.
+    "geterrorhandler", "IsLoggedIn", "GetLocale", "SlashCmdList", "hash_SlashCmdList",
+    "securecallfunction", "C_Timer", "DEFAULT_CHAT_FRAME",
+    "GetRealmName", "UnitName", "UnitRace", "UnitFactionGroup", "GetCurrentRegion",
+    "GetCurrentRegionName", "strmatch", "ElmiraDB", "__lastFrame",
   },
 }

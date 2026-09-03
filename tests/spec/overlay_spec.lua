@@ -383,6 +383,23 @@ describe("Display.Overlay", function()
       assert.is_nil(ds.firedAt)
       assert.is_false(ds.matchesNow)
     end)
+
+    -- Mutation regression: a user who customises a cue's colour/intensity in the options expects
+    -- describe() to report what they CHOSE, not the build's shipped default. Both defaults
+    -- (exoCue.color and the 0.5 fallback intensity) are deliberately distinct from the override so
+    -- a describe() that silently fell back to the default would be caught.
+    it("reports the stored override colour/intensity, not the cue's default, once customised", function()
+      Overlay.SetEnabled(exoCue, true, { color = {0.1, 0.2, 0.3}, intensity = 0.77 })
+      local d = Overlay.describe()
+      local exo
+      for _, c in ipairs(d.cues) do
+        if c.id == "now_slot:EXORCISM" then exo = c end
+      end
+      assert.same({0.1, 0.2, 0.3}, exo.color)
+      assert.are_not.same(exoCue.color, exo.color)
+      assert.equal(0.77, exo.intensity)
+      assert.are_not.equal(0.5, exo.intensity)
+    end)
   end)
 
   describe("TestFire()", function()
@@ -411,6 +428,20 @@ describe("Display.Overlay", function()
       assert.is_false(ok)
       assert.is_string(label)
       assert.equal(0, #flared)
+    end)
+
+    -- Mutation regression: TestFire must flare with the STORED override colour/edge/intensity, not
+    -- the cue's shipped default — a user who customised a cue expects the test-fire to show them
+    -- what they chose, not the build's canned suggestion.
+    it("flares with the stored override colour/edge/intensity, not the cue's default", function()
+      Overlay.SetEnabled(cue, true, { color = {0.1, 0.2, 0.3}, edge = "right", intensity = 0.77 })
+      local ok = Overlay.TestFire(1)
+      assert.is_true(ok)
+      assert.equal(1, #flared)
+      assert.same({0.1, 0.2, 0.3}, flared[1].color)
+      assert.are_not.same(cue.color, flared[1].color)
+      assert.equal(0.77, flared[1].intensity)
+      assert.equal("right", flared[1].edge)
     end)
   end)
 end)
