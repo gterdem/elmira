@@ -184,4 +184,233 @@ describe("Display.Overlay", function()
       assert.equal(1, #flared)
     end)
   end)
+
+  describe("Render() — cue firing (change-only semantics, ADR-0009)", function()
+    local flared, cue
+
+    before_each(function()
+      flared = {}
+      -- Records a table, not the bare edge: an edge of nil (unset) would leave `flared[#flared+1]`
+      -- appending nothing, and the list would stay empty however many times Flare actually ran.
+      Overlay.Flare = function(edge, color, intensity)
+        flared[#flared + 1] = { edge = edge, color = color, intensity = intensity }
+      end
+      -- A fixed clock so `firedAt` assertions can distinguish "never fired" (nil) from "fired at 0"
+      -- (a falsy-looking but real timestamp) instead of accidentally relying on the latter.
+      ns.now = function() return 42 end
+      cue = { event = "now_slot", spell = "EXORCISM", color = {0.9,0.2,0.2}, edge = "left",
+              reason = "Exorcism came off cooldown" }
+      stubActiveBuild{ cue }
+    end)
+
+    it("flares exactly once when the now-slot changes to an opted-in spell", function()
+      Overlay.SetEnabled(cue, true)
+      Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.equal(1, #flared)
+    end)
+
+    it("does not strobe: re-rendering the same now-slot repeatedly flares only once", function()
+      Overlay.SetEnabled(cue, true)
+      Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.equal(1, #flared)
+    end)
+
+    it("regression: enabling a cue while its spell is ALREADY the top suggestion still flares", function()
+      -- The cue starts OFF. The spell is already the now-slot when the player opts in mid-fight --
+      -- the normal case, and exactly the scenario that went silent before the fix.
+      local queue = { { spell = "EXORCISM" } }
+      Overlay.Render(queue, "PALADIN_EXODIN", true)   -- advances lastNow to EXORCISM; cue is off, no flare
+      assert.equal(0, #flared)
+
+      Overlay.SetEnabled(cue, true)
+      Overlay.Render(queue, "PALADIN_EXODIN", true)   -- same now-slot as before, cue now on
+      assert.equal(1, #flared)
+    end)
+
+    it("disabling then re-enabling a cue later re-arms it for the same now-slot", function()
+      local queue = { { spell = "EXORCISM" } }
+      Overlay.SetEnabled(cue, true)
+      Overlay.Render(queue, "PALADIN_EXODIN", true)
+      assert.equal(1, #flared)
+
+      Overlay.SetEnabled(cue, false)
+      Overlay.Render(queue, "PALADIN_EXODIN", true)   -- still off: no flare
+      assert.equal(1, #flared)
+
+      Overlay.SetEnabled(cue, true)
+      Overlay.Render(queue, "PALADIN_EXODIN", true)   -- re-enabled, same now-slot: must fire again
+      assert.equal(2, #flared)
+    end)
+
+    it("toggling a DIFFERENT cue does not re-arm this one", function()
+      -- The re-arm inside SetEnabled is conditional on the toggled cue's spell being the current
+      -- now-slot. Forgetting the now-slot unconditionally would flash this cue's edge again every
+      -- time the user ticked any other row in the options.
+      local other = { event = "now_slot", spell = "DIVINE_STORM", edge = "right",
+                      reason = "Divine Storm at 3 Holy Power" }
+      stubActiveBuild{ cue, other }
+      Overlay.SetEnabled(cue, true)
+      Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.equal(1, #flared)
+
+      -- Exorcism is still the now-slot; the user ticks the unrelated Divine Storm row.
+      Overlay.SetEnabled(other, true)
+      Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.equal(1, #flared)
+    end)
+
+    it("a build-key change re-arms the cue for the same now-slot", function()
+      local queue = { { spell = "EXORCISM" } }
+      Overlay.SetEnabled(cue, true)
+      Overlay.Render(queue, "PALADIN_EXODIN_A", true)
+      assert.equal(1, #flared)
+
+      Overlay.Render(queue, "PALADIN_EXODIN_A", true)  -- same build, same now-slot: no re-fire
+      assert.equal(1, #flared)
+
+      Overlay.Render(queue, "PALADIN_EXODIN_B", true)  -- different build: re-arms
+      assert.equal(2, #flared)
+    end)
+
+    it("a nil key (the hidden path) is not a build change and does not disturb the remembered key", function()
+      local queue = { { spell = "EXORCISM" } }
+      Overlay.SetEnabled(cue, true)
+      Overlay.Render(queue, "PALADIN_EXODIN", true)
+      assert.equal(1, #flared)
+
+      -- nil key must not be mistaken for "no build yet" and must not re-arm the cue on its own.
+      Overlay.Render(queue, nil, true)
+      assert.equal(1, #flared)
+
+      -- the remembered key must still be PALADIN_EXODIN: rendering it again is not a build change.
+      Overlay.Render(queue, "PALADIN_EXODIN", true)
+      assert.equal(1, #flared)
+    end)
+
+    it("a check-event cue never flares even when its id is enabled in the profile", function()
+      local checkCue = { event = "check", key = "SEAL_DROPPED", color = {1,1,1}, edge = "bottom",
+                          reason = "Seal dropped" }
+      stubActiveBuild{ checkCue }
+      Overlay.SetEnabled(checkCue, true)
+      Overlay.Render({ { spell = "SEAL_DROPPED" } }, "PALADIN_EXODIN", true)
+      assert.equal(0, #flared)
+    end)
+
+    it("a requiresBonus cue the character lacks never flares even when enabled in the profile", function()
+      stubState({ HOLY_POWER_CONSUME = false })
+      local bonusCue = { event = "now_slot", spell = "DIVINE_STORM", requiresBonus = "HOLY_POWER_CONSUME",
+                          reason = "Divine Storm at 3 Holy Power" }
+      stubActiveBuild{ bonusCue }
+      Overlay.SetEnabled(bonusCue, true)
+      Overlay.Render({ { spell = "DIVINE_STORM" } }, "PALADIN_EXODIN", true)
+      assert.equal(0, #flared)
+    end)
+  end)
+
+  describe("describe()", function()
+    local flared, exoCue, dsCue
+
+    before_each(function()
+      flared = {}
+      Overlay.Flare = function(edge, color, intensity)
+        flared[#flared + 1] = { edge = edge, color = color, intensity = intensity }
+      end
+      ns.now = function() return 42 end
+      exoCue = { event = "now_slot", spell = "EXORCISM", color = {0.9,0.2,0.2}, edge = "left",
+                 reason = "Exorcism came off cooldown" }
+      dsCue = { event = "now_slot", spell = "DIVINE_STORM", requiresBonus = "HOLY_POWER_CONSUME",
+                reason = "Divine Storm at 3 Holy Power" }
+      stubState({ HOLY_POWER_CONSUME = false })
+      stubActiveBuild{ exoCue, dsCue }
+    end)
+
+    it("reports enabled/unavailable/matchesNow/firedAt correctly before anything has fired", function()
+      Overlay.SetEnabled(exoCue, true)
+      -- dsCue left disabled AND unavailable (missing bonus), on purpose: both facts are independent.
+      local d = Overlay.describe()
+      assert.is_nil(d.nowSlot)
+      assert.is_nil(d.buildKey)
+
+      local exo, ds
+      for _, c in ipairs(d.cues) do
+        if c.id == "now_slot:EXORCISM" then exo = c end
+        if c.id == "now_slot:DIVINE_STORM" then ds = c end
+      end
+      assert.is_true(exo.enabled)
+      assert.is_nil(exo.unavailable)
+      assert.is_false(exo.matchesNow)   -- nothing is the now-slot yet
+      assert.is_nil(exo.firedAt)
+
+      assert.is_false(ds.enabled)
+      assert.is_string(ds.unavailable)
+      assert.is_false(ds.matchesNow)
+      assert.is_nil(ds.firedAt)
+    end)
+
+    it("a flare with no clock yet records nothing, so it reads as never rather than 0s ago", function()
+      -- Core/Slash.lua defines ns.now() unconditionally and returns 0 until state exists, so guarding
+      -- on the FUNCTION existing would never be false -- the same shape of guard that once stamped
+      -- every recorder mark with 0. What matters is the VALUE: a real reading comes from GetTime()
+      -- and is never 0, so 0 means "no clock" and must not be recorded as a timestamp.
+      ns.now = function() return 0 end
+      local cue = { event = "now_slot", spell = "EXORCISM", edge = "left", reason = "Exo" }
+      stubActiveBuild{ cue }
+      Overlay.Flare = function() end
+      Overlay.SetEnabled(cue, true)
+      Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.is_nil(Overlay.describe().cues[1].firedAt)
+    end)
+
+    it("reports firedAt and matchesNow correctly once a cue has flared", function()
+      Overlay.SetEnabled(exoCue, true)
+      Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.equal(1, #flared)
+
+      local d = Overlay.describe()
+      assert.equal("EXORCISM", d.nowSlot)
+      assert.equal("PALADIN_EXODIN", d.buildKey)
+
+      local exo, ds
+      for _, c in ipairs(d.cues) do
+        if c.id == "now_slot:EXORCISM" then exo = c end
+        if c.id == "now_slot:DIVINE_STORM" then ds = c end
+      end
+      assert.is_true(exo.matchesNow)
+      assert.equal(42, exo.firedAt)
+      -- ds never fired (unavailable) and its spell never matched the now-slot either.
+      assert.is_nil(ds.firedAt)
+      assert.is_false(ds.matchesNow)
+    end)
+  end)
+
+  describe("TestFire()", function()
+    local flared, cue
+
+    before_each(function()
+      flared = {}
+      Overlay.Flare = function(edge, color, intensity)
+        flared[#flared + 1] = { edge = edge, color = color, intensity = intensity }
+      end
+      cue = { event = "now_slot", spell = "EXORCISM", color = {0.9,0.2,0.2}, edge = "left",
+              reason = "Exorcism came off cooldown" }
+      stubActiveBuild{ cue }
+    end)
+
+    it("fires a disabled cue, because the diagnostic ignores the enabled flag on purpose", function()
+      -- Never enabled via SetEnabled.
+      local ok, label = Overlay.TestFire(1)
+      assert.is_true(ok)
+      assert.equal("Exorcism came off cooldown", label)
+      assert.equal(1, #flared)
+    end)
+
+    it("returns false and a reason for an out-of-range index, without flaring", function()
+      local ok, label = Overlay.TestFire(99)
+      assert.is_false(ok)
+      assert.is_string(label)
+      assert.equal(0, #flared)
+    end)
+  end)
 end)

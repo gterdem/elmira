@@ -304,7 +304,7 @@ end
 Slash.register{ key = "help", desc = ns.L["Show this help"], order = 0, run = helpLines }
 
 Slash.register{
-  key = "debug", args = "state|bars|swing|perf|dump|queue", desc = ns.L["Diagnostics"], order = 10,
+  key = "debug", args = "state|bars|swing|cues|perf|dump|queue", desc = ns.L["Diagnostics"], order = 10,
   run = function(rest)
     local sub = rest and rest:match("^(%S+)")
     if sub == "state" then
@@ -414,6 +414,43 @@ Slash.register{
         lines[#lines + 1] = "seal linger window: not set — the pack ships no sourced value, so every"
         lines[#lines + 1] = "  seal_linger condition reads false (docs/02, deliberate)"
       end
+      return lines
+    elseif sub == "cues" then
+      -- Four independent reasons a screen-edge cue stays silent, and they are indistinguishable by
+      -- looking at the screen: not opted in, cannot fire yet, the rotation never put that spell in
+      -- the now-slot, or it fired while you were looking at the boss. Says which.
+      -- `/elm debug cues <n>` test-fires one, which separates a silent cue from a broken renderer.
+      if not ns.Overlay then return { "cues: overlay not loaded" } end
+      local which = rest and rest:match("^%S+%s+(%S+)")
+      if which then
+        local ok, what = ns.Overlay.TestFire(which)
+        return { ok and ("test-fired: " .. tostring(what)) or ("cannot test-fire: " .. tostring(what)) }
+      end
+
+      local d = ns.Overlay.describe()
+      local lines = {
+        string.format("build=%s  now-slot=%s", tostring(d.buildKey), tostring(d.nowSlot)),
+      }
+      if #d.cues == 0 then
+        lines[#lines + 1] = "this build suggests no cues"
+      end
+      for _, c in ipairs(d.cues) do
+        lines[#lines + 1] = string.format("%d. %s [%s]", c.index, tostring(c.reason or c.id), c.id)
+        if c.unavailable then
+          lines[#lines + 1] = "   UNAVAILABLE: " .. c.unavailable
+        elseif not c.enabled then
+          lines[#lines + 1] = "   off — enable it in /elm config → Peripheral cues"
+        else
+          lines[#lines + 1] = string.format("   on  edge=%s intensity=%s", tostring(c.edge),
+            tostring(c.intensity))
+          -- "never" here with matchesNow=true is the actionable pair: the cue is on, its spell IS
+          -- the current suggestion, and nothing has flared. That is a bug, not a quiet rotation.
+          lines[#lines + 1] = string.format("   matches now-slot=%s  last fired=%s",
+            tostring(c.matchesNow),
+            c.firedAt and string.format("%.1fs ago", math.max(0, ns.now() - c.firedAt)) or "never")
+        end
+      end
+      lines[#lines + 1] = "/elm debug cues <n> test-fires one"
       return lines
     elseif sub == "perf" then
       local lines = { string.format("lua memory: %d KB", math.floor(collectgarbage("count"))) }
@@ -531,7 +568,7 @@ Slash.register{
       end
       return lines
     end
-    return { "Usage: /elm debug state|bars|swing|perf|dump|queue [build] [depth]" }
+    return { "Usage: /elm debug state|bars|swing|cues|perf|dump|queue [build] [depth]" }
   end,
 }
 

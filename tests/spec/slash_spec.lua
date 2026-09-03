@@ -324,4 +324,116 @@ describe("Core.Slash", function()
     assert.equal(1, #lines)
     assert.equal("swing: adapter not loaded", lines[1])
   end)
+
+  it("'debug' usage line mentions cues (peripheral cue diagnostics)", function()
+    local lines = Slash.run("debug")
+    assert.is_true(hasLineMatching(lines, "cues"))
+  end)
+
+  it("'debug cues' degrades with a designed line when the overlay is not loaded", function()
+    local ns = helper.ns()
+    assert.is_nil(ns.Overlay)
+    local lines = Slash.run("debug cues")
+    assert.same({ "cues: overlay not loaded" }, lines)
+  end)
+
+  -- Drives Overlay.lua for real (loaded fresh per test) rather than faking its output, so these
+  -- tests catch the two fixed defects: TestFire silently attributing a bad index to cue 1, and a
+  -- test-fired `event = "check"` cue printing a bare success line that contradicts the options
+  -- screen (ADR-0009: check cues stay inert until M5b).
+  describe("debug cues", function()
+    local ns, calls
+
+    -- Cue 1 is a now_slot cue (the ordinary, fireable case). Cue 2 is an event="check" cue, which
+    -- Overlay.availableCues() always marks unavailable — Core/Checks.lua does not exist until M5b.
+    local function cues()
+      return {
+        { event = "now_slot", spell = "EXORCISM", reason = "Exorcism up", edge = "left", color = { 1, 1, 1 } },
+        { event = "check", spell = "SEAL_OF_MARTYRDOM", reason = "Seal dropped" },
+      }
+    end
+
+    before_each(function()
+      ns = helper.ns()
+      helper.load("Elmira/Display/Overlay.lua")
+      ns.db = { profile = { overlay = { cues = {} } } }
+      ns.Display = { activeBuild = function() return { visuals = { cues = cues() } } end }
+      -- Stubbed so no frame is ever created (Core specs must stay WoW-API-free) and so a flare can
+      -- be counted instead of animated.
+      calls = 0
+      ns.Overlay.Flare = function() calls = calls + 1; return true end
+    end)
+
+    local function enableCue(id)
+      ns.db.profile.overlay.cues[id] = { enabled = true, edge = "left", intensity = 0.5 }
+    end
+
+    it("lists each cue and marks the check cue UNAVAILABLE with its reason", function()
+      local lines = Slash.run("debug cues")
+      assert.is_true(hasLineMatching(lines, "1%. Exorcism up %[now_slot:EXORCISM%]"))
+      assert.is_true(hasLineMatching(lines, "2%. Seal dropped %[check:SEAL_OF_MARTYRDOM%]"))
+      assert.is_true(hasLineMatching(lines, "UNAVAILABLE: needs readiness checks %(M5b%)"))
+    end)
+
+    it("an enabled cue reports on, and reports last fired=never before anything has flared", function()
+      enableCue("now_slot:EXORCISM")
+      local lines = Slash.run("debug cues")
+      assert.is_true(hasLineMatching(lines, "on  edge=left"))
+      assert.is_true(hasLineMatching(lines, "last fired=never"))
+    end)
+
+    -- Regression coverage for the deliberate `ns.now` guard in Overlay.Render/describe: no flare has
+    -- happened yet, so lastFired must carry nothing for this cue. (The separate case of a flare
+    -- recorded while no clock exists is Overlay's own contract and is covered in overlay_spec.)
+    it("reports never for a cue that is enabled but has not matched the now-slot", function()
+      enableCue("now_slot:EXORCISM")
+      local lines = Slash.run("debug cues")
+      assert.is_true(hasLineMatching(lines, "matches now%-slot=false  last fired=never"))
+    end)
+
+    it("reports a real elapsed time, not never, after a flare driven via Overlay.Render", function()
+      local clock = { _now = 50 }
+      function clock:now() return self._now end
+      ns.API = { GetState = function() return clock end }
+      enableCue("now_slot:EXORCISM")
+
+      ns.Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.equal(1, calls, "Render must flare the matching enabled now_slot cue exactly once")
+
+      clock._now = 53
+      local lines = Slash.run("debug cues")
+      assert.is_false(hasLineMatching(lines, "last fired=never"))
+      assert.is_true(hasLineMatching(lines, "last fired=3%.0s ago"))
+    end)
+
+    it("'debug cues 1' test-fires cue 1 and flares exactly once", function()
+      local lines = Slash.run("debug cues 1")
+      assert.equal(1, calls)
+      assert.is_true(hasLineMatching(lines, "^test%-fired: Exorcism up$"))
+    end)
+
+    -- Fixed defect: `tonumber(index) or 1` silently fired cue 1 and attributed the flare to it for
+    -- any non-numeric argument. The fix must refuse instead of guessing.
+    it("regression: 'debug cues zzz' does not flare and reports it is not a cue number", function()
+      local lines = Slash.run("debug cues zzz")
+      assert.equal(0, calls, "a non-numeric argument must never flare any cue")
+      assert.is_true(hasLineMatching(lines, "not a cue number: zzz"))
+    end)
+
+    -- Fixed defect: test-firing an event="check" cue printed a bare "test-fired: Seal dropped",
+    -- which contradicts the options screen telling the user that cue cannot fire (ADR-0009). The
+    -- renderer test still flares (that is the point of the command), but the line must say so.
+    it("regression: test-firing the check cue still flares but says it will not fire in play", function()
+      local lines = Slash.run("debug cues 2")
+      assert.equal(1, calls, "TestFire answers \"can this edge flare at all\" even for an unavailable cue")
+      assert.is_true(hasLineMatching(lines, "^test%-fired: Seal dropped %(needs readiness checks %(M5b%)"))
+      assert.is_true(hasLineMatching(lines, "will not fire in play%)$"))
+    end)
+
+    it("'debug cues 99' reports no such cue and does not flare", function()
+      local lines = Slash.run("debug cues 99")
+      assert.equal(0, calls)
+      assert.is_true(hasLineMatching(lines, "no cue 99"))
+    end)
+  end)
 end)

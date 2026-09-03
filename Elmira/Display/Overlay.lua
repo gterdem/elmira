@@ -19,6 +19,8 @@ ns = ns or _G.__ELM_NS or {}
 local Overlay = {}
 local frame, edges = nil, {}
 local lastNow                -- the previous now-slot spell, so we can detect "changed TO"
+local lastKey                -- the build the above was observed under; a switch invalidates it
+local lastFired = {}         -- cue id -> when it last flared, for `/elm debug cues`
 
 local MEDIA = "Interface\\AddOns\\Elmira\\media\\"
 local EDGE_THICKNESS = 96
@@ -111,6 +113,16 @@ function Overlay.SetEnabled(cue, enabled, opts)
   p.overlay = p.overlay or { cues = {} }
   p.overlay.cues = p.overlay.cues or {}
   local id = cueID(cue)
+  -- A cue enabled while its spell is ALREADY the top suggestion -- the normal case, since you turn a
+  -- cue on during the fight that made you want it -- would otherwise count as "already shown" and
+  -- stay silent until the rotation moved off that spell and back. That reads as "the cue does not
+  -- work". This lives inside SetEnabled rather than at the call site because a caller that forgets it
+  -- produces a silent cue, which is exactly how the bug shipped.
+  -- Conditional on purpose: forgetting the now-slot unconditionally would also re-arm every OTHER
+  -- enabled cue, so toggling one cue in the options flashes a second, unrelated screen edge.
+  if cue.event == "now_slot" and cue.spell ~= nil and cue.spell == lastNow then
+    Overlay.Reset()
+  end
   if not enabled then
     p.overlay.cues[id] = nil          -- opting out removes it: absent means "never asked for"
     return false
@@ -146,7 +158,15 @@ end
 -- correctly on the hidden path either way — Driver passes a nil queue, which already means "clear" —
 -- but naming `visible` here is deliberate: relying on nil-by-coincidence is how the next renderer
 -- fires a screen flare at someone whose display is switched off.
-function Overlay.Render(queue, _key, visible)
+function Overlay.Render(queue, key, visible)
+  -- A build or profile switch means the previous now-slot was another rotation's suggestion. Carrying
+  -- it across swallows the first cue of the new build. The key is already an argument, so the module
+  -- can notice this itself rather than depending on someone remembering to call Reset(). Only a real
+  -- key counts: the hidden path passes nil, which is not a build change.
+  if key ~= nil and key ~= lastKey then
+    lastKey, lastNow = key, nil
+  end
+
   local now = (visible ~= false) and queue and queue[1] and queue[1].spell or nil
   if now == lastNow then return end
   lastNow = now
@@ -156,6 +176,13 @@ function Overlay.Render(queue, _key, visible)
     if cue.event == "now_slot" and cue.spell == now and not cue.unavailable then
       local on, setting = Overlay.isEnabled(cue)
       if on then
+        -- Guarding on `ns.now` existing would be theatre: Core/Slash.lua defines it unconditionally
+        -- and returns 0 when no state exists yet, which is the very shape of guard that once stamped
+        -- every recorder mark with 0. Test the VALUE instead. A real reading comes from GetTime() and
+        -- is never 0, so 0 means "no clock yet" -- and recording it would render as "0.0s ago", a
+        -- confident answer to "when did this last fire" that we do not have. Absent reads "never".
+        local firedAt = ns.now and ns.now() or 0
+        if firedAt > 0 then lastFired[cueID(cue)] = firedAt end
         Overlay.Flare(setting.edge, setting.color, setting.intensity)
         local sounds = profile().sounds
         if sounds and sounds.enabled and setting.sound and PlaySoundFile then
@@ -166,10 +193,56 @@ function Overlay.Render(queue, _key, visible)
   end
 end
 
+-- What `/elm debug cues` reports. The M4 test pass could not distinguish "the cue is not enabled",
+-- "the cue cannot fire", "the now-slot never reached it" and "it fired and you missed it" — every
+-- one of those looks like an empty screen edge. Data, not text, so a spec can assert on it.
+function Overlay.describe()
+  local out = { nowSlot = lastNow, buildKey = lastKey, cues = {} }
+  for i, cue in ipairs(Overlay.availableCues()) do
+    local on, setting = Overlay.isEnabled(cue)
+    out.cues[i] = {
+      index = i, id = cueID(cue), event = cue.event, reason = cue.reason,
+      unavailable = cue.unavailable, enabled = on,
+      edge = (setting and setting.edge) or cue.edge or "left",
+      color = (setting and setting.color) or cue.color,
+      intensity = setting and setting.intensity,
+      firedAt = lastFired[cueID(cue)],
+      -- The one fact that separates "wired wrong" from "the rotation never asked for it".
+      matchesNow = cue.event == "now_slot" and cue.spell ~= nil and cue.spell == lastNow,
+    }
+  end
+  return out
+end
+
+-- Manual test-fire, so a silent cue can be told apart from a silent RENDERER without a target dummy.
+-- Deliberately ignores `enabled`: the question it answers is "can this edge flare at all", and
+-- refusing to fire a disabled cue would make the diagnostic useless in exactly the case it is for.
+function Overlay.TestFire(index)
+  -- Not `tonumber(index) or 1`: defaulting garbage to the first cue answers a question the user did
+  -- not ask and attributes the flare to the wrong cue -- in the one command whose job is to stop
+  -- flares being misattributed.
+  local n = tonumber(index)
+  if not n then return false, "not a cue number: " .. tostring(index) end
+  local cue = Overlay.availableCues()[n]
+  if not cue then return false, "no cue " .. tostring(n) end
+  local _, setting = Overlay.isEnabled(cue)
+  Overlay.Flare((setting and setting.edge) or cue.edge,
+                (setting and setting.color) or cue.color,
+                setting and setting.intensity)
+  local label = cue.reason or cue.spell or cue.key or ("cue " .. tostring(cue.index))
+  -- An unavailable cue still flares -- the question this answers is "can this edge flare at all" --
+  -- but it must SAY so. The options list this cue greyed out as unable to fire (ADR-0009: check cues
+  -- stay inert until M5b), and a bare success line here would be read as that promise being wrong.
+  if cue.unavailable then
+    label = label .. " (" .. cue.unavailable .. " — will not fire in play)"
+  end
+  return true, label
+end
+
 -- A build or profile switch must not leave a stale "we were already showing this" memory, or the
 -- first cue after the switch is silently swallowed.
 function Overlay.Reset()
-  lastNow = nil
+  lastNow, lastKey = nil, nil
 end
 
 ns.Overlay = Overlay

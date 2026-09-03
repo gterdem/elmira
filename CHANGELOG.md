@@ -1,5 +1,15 @@
 # Changelog
 ## Unreleased
+- Fixed: a screen-edge cue you turned on during a fight never fired. Elmira remembers which
+  suggestion it last flared for, so it does not flash ten times a second while the same spell stays
+  on top — but it kept that memory when you enabled a cue, so a cue switched on while its spell was
+  already the top suggestion counted as "already shown" and stayed silent. Since that is exactly when
+  you turn a cue on, it looked like the feature did nothing. Enabling or disabling a cue now clears
+  that memory and repaints, and so does switching build or profile, which had the same flaw.
+- `/elm debug cues` says why a screen edge is dark: which cues this build offers, which are on, which
+  cannot fire yet and why, whether the cue's spell is the current suggestion, and how long ago each
+  one last flared. `/elm debug cues <n>` test-fires one so a silent cue can be told apart from a
+  broken display.
 - Fixed: the setup window claimed you did not know Seal of Martyrdom even when you did — it was
   checking a list of your spells that was never filled in, so every ability requirement read as
   missing. It now reads your spellbook, and when it genuinely cannot, it says so instead of telling

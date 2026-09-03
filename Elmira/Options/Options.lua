@@ -69,6 +69,12 @@ local function overlayGroup()
         get = function() return (ns.Overlay.isEnabled(cue)) end,
         set = function(_, v)
           ns.Overlay.SetEnabled(cue, v)
+          -- The driver only repaints when the QUEUE changes, and turning a cue on changes neither
+          -- the queue nor the build. Without this the newly enabled cue waits for the rotation to
+          -- move before it is ever evaluated — and if its spell is stuck at the top (an Exorcism
+          -- that is not on any bar, say) that never happens and the cue looks dead. Forcing the
+          -- repaint is what makes the reset inside SetEnabled actually reach the renderer.
+          if ns.Display then ns.Display.refresh() end
           -- Show it once on enable. A cue the user just turned on and cannot picture is a cue they
           -- turn straight back off.
           if v then
