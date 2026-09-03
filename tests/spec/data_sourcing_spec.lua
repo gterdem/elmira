@@ -162,6 +162,72 @@ describe("Data sourcing policy (docs/03)", function()
     assert.same({}, dangling)
   end)
 
+  -- Rule 7 says every catalog entry carries `updated`, `phase`, `source` and `difficulty`,
+  -- and the wizard shows `summary` and the Advisor reads `weapon`/`runes`/`ringRunes` -- but nothing
+  -- enforced any of it, so a new entry could ship with a missing summary or an undated source and
+  -- every spec would stay green (the mutation gate reported exactly that when Wrath-like landed).
+  -- Scoped to AVAILABLE entries: an unavailable one is research-in-progress by definition.
+  describe("catalog and advice completeness for every shipped playstyle (rule 7)", function()
+    local function availableEntries()
+      local out = {}
+      for _, entry in ipairs(shippedPacks()) do
+        for class, list in pairs(entry.data.catalog or {}) do
+          if type(list) == "table" and type(class) == "string" and class:upper() == class then
+            for _, row in ipairs(list) do
+              if row.available then out[#out + 1] = { row = row, data = entry.data, class = class } end
+            end
+          end
+        end
+      end
+      assert.is_true(#out > 0, "no available catalog entries found; this block would be vacuous")
+      return out
+    end
+
+    it("dates, sources and describes every available entry", function()
+      for _, e in ipairs(availableEntries()) do
+        local row = e.row
+        assert.truthy(type(row.updated) == "string" and row.updated:match("^%d%d%d%d%-%d%d%-%d%d$"),
+          row.build .. ": `updated` must be a YYYY-MM-DD date")
+        assert.is_string(row.phase, row.build .. ": `phase` missing")
+        assert.truthy(type(row.source) == "string" and row.source:match("^https?://"),
+          row.build .. ": `source` must be a URL")
+        assert.truthy(row.difficulty == "easy" or row.difficulty == "medium" or row.difficulty == "hard",
+          row.build .. ": `difficulty` must be easy/medium/hard")
+        assert.truthy(type(row.summary) == "string" and #row.summary > 20, row.build .. ": `summary` missing or too short")
+        assert.is_string(row.playstyle, row.build .. ": `playstyle` missing")
+        assert.is_table(row.requires, row.build .. ": `requires` missing (the wizard's shopping list)")
+      end
+    end)
+
+    it("gives every available build a `notes` line and advice the Advisor can act on", function()
+      for _, e in ipairs(availableEntries()) do
+        local key, data = e.row.build, e.data
+        local build = data.builds[key]
+        assert.truthy(type(build.notes) == "string" and #build.notes > 20, key .. ": build `notes` missing")
+        local advice = data.advice and data.advice[e.class] and data.advice[e.class][key]
+        assert.is_table(advice, key .. ": no advice entry")
+        assert.is_table(advice.soul, key .. ": advice.soul missing (an empty list is fine; absent is not)")
+        assert.truthy(advice.weapon and (advice.weapon.type == "1H" or advice.weapon.type == "2H"),
+          key .. ": advice.weapon.type must be 1H or 2H")
+        assert.is_string(advice.weapon.reason, key .. ": advice.weapon.reason missing")
+        assert.truthy(type(advice.runes) == "table" and #advice.runes > 0, key .. ": advice.runes missing or empty")
+        assert.truthy(advice.ringRunes and type(advice.ringRunes.default) == "table" and #advice.ringRunes.default > 0,
+          key .. ": advice.ringRunes.default missing or empty")
+        -- Every symbolic key the advice and the shopping list name must exist, or detection reads nil
+        -- forever and the wizard lists a rune that is not in the data.
+        for _, rune in ipairs(advice.runes) do
+          assert.is_table(data.spells[rune], key .. ": advice names unknown rune key " .. tostring(rune))
+        end
+        for _, rune in ipairs((e.row.requires or {}).runes or {}) do
+          assert.is_table(data.spells[rune], key .. ": requires names unknown rune key " .. tostring(rune))
+        end
+        for _, pick in ipairs(advice.soul) do
+          assert.is_table(data.souls[pick.pick], key .. ": advice names unknown soul " .. tostring(pick.pick))
+        end
+      end
+    end)
+  end)
+
   -- The catalog is the wizard's ONLY list (rule 7). An entry the wizard can offer whose
   -- build file does not exist resolves to nil and the user picks a playstyle that does nothing.
   it("marks a catalog entry available only when its build actually ships", function()

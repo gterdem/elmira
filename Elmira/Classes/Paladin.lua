@@ -299,7 +299,7 @@ ns.RegisterBuiltinPack("PALADIN", function()
   -- user a playstyle that resolves to nil. Flip an entry to available when its build lands (M5).
   -- Enforced by tests/spec/data_sourcing_spec.lua.
   D.Catalog = {
-    version = 1, flavor = "SoD", phase = "P8",
+    version = 2, flavor = "SoD", phase = "P8",  -- 2: Wrath-like shipped (2026-09-03); the wizard re-offers once
     PALADIN = {
       { build = "PALADIN_EXODIN", available = true, playstyle = "Exodin — fast 2H, single seal (Ret)", difficulty = "easy", recommended = true,
         updated = "2026-09-02", phase = "SoD P8",
@@ -309,10 +309,12 @@ ns.RegisterBuiltinPack("PALADIN", function()
         -- and not granted by levelling, so the wizard should warn when it is missing.
         requires = { weapon = "2H", maxSpeed = 3.0, spells = { "SEAL_OF_MARTYRDOM" },
                      runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM" } } },
-      { build = "PALADIN_WRATHLIKE", available = false, playstyle = "Wrath-like — slow 2H, mono seal (Ret)", difficulty = "easy",
-        updated = "2026-08-31", phase = "SoD P8", source = "https://onlyfarms.gg/guides/season-of-discovery-paladin-dps-bis-gear-pve-guide/",
-        summary = "Relaxed Divine Storm / Crusader Strike / Exorcism priority on a slow two-hander.",
-        requires = { weapon = "2H", minSpeed = 3.0 } },
+      { build = "PALADIN_WRATHLIKE", available = true, playstyle = "Wrath-like — slow 2H, mono seal (Ret)", difficulty = "easy",
+        updated = "2026-09-03", phase = "SoD P8",
+        source = "https://www.wowhead.com/classic/guide/season-of-discovery/classes/paladin/dps-rotation-cooldowns-abilities-pve",
+        summary = "Seal of Martyrdom, then Divine Storm at 3 Holy Power (T3.5 4-set), Crusader Strike and Exorcism — the soul decides which first — Judgement as filler. The relaxed build; on par with the rest in P8.",
+        requires = { weapon = "2H", minSpeed = 3.0, spells = { "SEAL_OF_MARTYRDOM" },
+                     runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM" } } },
       { build = "PALADIN_PROT", available = false, playstyle = "Protection — sword & board tank", difficulty = "easy",
         updated = "2026-08-31", phase = "SoD P8",
         source = "https://www.wowhead.com/classic/guide/season-of-discovery/classes/paladin/tank-talent-builds-runes",
@@ -352,7 +354,11 @@ ns.RegisterBuiltinPack("PALADIN", function()
     PALADIN_WRATHLIKE = {
       soul = { { when = { {"set","PALADIN_T25_AVENGERS", min = 2} }, pick = "SOUL_OF_THE_EXILE", reason = "Exile with Avenger's 2-set" },
                { pick = "SOUL_OF_THE_RETRIBUTOR", reason = "Retributor when not using T2.5 (also after T3.5 6-set)" } },
-      weapon = { type = "2H", minSpeed = 3.0 },
+      weapon = { type = "2H", minSpeed = 3.0, reason = "Slow 2H: Divine Storm and Judgement of Martyrdom are not normalized" },
+      -- The same eight runes as Exodin: no source gives Wrath-like a different kit (gather dossier, Runes by slot).
+      runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM", "RUNE_PURIFYING_POWER", "RUNE_WRATH",
+                "RUNE_RIGHTEOUS_VENGEANCE", "RUNE_SHEATH_OF_LIGHT", "RUNE_AURA_MASTERY" },
+      ringRunes = { human = { "HOLY_SPECIALIZATION" }, default = { "HOLY_SPECIALIZATION", "WEAPON_SPECIALIZATION_MATCHING_WEAPON" } },
     },
     PALADIN_TWIST = {
       soul = { { when = { {"set","PALADIN_T2_JUDGEMENT", min = 4} }, pick = "SOUL_OF_THE_RETRIBUTOR", reason = "With Draconic 4-set" },
@@ -486,6 +492,79 @@ ns.RegisterBuiltinPack("PALADIN", function()
       ---------------------------------------------------------------- BASELINE filler
       -- minPct = 40 is UNSOURCED: it predates this research and nothing corroborates the number.
       -- Left alone rather than replaced with another guess. Flagged for testing.
+      { spell = "CONSECRATION", when = { {"resource","MANA", minPct = 40} } },
+      { item  = 13, hold = true, label = "Trinket", when = { {"item_ready", 13} } },
+      { item  = 14, hold = true, label = "Trinket", when = { {"item_ready", 14} } },
+    },
+  }
+
+  -- Paladin Wrath-like (slow 2H, single seal). BiS side: Wowhead SoD Paladin DPS Rotation, modified
+  -- 2025-06-06 (docs/research/wowhead/paladin-dps-rotation-cooldowns-abilities-pve.md); Default side:
+  -- Icy Veins Ret rotation, 2025-04-08. Gate list W1-W5: docs/research/paladin-p8-gather-ret.md.
+  -- Authored per ADR-0013: written for the same eight runes as Exodin; every set- or soul-dependent line
+  -- is gated and the engine detects what is actually engraved and worn. Wowhead: "the rotation is
+  -- largely the same without [T3.5]", and it "fully comes online with Tier 3.5 Inquisition gear".
+  D.Builds.PALADIN_WRATHLIKE = {
+    schema = 1, key = "PALADIN_WRATHLIKE", name = "Paladin — Wrath-like (slow 2H)", class = "PALADIN", flavor = "SoD",
+    notes = "One seal, a simple priority, a slow two-hander. The shoulder soul decides the order: with Soul of the Exile, Exorcism before Crusader Strike; otherwise Crusader Strike first. Judgement is the filler.",
+    -- Advisory only (ADR-0013: the wizard's shopping list; evaluation never depends on it). minSpeed 3.0
+    -- is the shared slow-weapon floor; Wowhead gives Wrath-like no explicit speed range of its own.
+    requires = { weapon = "2H", minSpeed = 3.0, spells = { "SEAL_OF_MARTYRDOM" },
+                 runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM", "RUNE_PURIFYING_POWER" } },
+    visuals = {
+      cues = {
+        -- The one moment worth a glance away: 3 Holy Power with the 4-set, Divine Storm to the top.
+        { event = "now_slot", spell = "DIVINE_STORM", color = {0.3,0.6,1.0}, edge = "right",
+          requiresBonus = "HOLY_POWER_CONSUME", reason = "Divine Storm at 3 Holy Power" },
+        { event = "check", key = "SEAL_DROPPED", color = {1.0,1.0,1.0}, edge = "bottom",
+          reason = "Seal dropped", peripheral = true },
+      },
+    },
+    entries = {
+      ---------------------------------------------------------------- always
+      { spell = "SEAL_OF_MARTYRDOM", when = { {"no_seal"} }, label = "Seal up" },
+
+      ---------------------------------------------------------------- burst: Wowhead's opener is identical to Exodin's
+      { spell = "AVENGING_WRATH", hold = true, label = "Burst",
+        when = { {"buff","VENGEANCE_BUFF"},
+                 {"any", {"buff","HOLY_POWER_BUFF", min = 3}, {"not", {"set","PALADIN_T35_INQUISITION", min = 2}}} } },
+      { spell = "AURA_MASTERY", hold = true, label = "with AW", when = { {"buff","AVENGING_WRATH_BUFF"} } },
+
+      ---------------------------------------------------------------- W3: T2 Draconic 2-set -> Judgement on cooldown, no reseal
+      { spell = "JUDGEMENT", label = "Draconic 2p", when = { {"bonus","JUDGEMENT_NO_CONSUME"} } },
+      -- Judge a seal that is about to fall off rather than let it drop (then "Seal up" re-applies it).
+      -- Not gear-dependent; same 1.5s window as Exodin (wowsims/sod presets, docs/research/exodin-filler-policy.md).
+      { spell = "JUDGEMENT", label = "Seal expiring", when = { {"seal","SEAL_OF_MARTYRDOM"}, {"buff","SEAL_OF_MARTYRDOM", maxRemaining = 1.5} } },
+
+      ---------------------------------------------------------------- W4: T3.5 4-set -> Divine Storm at 3 Holy Power is the top priority
+      { spell = "DIVINE_STORM", label = "3 HP", when = { {"buff","HOLY_POWER_BUFF", min = 3}, {"bonus","HOLY_POWER_CONSUME"} } },
+
+      ---------------------------------------------------------------- W5: without T3.5, Consecration is promoted on large pulls
+      -- Wowhead: "If you don't yet have T3.5 then you can cast Consecration at a higher priority for
+      -- large pulls, that's it." With T3.5 the AoE rotation makes "zero changes". Inert until nameplate
+      -- counting lands at M5a (state:enemies() is a hardcoded 1 today), exactly like Exodin's AoE line.
+      { spell = "CONSECRATION", label = "AoE, no T3.5",
+        when = { {"not", {"set","PALADIN_T35_INQUISITION", min = 2}}, {"enemies", min = 3}, {"resource","MANA", minPct = 40} } },
+
+      ---------------------------------------------------------------- W1: Soul of the Exile -> Exorcism before Crusader Strike
+      -- Detected through the effect the soul grants (EXORCISM_DAMAGE_SOUL, ADR-0004), not the item.
+      { spell = "EXORCISM", label = "Exile: Exorcism first", when = { {"bonus","EXORCISM_DAMAGE_SOUL"} } },
+
+      ---------------------------------------------------------------- BASELINE core (W2 order: Crusader Strike, then Exorcism)
+      { spell = "CRUSADER_STRIKE" },   -- rune; skipped if not engraved
+      { spell = "EXORCISM" },          -- baseline ability in P8
+      -- Wowhead's Wrath-like table lists Divine Storm only at 3 Holy Power; wowsims/sod's p8-wrath preset
+      -- keeps it as a plain priority below Crusader Strike/Exorcism, which is what this line encodes.
+      -- Residual per ADR-0013 §1: recorded in the gather dossier, alternative exposed in the editor.
+      { spell = "DIVINE_STORM" },      -- rune; skipped if not engraved
+
+      ---------------------------------------------------------------- BASELINE filler: "cast Judgement and instantly refresh Seal of Martyrdom"
+      -- Below the core abilities so it self-throttles by list position: it fires on the idle globals a
+      -- slow two-hander leaves, and almost never once T3.5 fills the GCD budget.
+      { spell = "JUDGEMENT", label = "Filler (then reseal)", when = { {"seal","SEAL_OF_MARTYRDOM"} } },
+
+      ---------------------------------------------------------------- BASELINE filler
+      -- minPct = 40 mirrors Exodin's line and is equally unsourced there; kept identical on purpose.
       { spell = "CONSECRATION", when = { {"resource","MANA", minPct = 40} } },
       { item  = 13, hold = true, label = "Trinket", when = { {"item_ready", 13} } },
       { item  = 14, hold = true, label = "Trinket", when = { {"item_ready", 14} } },

@@ -196,4 +196,278 @@ return {
     { name = "advisor_wrong_soul", souls = { "SOUL_OF_THE_SEALBEARER" }, build = "PALADIN_EXODIN",
       adviseExpected = { soul = "SOUL_OF_THE_EXILE" } },
   },
+
+  -- ---------------------------------------------------------------------------------------------
+  -- PALADIN_WRATHLIKE (ADR-0013). Gate list W1-W5, docs/research/paladin-p8-gather-ret.md
+  -- "PALADIN_WRATHLIKE" section. Per ADR-0013 §4 the floor is now "dungeon blues with the build's
+  -- runes engraved" -- there is no "blues_no_runes" scenario here; CRUSADER_STRIKE/DIVINE_STORM are
+  -- rune-taught abilities and every scenario below leaves them at FakeState's default `usable = true`
+  -- (nil usableSet), which is what "engraved" means in this fixture -- only the retired-baseline
+  -- scenarios ever forced them to `false`.
+  --
+  -- Entries walked top-to-bottom against Elmira/Classes/Paladin.lua's PALADIN_WRATHLIKE (15 lines):
+  --   1 SEAL_OF_MARTYRDOM "Seal up" (no_seal)
+  --   2 AVENGING_WRATH "Burst" (buff VENGEANCE_BUFF, any(HOLY_POWER_BUFF>=3, not T3.5 2-set))
+  --   3 AURA_MASTERY "with AW" (buff AVENGING_WRATH_BUFF)
+  --   4 JUDGEMENT "Draconic 2p" -- W3 (bonus JUDGEMENT_NO_CONSUME)
+  --   5 JUDGEMENT "Seal expiring" (seal + buff maxRemaining 1.5)
+  --   6 DIVINE_STORM "3 HP" -- W4 (buff HOLY_POWER_BUFF>=3 + bonus HOLY_POWER_CONSUME)
+  --   7 CONSECRATION "AoE, no T3.5" -- W5 (not T3.5 2-set, enemies>=3, mana>=40%)
+  --   8 EXORCISM "Exile: Exorcism first" -- W1 (bonus EXORCISM_DAMAGE_SOUL)
+  --   9 CRUSADER_STRIKE (baseline, unlabelled) -- W2
+  --  10 EXORCISM (baseline, unlabelled) -- W2
+  --  11 DIVINE_STORM (baseline, unlabelled)
+  --  12 JUDGEMENT "Filler (then reseal)" (seal)
+  --  13 CONSECRATION (baseline, unlabelled; mana>=40%)
+  --  14 item 13 "Trinket" (item_ready 13)
+  --  15 item 14 "Trinket" (item_ready 14)
+  -- Ambiguous keys (more than one entry can produce them): JUDGEMENT x3, EXORCISM x2, DIVINE_STORM
+  -- x2, CONSECRATION x2 -- every scenario below that touches one of those carries `expectLabels`.
+  --
+  -- Both AVENGING_WRATH and AURA_MASTERY carry no `cooldown` in Data/Spells.lua, so Simulation's
+  -- fallback (`nominal <= 0 -> entry.cooldownSecs -> one time step`) gives them a synthetic ~1-GCD
+  -- "cooldown" in the PREVIEW only -- the real adapter would supply their true (multi-minute)
+  -- cooldown via state:baseCooldown()/GetSpellCooldown in game. AVENGING_WRATH's own gating buff
+  -- (VENGEANCE_BUFF) is `proc = true`, so Schema's proc-suppression rule ("procs are unpredictable;
+  -- absent in the future", Core/Schema.lua C.buff) keeps it from ever reappearing at a simulated
+  -- t>0 regardless of that synthetic cooldown. AURA_MASTERY's gating buff (AVENGING_WRATH_BUFF) is
+  -- NOT a proc, so it is NOT suppressed that way -- see `aura_mastery_only` below for how this
+  -- fixture avoids relying on the exact-boundary coincidence that would otherwise make it reappear.
+  -- This is a pre-existing Data gap shared with PALADIN_EXODIN's identical two entries, not something
+  -- introduced here or specific to Wrath-like -- flagged in the task report, not fixed (not this
+  -- fixture's build to edit).
+  PALADIN_WRATHLIKE = {
+    ---------------------------------------------------------------- W2: the baseline order
+    -- Runes engraved (default `usable`), no sets, no soul, seal up with 25s remaining: nothing gated
+    -- fires, so the list falls through to the W2 baseline: Crusader Strike, then Exorcism, then the
+    -- plain Divine Storm line -- proving that last line IS reachable at this gear point (see the task
+    -- report on whether it is reachable at any gear point at all).
+    -- Labels: entry 8 (EXORCISM "Exile: Exorcism first") needs bonus EXORCISM_DAMAGE_SOUL, which no
+    -- soul here grants, so slot 2's EXORCISM must be entry 10 (unlabelled). Entry 6 ("3 HP") needs a
+    -- HOLY_POWER_BUFF stack this scenario never sets, so slot 3's DIVINE_STORM must be entry 11
+    -- (unlabelled).
+    { name = "runes_blues", sets = {}, seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "CRUSADER_STRIKE", "EXORCISM", "DIVINE_STORM" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- W1: soul flips the order
+    -- Soul of the Exile only (no set): grants EXORCISM_DAMAGE_SOUL, which is exactly entry 8's gate,
+    -- moving Exorcism above Crusader Strike -- "by effect, not by item" (the entry gates on the
+    -- bonus, never on which soul is worn).
+    -- Labels: slot 1 must be entry 8 ("Exile: Exorcism first"), not entry 10 -- entry 8 is earlier in
+    -- the list and its bonus now passes. Slot 3's DIVINE_STORM has no HOLY_POWER_CONSUME source here
+    -- (0 set pieces), so it is entry 11 (unlabelled), same reasoning as runes_blues.
+    { name = "exile_soul", sets = {}, souls = { "SOUL_OF_THE_EXILE" },
+      seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      bonusExpected = { EXORCISM_DAMAGE_SOUL = true },
+      expect = { "EXORCISM", "CRUSADER_STRIKE", "DIVINE_STORM" },
+      expectLabels = { "Exile: Exorcism first", false, false } },
+
+    -- Soul of the Retributor grants CRUSADER_STRIKE_150, a bonus no PALADIN_WRATHLIKE entry gates on
+    -- (unlike PALADIN_T25_AVENGERS' Excommunication path, nothing here reacts to it) -- the queue must
+    -- be byte-for-byte the same shape as runes_blues, proving the soul is granted but inert for this
+    -- build. bonusExpected pins down both halves: the soul's own bonus IS true, and the soul this
+    -- build's W1 line actually cares about is NOT.
+    { name = "retributor_soul", sets = {}, souls = { "SOUL_OF_THE_RETRIBUTOR" },
+      seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      bonusExpected = { CRUSADER_STRIKE_150 = true, EXORCISM_DAMAGE_SOUL = false },
+      expect = { "CRUSADER_STRIKE", "EXORCISM", "DIVINE_STORM" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- W3: Draconic 2-set
+    -- Radiant Judgement (T2) 2-set grants JUDGEMENT_NO_CONSUME -> Judgement jumps to slot 1 on
+    -- cooldown, no reseal needed, exactly like Exodin's G1.
+    -- Labels: slot 1 is entry 4 ("Draconic 2p") -- the seal has 25s remaining, well outside entry 5's
+    -- 1.5s window, so it cannot be "Seal expiring". Slot 3's EXORCISM has no EXORCISM_DAMAGE_SOUL
+    -- source (no soul), so it is entry 10 (unlabelled).
+    { name = "t2_2p", sets = { PALADIN_T2_JUDGEMENT = 2 }, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      bonusExpected = { JUDGEMENT_NO_CONSUME = true },
+      expect = { "JUDGEMENT", "CRUSADER_STRIKE", "EXORCISM" },
+      expectLabels = { "Draconic 2p", false, false } },
+
+    ---------------------------------------------------------------- W4 threshold: 2-set grants, doesn't consume
+    -- Inquisition (T3.5) 2-set only: the Holy Power aura exists (3 stacks, set here directly since the
+    -- 2-set is what would apply it), but nothing consumes it -- that needs the 4-set -- so entry 6's
+    -- "3 HP" line never passes bonus("HOLY_POWER_CONSUME") and Divine Storm stays the baseline, below
+    -- Crusader Strike/Exorcism. Also demonstrates that Avenging Wrath's own gate now needs the 3-HP
+    -- branch of its `any` (the "not T3.5 2-set" branch is false here) -- not separately exercised as
+    -- a queue slot in this scenario (no VENGEANCE_BUFF set: entangling that with the Divine Storm
+    -- claim this scenario exists for would prove the wrong thing, exactly as Exodin's own t35_2p
+    -- avoids mixing HOLY_POWER_BUFF into an unrelated burst-cooldown check). See `avenging_wrath_burst`
+    -- below for the "any" gate's other branch.
+    -- Labels: same reasoning as runes_blues -- no bonus source fires anywhere gated, so every slot is
+    -- the unlabelled baseline entry.
+    { name = "t35_2p", sets = { PALADIN_T35_INQUISITION = 2 }, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      bonusExpected = { HOLY_POWER_CONSUME = false },
+      expect = { "CRUSADER_STRIKE", "EXORCISM", "DIVINE_STORM" }, -- HP never consumed -> DS stays baseline
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- W4: 4-set consumes Holy Power
+    -- Inquisition (T3.5) 4-set + 3 Holy Power stacks: Divine Storm's "3 HP" entry now passes both
+    -- halves of its gate and jumps to slot 1, exactly what W4 says is this build's single most
+    -- important line.
+    -- Labels: slot 1 is entry 6 ("3 HP"). Slot 3's EXORCISM has no soul bonus, so it is entry 10.
+    { name = "t35_4p_3hp", sets = { PALADIN_T35_INQUISITION = 4 }, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      bonusExpected = { HOLY_POWER_CONSUME = true },
+      expect = { "DIVINE_STORM", "CRUSADER_STRIKE", "EXORCISM" },
+      expectLabels = { "3 HP", false, false } },
+
+    ---------------------------------------------------------------- Seal expiring outranks the core
+    -- Seal at 1.0s remaining (inside entry 5's 1.5s window): the "Seal expiring" Judgement outranks
+    -- Crusader Strike/Exorcism, same 1.0s boundary Exodin's seal_expiring_no_t2 scenario uses.
+    -- Labels: slot 1 is entry 5, not entry 4 (no T2 2-set) and not entry 12 (entry 5 is earlier in the
+    -- list and its own gate already passes). Slot 3's EXORCISM is entry 10 (no soul bonus).
+    { name = "seal_expiring", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 1.0 } },
+      expect = { "JUDGEMENT", "CRUSADER_STRIKE", "EXORCISM" },
+      expectLabels = { "Seal expiring", false, false } },
+
+    ---------------------------------------------------------------- Full BiS
+    -- Inquisition (T3.5) 6-set (clears the 4-set HOLY_POWER_CONSUME threshold with room to spare) plus
+    -- Soul of the Exile, deliberately exercising W1 and W4 together -- NOT what
+    -- Data/Advice/Paladin.lua's PALADIN_WRATHLIKE.soul rule would recommend absent a T2.5 2-set (its
+    -- fallback is Soul of the Retributor), chosen here because it is the combination that produces a
+    -- shape distinct from every other scenario in this fixture (Exorcism promoted AND Divine Storm
+    -- promoted), which is what a "does this build converge correctly at every gate at once" scenario
+    -- needs to show.
+    -- Labels: slot 1 is entry 6 ("3 HP", earlier in the list than entry 8). Slot 2 is entry 8 ("Exile:
+    -- Exorcism first") -- Divine Storm's own cooldown blocks entry 6 again, and entry 8's bonus still
+    -- passes. Slot 3's CRUSADER_STRIKE is unambiguous (entry 9, the only entry that can produce it).
+    { name = "bis", sets = { PALADIN_T35_INQUISITION = 6 }, souls = { "SOUL_OF_THE_EXILE" },
+      seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      bonusExpected = { HOLY_POWER_CONSUME = true, EXORCISM_DAMAGE_SOUL = true },
+      expect = { "DIVINE_STORM", "EXORCISM", "CRUSADER_STRIKE" },
+      expectLabels = { "3 HP", "Exile: Exorcism first", false } },
+
+    ---------------------------------------------------------------- W5: Consecration promoted, no T3.5
+    -- tests/fake_state.lua's `enemies` field lets this fixture express "3+ enemies" directly (`t.enemies`
+    -- feeds FakeState:enemies() -- see the `enemies` condition in Core/Schema.lua), even though the
+    -- REAL Adapters/Vanilla.lua hardcodes state:enemies() to 1 today (nameplate counting lands at
+    -- M5a) -- so this scenario proves the BUILD's W5 line is wired correctly, not that a live character
+    -- would see it fire before M5a ships. No sets, no soul: not-T3.5-2-set passes, enemies=3 passes,
+    -- mana defaults to 100% (>=40%).
+    -- Labels: slot 1 is entry 7 ("AoE, no T3.5"), not entry 13 -- entry 7 is earlier and its own
+    -- `enemies` gate now passes. Slot 3's EXORCISM is entry 10 (no soul bonus).
+    { name = "no_t35_large_pull", sets = {}, enemies = 3, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "CONSECRATION", "CRUSADER_STRIKE", "EXORCISM" },
+      expectLabels = { "AoE, no T3.5", false, false } },
+
+    ---------------------------------------------------------------- extra: entry 1 itself (no scenario above ever drops the seal)
+    -- Every scenario above keeps a seal active throughout (matching how the fixture's own comments say
+    -- Simulation's virtual state never models a cast consuming the seal aura), which means entry 1
+    -- ("Seal up") is never the first eligible entry anywhere above -- deleting it would change nothing
+    -- any assertion checks. This scenario is the one that actually drops the seal (omits `seal`
+    -- entirely, so state:seal() is nil) so entry 1 fires.
+    -- Labels: slot 1 is entry 1 ("Seal up"). Casting a seal sets Simulation's virtual sealOverride
+    -- (Core/Simulation.lua applyCast: `if entry.data.seal then v.sealOverride = entry.spell end`), so
+    -- the seal reads as active for slots 2-3 even though nothing in `buffs` was ever set for it --
+    -- entry 5 ("Seal expiring") correctly fails at every later slot because SEAL_OF_MARTYRDOM has no
+    -- buff entry (C.buff.make treats an absent buff as `stacks == nil`, which fails before
+    -- `maxRemaining` is even consulted). Slot 3's EXORCISM is entry 10 (no soul bonus).
+    { name = "seal_down", sets = {},
+      expect = { "SEAL_OF_MARTYRDOM", "CRUSADER_STRIKE", "EXORCISM" },
+      expectLabels = { "Seal up", false, false } },
+
+    ---------------------------------------------------------------- extra: entry 2 (Burst) and its `any` branch
+    -- VENGEANCE_BUFF present, no T3.5 2-set (so the `any`'s "not T3.5 2-set" branch is what passes,
+    -- the mirror of t35_2p's HP-branch note above). Avenging Wrath is `hold = true` (does not advance
+    -- Simulation's virtual clock), so slot 2 is evaluated at the same t=0 as slot 1: entry 2 is
+    -- already blocked by its own synthetic 1-GCD cooldown there, but VENGEANCE_BUFF's `proc = true`
+    -- flag would have blocked it again at t>0 regardless (Core/Schema.lua C.buff: procs are suppressed
+    -- for any simulated t>0), so it can never reappear in slot 3 either way -- unlike AURA_MASTERY,
+    -- this entry needs no special handling to stay out of the later slots.
+    -- Labels: slot 1 is entry 2 ("Burst"). Slot 3's EXORCISM is entry 10 (no soul bonus).
+    { name = "avenging_wrath_burst", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 }, VENGEANCE_BUFF = { remaining = 20 } },
+      expect = { "AVENGING_WRATH", "CRUSADER_STRIKE", "EXORCISM" },
+      expectLabels = { "Burst", false, false } },
+
+    ---------------------------------------------------------------- entry 2's OTHER branch: with the T3.5 2-set, Avenging Wrath waits for 3 Holy Power
+    -- Wowhead's opener: "If you are using the Tier 3.5 Inquisition 2-set, resume your normal rotation
+    -- until you build 3x Holy Power", THEN Avenging Wrath. The `any` gate's `not set` branch is false
+    -- here (2 pieces), so the `HOLY_POWER_BUFF min = 3` branch is the only way in. Two Holy Power: held.
+    -- The audit found `min = 3` -> `min = 99` survived the whole suite; this pair pins it.
+    -- Labels: nothing gated fires (2 stacks, no 4-set), so every slot is an unlabelled baseline entry.
+    { name = "t35_2p_burst_held", sets = { PALADIN_T35_INQUISITION = 2 }, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 }, VENGEANCE_BUFF = { remaining = 20 }, HOLY_POWER_BUFF = { stacks = 2 } },
+      expect = { "CRUSADER_STRIKE", "EXORCISM", "DIVINE_STORM" },
+      expectLabels = { false, false, false } },
+    -- Three Holy Power: the hold lifts and Avenging Wrath leads. Divine Storm's "3 HP" entry still
+    -- needs the 4-set (bonus HOLY_POWER_CONSUME), so slots 2-3 stay the unlabelled baseline.
+    { name = "t35_2p_burst_at_3hp", sets = { PALADIN_T35_INQUISITION = 2 }, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 }, VENGEANCE_BUFF = { remaining = 20 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      expect = { "AVENGING_WRATH", "CRUSADER_STRIKE", "EXORCISM" },
+      expectLabels = { "Burst", false, false } },
+
+    ---------------------------------------------------------------- W5's threshold: one T3.5 piece is still "no T3.5"
+    -- The guard is `not set >= 2`. With exactly one piece it must still promote Consecration on a large
+    -- pull; the audit found `min = 2` -> `min = 1` survived because no scenario wore exactly one piece.
+    -- Labels: slot 1 is entry 7 ("AoE, no T3.5"); slots 2-3 are the baseline core.
+    { name = "t35_1p_large_pull", sets = { PALADIN_T35_INQUISITION = 1 }, enemies = 3, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "CONSECRATION", "CRUSADER_STRIKE", "EXORCISM" },
+      expectLabels = { "AoE, no T3.5", false, false } },
+    -- And with two pieces the promotion is gone: Wowhead, "With Tier 3.5 Inquisition gear, Wrath-like
+    -- makes zero changes for the AOE rotation". Slot 3 is the unlabelled baseline Divine Storm.
+    { name = "t35_2p_large_pull", sets = { PALADIN_T35_INQUISITION = 2 }, enemies = 3, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "CRUSADER_STRIKE", "EXORCISM", "DIVINE_STORM" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- extra: entry 3 (with AW) in isolation
+    -- AVENGING_WRATH_BUFF present (simulating "already popped Avenging Wrath") with no VENGEANCE_BUFF,
+    -- so entry 2 never competes. Unlike VENGEANCE_BUFF, AVENGING_WRATH_BUFF carries no `proc = true`,
+    -- so it is NOT suppressed at a simulated t>0 -- combined with AURA_MASTERY's missing `cooldown`
+    -- data (see the section header above), it would read as "ready again" exactly one non-`hold` cast
+    -- later. Every other rotation entry is deliberately silenced here (`usable = false`) so nothing
+    -- ever supplies that intervening non-`hold` cast: Engine.pick finds nothing after slot 1 and
+    -- Simulation.queue truncates, the same legitimate shortening Exodin's
+    -- low_mana_judgement_still_offered scenario exercises, rather than this fixture asserting a
+    -- same-slot "AURA_MASTERY again" result that would only be true of the preview's synthetic
+    -- cooldown and not of anything the build's data actually models.
+    -- Labels: the single slot is entry 3 ("with AW"); AURA_MASTERY is not a key any other entry
+    -- produces, so no ambiguity, but expectLabels is included anyway for the same reason the header
+    -- comment gives -- filling every slot is free once the array exists at all.
+    { name = "aura_mastery_only", sets = {},
+      usable = { AVENGING_WRATH = false, JUDGEMENT = false, CRUSADER_STRIKE = false, EXORCISM = false,
+                 DIVINE_STORM = false, CONSECRATION = false },
+      seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 }, AVENGING_WRATH_BUFF = { remaining = 20 } },
+      expect = { "AURA_MASTERY" },
+      expectLabels = { "with AW" } },
+
+    ---------------------------------------------------------------- extra: entry 12 (Filler) itself
+    -- Mirrors Exodin's fully_geared_judgement_slot1_when_idle: Crusader Strike, Exorcism and Divine
+    -- Storm all on cooldown, no set/soul bonuses, seal up but not expiring, no enemies for the AoE
+    -- line -- everything above entry 12 in the list is ineligible, so the "cast Judgement and
+    -- instantly refresh Seal of Martyrdom" filler becomes reachable. The plain Consecration baseline
+    -- (mana >=40%, still true after Judgement's own cast) fills slot 2; both entries' cooldowns then
+    -- block a slot 3, so the queue legitimately truncates at 2.
+    -- Labels: slot 1 is entry 12 ("Filler (then reseal)"), not entry 4 (no T2 2-set) or entry 5 (seal
+    -- has 25s remaining, outside the 1.5s window). Slot 2's CONSECRATION is entry 13 (unlabelled) --
+    -- entry 7 needs enemies>=3, which this scenario never sets.
+    { name = "judgement_filler_when_idle", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      cooldowns = { CRUSADER_STRIKE = 10, EXORCISM = 10, DIVINE_STORM = 10 },
+      expect = { "JUDGEMENT", "CONSECRATION" },
+      expectLabels = { "Filler (then reseal)", false } },
+
+    ---------------------------------------------------------------- extra: entries 14-15 (trinkets)
+    -- Every rotation ability silenced (`usable = false`) so both trinket slots are reachable; both
+    -- items ready. Slot 1 is item 13 (entry 14, earlier in the list); casting it suppresses that slot
+    -- for the rest of the queue (Simulation's QUEUE_HORIZON), so slot 2 is item 14 (entry 15). Both are
+    -- `hold = true`, so neither advances Simulation's virtual clock, and with everything else silenced
+    -- there is nothing left for slot 3 -- the queue truncates at 2.
+    { name = "trinkets_only", sets = {},
+      usable = { AVENGING_WRATH = false, AURA_MASTERY = false, JUDGEMENT = false, CRUSADER_STRIKE = false,
+                 EXORCISM = false, DIVINE_STORM = false, CONSECRATION = false },
+      seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      items = { [13] = { cooldown = 0 }, [14] = { cooldown = 0 } },
+      expect = { "item:13", "item:14" },
+      expectLabels = { "Trinket", "Trinket" } },
+  },
 }

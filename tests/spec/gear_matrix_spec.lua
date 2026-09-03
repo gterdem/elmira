@@ -82,14 +82,31 @@ describe("gear_scenarios.lua fixture integrity", function()
 end)
 
 -- ---------------------------------------------------------------- the matrix itself
-describe("Gear matrix: PALADIN_EXODIN", function()
-  local Schema, Simulation, Advisor, FakeState, pack, build
+--
+-- One `describe` per (class pack, build) that ships fixture scenarios -- discovered from
+-- discoverClassPacks() and tests/fixtures/gear_scenarios.lua's own keys, never a single hardcoded
+-- build name. Before this, only PALADIN_EXODIN's scenarios ever drove a real Simulation.queue() call:
+-- a fixture entry for any OTHER build satisfied the "every shipped build has a scenario" structural
+-- check above while never actually being run against the engine -- exactly the "looks right, does
+-- nothing" failure this project's own history (docs/04-TESTING.md) warns is its characteristic
+-- defect. helper.classPack has no side effect on shared state (tests/helper.lua: it builds its own
+-- throwaway `ns` table, not `_G.__ELM_NS`), so calling discoverClassPacks() once at spec-file load
+-- time, outside any `before_each`, is safe -- the raw build/spell/set/bonus tables it returns are
+-- plain data, and Schema.compile still runs fresh inside `before_each` for every single scenario.
+local function compileBuild(Schema, raw, ctx)
+  local compiled, errors = Schema.compile(raw, ctx)
+  assert.is_not_nil(compiled, table.concat(Schema.errorLines(errors or {}), "; "))
+  return compiled
+end
 
-  local function compileBuild(raw, ctx)
-    local compiled, errors = Schema.compile(raw, ctx)
-    assert.is_not_nil(compiled, table.concat(Schema.errorLines(errors or {}), "; "))
-    return compiled
-  end
+for _, classPack in ipairs(discoverClassPacks()) do
+  local pack = classPack.data
+  for buildKey, buildRaw in pairs(pack.builds or {}) do
+    local scenarioList = scenarios[buildKey]
+    if scenarioList and #scenarioList > 0 then
+
+describe("Gear matrix: " .. buildKey, function()
+  local Schema, Simulation, Advisor, FakeState, build
 
   -- Builds a FakeState from a scenario table: every scenario field maps 1:1 onto a tests/fake_state.lua
   -- constructor key (sets, souls, seal, buffs, usable, targetType, items, runes, ...), so this is a
@@ -146,11 +163,10 @@ describe("Gear matrix: PALADIN_EXODIN", function()
     Advisor = helper.load("Elmira/Core/Advisor.lua")
     FakeState = dofile("tests/fake_state.lua")
 
-    pack = helper.classPack("Paladin")
-    build = compileBuild(pack.builds.PALADIN_EXODIN, { spells = pack.spells, sets = pack.sets, bonuses = pack.bonuses })
+    build = compileBuild(Schema, buildRaw, { spells = pack.spells, sets = pack.sets, bonuses = pack.bonuses })
   end)
 
-  for _, scenario in ipairs(scenarios.PALADIN_EXODIN) do
+  for _, scenario in ipairs(scenarioList) do
     if scenario.expect then
       -- Ambiguity guard: `queueToNames`/`expect` only compare spell KEYS, and PALADIN_EXODIN has
       -- several keys more than one entry can produce (three JUDGEMENT entries, three CONSECRATION,
@@ -172,7 +188,7 @@ describe("Gear matrix: PALADIN_EXODIN", function()
         if #ambiguous > 0 then
           assert.is_not_nil(scenario.expectLabels, "scenario '" .. scenario.name ..
             "' expect[] includes " .. table.concat(ambiguous, ", ") ..
-            " -- PALADIN_EXODIN has more than one entry that can produce " ..
+            " -- " .. buildKey .. " has more than one entry that can produce " ..
             (#ambiguous > 1 and "each of those keys" or "that key") ..
             "; add expectLabels naming which entry must fire in each slot")
         end
@@ -207,8 +223,8 @@ describe("Gear matrix: PALADIN_EXODIN", function()
 
     if scenario.adviseExpected then
       it(scenario.name .. ": advisor recommendation", function()
-        local advice = pack.advice and pack.advice.PALADIN and pack.advice.PALADIN[scenario.build]
-        assert.is_not_nil(advice, "no Data/Advice/Paladin.lua entry for " .. tostring(scenario.build))
+        local advice = pack.advice and pack.advice[pack.class] and pack.advice[pack.class][scenario.build]
+        assert.is_not_nil(advice, "no advice entry for " .. tostring(scenario.build))
         -- Real Core/Advisor.lua now, not the stand-in that could not evaluate `when`. It goes
         -- through the scenario's actual state, so a gear-conditional soul rule is genuinely
         -- exercised rather than assumed away.
@@ -226,3 +242,7 @@ describe("Gear matrix: PALADIN_EXODIN", function()
     end
   end
 end)
+
+    end
+  end
+end

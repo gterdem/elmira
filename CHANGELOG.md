@@ -1,5 +1,10 @@
 # Changelog
 ## Unreleased
+- **New playstyle: Wrath-like.** The relaxed Retribution build — one seal, a slow two-hander, and a
+  simple priority: Divine Storm at 3 Holy Power once you have the T3.5 4-set, Crusader Strike and
+  Exorcism (your shoulder soul decides which comes first), Judgement as the filler. Sourced from
+  Wowhead's Phase 8 guide, and like every playstyle it adapts to the sets and soul you are actually
+  wearing. The setup window will offer itself once more so you can see it.
 - **The setup window now tells you which runes to engrave, instead of marking them as missing.**
   In Season of Discovery a playstyle is built around its runes, and they cost 1c at the Rune Broker
   in any starting zone — so a rune you have not engraved yet is a quick errand, not a reason the
