@@ -186,7 +186,15 @@ end
 function Display.stats()
   local s = Display.ticker():stats()
   s.renderers = #renderers
+  -- lastBuildKey is only ever set by a RENDER, so it is nil whenever the display is hidden -- which
+  -- is most of a session, and precisely when someone runs `/elm debug perf` to ask why the screen is
+  -- empty. Printing `build=nil` there answered "I have no idea" to a question that has a cheap,
+  -- deterministic answer. Resolving costs a compile and this is a slash command, not the tick.
   s.build = lastBuildKey
+  if not s.build then
+    local _, key, reason = Display.activeBuild()
+    s.build, s.buildReason = key, reason
+  end
   s.visible, s.visibleReason = Display.shouldShow()
   s.mode = (ns.db and ns.db.profile and ns.db.profile.visibility) or ns.Visibility.DEFAULT
   return s

@@ -40,7 +40,11 @@ Interface.CONTRACT = {
 
 -- docs/01 §2: class-specific accessors are optional members guarded by a capability flag, so Core
 -- can ask before calling rather than relying on a nil return. `seal` is the paladin case.
-Interface.CAPABILITIES = { "runes", "setAPI", "swing", "inspect", "nameplates", "engraving", "seal" }
+-- `addonMemory` is a DIAGNOSTIC capability rather than a State one: nothing in the rotation depends
+-- on it, but `/elm debug perf` must be able to say "this client will not tell me" instead of falling
+-- back to the whole-heap figure and calling it Elmira's.
+Interface.CAPABILITIES = { "runes", "setAPI", "swing", "inspect", "nameplates", "engraving", "seal",
+                           "addonMemory" }
 
 -- Checks that `state` implements every contract member as a callable. Both dot-style
 -- (state.now(state)) and colon-style (state:now()) implementations satisfy this, since both put a

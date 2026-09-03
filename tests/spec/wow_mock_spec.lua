@@ -128,6 +128,34 @@ describe("tests/wow_mock (the harness itself)", function()
     end)
   end)
 
+  -- The client only refreshes GetAddOnMemoryUsage's figures on request; a mock that always returned
+  -- the fresh number would let a spec pass whether or not Vanilla.addonMemoryKB() called
+  -- UpdateAddOnMemoryUsage() first, which is the exact bug `/elm debug perf` used to have with the
+  -- whole-heap figure being just as stale in spirit. This proves the mock reproduces the trap.
+  describe("addon memory", function()
+    it("reports a stale reading until UpdateAddOnMemoryUsage() is called", function()
+      mock.addons[1] = { name = "Elmira", memory = 0, pendingMemory = 250 }
+      assert.equal(0, GetAddOnMemoryUsage(1))
+      UpdateAddOnMemoryUsage()
+      assert.equal(250, GetAddOnMemoryUsage(1))
+    end)
+
+    it("exposes the same list through C_AddOns.GetNumAddOns/GetAddOnInfo", function()
+      mock.addons[1] = { name = "Elmira", memory = 10 }
+      mock.addons[2] = { name = "Recount", memory = 20 }
+      assert.equal(2, C_AddOns.GetNumAddOns())
+      assert.equal("Elmira", C_AddOns.GetAddOnInfo(1))
+      assert.equal("Recount", C_AddOns.GetAddOnInfo(2))
+    end)
+
+    it("reset() clears addons set by a previous spec", function()
+      mock.addons[1] = { name = "Leaked", memory = 999 }
+      mock.reset()
+      assert.same({}, mock.addons)
+      assert.equal(0, C_AddOns.GetNumAddOns())
+    end)
+  end)
+
   describe("GetTalentTabInfo", function()
     -- docs/07 §9.8: position 1 is a numeric tab id, points are in position 5. Code written against
     -- the documented name-first shape must fail here, not in game.

@@ -37,6 +37,9 @@ function Vanilla.capabilities()
     -- not a capability -- `runes`/`engraving` were derived from one expression until docs/07 §9.5
     -- showed they genuinely disagree, and this flag was `false` in a file that shipped the wrapper.
     swing = ns.Swing ~= nil and ns.Swing.available() == true,
+    -- Whether the client will report PER-ADDON memory. Classic Era does; a client that does not
+    -- must make `/elm debug perf` say so rather than quietly fall back to the whole-heap number.
+    addonMemory = (UpdateAddOnMemoryUsage or (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage)) ~= nil,
     inspect = false,
     nameplates = false,
     seal = true,               -- paladin seal accessor; class-gated at M5 when other classes land
@@ -60,6 +63,31 @@ function Vanilla.addonVersion()
     version = GetAddOnMetadata(ADDON, "Version")
   end
   return version or "dev"
+end
+
+-- Memory used by the Elmira addon family, in KB, or nil when the client will not say.
+--
+-- `/elm debug perf` asks "is Elmira expensive". `collectgarbage("count")` cannot answer that -- it
+-- reports the whole client's Lua heap, every addon included, so a 300 MB reading says nothing about
+-- us. This is the number that does. Summed across the family rather than the core addon alone,
+-- because the class pack and the integration modules are Elmira's cost too.
+--
+-- nil, never 0, when the API is absent: "we could not tell" and "it is free" must not look alike.
+function Vanilla.addonMemoryKB()
+  local update = UpdateAddOnMemoryUsage or (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage)
+  local usage = GetAddOnMemoryUsage or (C_AddOns and C_AddOns.GetAddOnMemoryUsage)
+  local count = C_AddOns and C_AddOns.GetNumAddOns
+  local info = C_AddOns and C_AddOns.GetAddOnInfo
+  if not (update and usage and count and info) then return nil end
+  -- The figures are a snapshot the client refreshes only on request, so without this every reading
+  -- after the first would be the same stale number.
+  update()
+  local total = 0
+  for i = 1, count() do
+    local name = info(i)
+    if name and name:sub(1, 6) == "Elmira" then total = total + (usage(i) or 0) end
+  end
+  return total
 end
 
 function Vanilla.playerClass()

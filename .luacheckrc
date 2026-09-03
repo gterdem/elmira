@@ -31,6 +31,9 @@ local WOW_API = {
   -- M3b: GetNetStats gives the world-server round trip, which is the reaction lead subtracted from
   -- swing timing. LibStub is named here because Adapters/Swing.lua fetches the swing library.
   "GetNetStats", "LibStub",
+  -- `/elm debug perf`: per-addon memory, so the diagnostic can answer "is ELMIRA expensive" instead
+  -- of reporting the whole client's Lua heap.
+  "UpdateAddOnMemoryUsage", "GetAddOnMemoryUsage",
 }
 
 -- Core is pure Lua: naming a WoW global anywhere under Elmira/Core/ is a lint ERROR, by omission.
@@ -90,6 +93,10 @@ files["tests/"] = {
     "GetTalentTabInfo", "C_Engraving", "UIParent", "UnitAffectingCombat",
     -- M3b: the swing adapter reads GetNetStats and reaches its library through LibStub.
     "GetNetStats",
+    -- `/elm debug perf`: per-addon memory. C_AddOns already covers loadClassPack/addonVersion above;
+    -- this mock also exercises its GetNumAddOns/GetAddOnInfo/UpdateAddOnMemoryUsage/
+    -- GetAddOnMemoryUsage members, plus the bare-global forms of the memory pair.
+    "C_AddOns", "UpdateAddOnMemoryUsage", "GetAddOnMemoryUsage",
     -- init_spec.lua loads the real vendored Ace3 stack (Elmira/Libs/) against Core/Init.lua, the one
     -- file allowed to touch LibStub. These are what those libraries read at file scope or per call.
     "geterrorhandler", "IsLoggedIn", "GetLocale", "SlashCmdList", "hash_SlashCmdList",

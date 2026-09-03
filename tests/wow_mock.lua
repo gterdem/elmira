@@ -53,6 +53,11 @@ local function defaults()
     latency = 0,
     actionInfo = {},           -- [slot] = { kind, id }, e.g. {"spell", 415073} or {"macro", 3}
     macroSpells = {},          -- [macroIndex] = spellID; nil means the macro resolves to nothing
+    -- [i] = { name =, memory =, pendingMemory = }. `memory` is the STALE snapshot GetAddOnMemoryUsage
+    -- reports until UpdateAddOnMemoryUsage() copies `pendingMemory` into it — the client only
+    -- refreshes these figures on request, which is exactly the trap `/elm debug perf` exists to not
+    -- fall into. A spec that never sets `pendingMemory` sees `memory` unchanged either way.
+    addons = {},
   }
 end
 
@@ -254,6 +259,34 @@ end
 -- down, up, lagHome, lagWorld. Only the 4th is ever read: home latency is the chat/realm server and
 -- has nothing to do with when a swing lands.
 function GetNetStats() return 0, 0, 0, M.latency end
+
+-- Per-addon memory (KB), as read by Vanilla.addonMemoryKB. Classic Era exposes these as bare
+-- globals; `C_AddOns.*` below mirrors the same DATA rather than delegating to the bare-global names,
+-- so a spec can nil out the bare globals and prove the adapter's `C_AddOns.*` fallback path works on
+-- its own, not merely by forwarding to a global that test just removed.
+local function updateAddOnMemoryUsage()
+  for _, a in ipairs(M.addons) do
+    if a.pendingMemory ~= nil then a.memory = a.pendingMemory end
+  end
+end
+
+local function getAddOnMemoryUsage(i)
+  local a = M.addons[i]
+  return a and a.memory or 0
+end
+
+function UpdateAddOnMemoryUsage() updateAddOnMemoryUsage() end
+function GetAddOnMemoryUsage(i) return getAddOnMemoryUsage(i) end
+
+C_AddOns = {
+  GetNumAddOns = function() return #M.addons end,
+  GetAddOnInfo = function(i)
+    local a = M.addons[i]
+    return a and a.name or nil
+  end,
+  UpdateAddOnMemoryUsage = function() updateAddOnMemoryUsage() end,
+  GetAddOnMemoryUsage = function(i) return getAddOnMemoryUsage(i) end,
+}
 
 UIParent = {}
 Enum = { PowerType = { Mana = 0, Rage = 1, Energy = 3 } }

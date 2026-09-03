@@ -113,6 +113,36 @@ describe("Display.Driver", function()
     end)
   end)
 
+  -- Display.stats() is what `/elm debug perf` reads. lastBuildKey is only set by a RENDER, so before
+  -- M4b it was nil whenever the display was hidden -- most of a session, and exactly when someone
+  -- runs this to ask why the screen is empty.
+  describe("stats() build resolution", function()
+    it("resolves a build via activeBuild() when nothing has rendered yet, carrying the reason", function()
+      -- No tick() has run: lastBuildKey is unset. ns.API is unset by default (before_each only sets
+      -- ns.db), so the real activeBuild() takes the "no data pack for this class" path.
+      local s = Display.stats()
+      assert.is_nil(s.build)
+      assert.equal("no data pack for this class", s.buildReason)
+    end)
+
+    it("reports the RENDERED build key once a tick has painted, with no buildReason attached", function()
+      assert.equal("rendered", tick())
+      local s = Display.stats()
+      assert.equal("PALADIN_EXODIN", s.build)
+      assert.is_nil(s.buildReason)
+    end)
+
+    it("does not re-resolve via activeBuild() once a render has already set the key", function()
+      assert.equal("rendered", tick())
+      -- A decoy: if stats() called activeBuild() again despite already having a real build key, this
+      -- would leak through instead of the rendered one.
+      Display.activeBuild = function() return {}, "DECOY", "should never be read" end
+      local s = Display.stats()
+      assert.equal("PALADIN_EXODIN", s.build)
+      assert.is_nil(s.buildReason)
+    end)
+  end)
+
   describe("renderer errors", function()
     it("reports the same error once, not on every queue change", function()
       Display.register("broken", function() error("kaboom") end)

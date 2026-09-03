@@ -453,15 +453,31 @@ Slash.register{
       lines[#lines + 1] = "/elm debug cues <n> test-fires one"
       return lines
     elseif sub == "perf" then
-      local lines = { string.format("lua memory: %d KB", math.floor(collectgarbage("count"))) }
+      -- This command exists to answer "is Elmira expensive". It used to open with
+      -- `lua memory: 327094 KB` from collectgarbage("count") -- the WHOLE client's Lua heap, every
+      -- addon included -- which answers a question nobody asked and reads as if Elmira were using
+      -- 300 MB. Elmira's own figure comes first now; the heap total stays, labelled as what it is,
+      -- because it is still the right denominator.
+      local lines = {}
+      local mem = ns.Adapter and ns.Adapter.addonMemoryKB and ns.Adapter.addonMemoryKB()
+      if mem then
+        lines[#lines + 1] = string.format("Elmira memory: %d KB", math.floor(mem))
+      else
+        lines[#lines + 1] = "Elmira memory: could not tell (this client does not report per-addon usage)"
+      end
+      lines[#lines + 1] = string.format("client Lua heap, ALL addons: %d KB",
+        math.floor(collectgarbage("count")))
       if not ns.Display then
         lines[#lines + 1] = "display: not loaded"
         return lines
       end
       local s = ns.Display.stats()
       local total = (s.runs or 0) + (s.skipped or 0)
-      lines[#lines + 1] = string.format("display: %s, build=%s, renderers=%d",
-        ns.Display.isEnabled() and "running" or "stopped", tostring(s.build), s.renderers or 0)
+      lines[#lines + 1] = string.format("display: %s, build=%s%s, renderers=%d",
+        ns.Display.isEnabled() and "running" or "stopped", tostring(s.build),
+        -- Only present when the build was resolved rather than rendered, i.e. nothing is on screen.
+        -- "which build WOULD run, and why that one" is the actual question behind an empty display.
+        s.buildReason and (" (" .. s.buildReason .. ")") or "", s.renderers or 0)
       -- Recomputes vs ticks: at 10 Hz against a 60 fps client this should sit near 83% skipped.
       -- A low number here means the throttle is not doing its job, which is the failure this
       -- command exists to make visible rather than something a player discovers as frame drops.

@@ -207,6 +207,62 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       mock.engravingEnabled = true
       assert.is_true(Vanilla.capabilities().engraving)
     end)
+
+    -- addonMemory follows the API's REAL presence, exactly like `swing` above (docs/07's lesson:
+    -- a capability that cannot vary is not a capability).
+    it("reports addonMemory from the library, not from a constant", function()
+      assert.is_true(Vanilla.capabilities().addonMemory, "the mock provides UpdateAddOnMemoryUsage")
+      -- Both forms have to go: the adapter falls back from the bare global to C_AddOns.*, so leaving
+      -- either one in place would still read as "available" and prove nothing.
+      local savedGlobal, savedCAddOns = _G.UpdateAddOnMemoryUsage, C_AddOns.UpdateAddOnMemoryUsage
+      _G.UpdateAddOnMemoryUsage, C_AddOns.UpdateAddOnMemoryUsage = nil, nil
+      assert.is_false(Vanilla.capabilities().addonMemory)
+      _G.UpdateAddOnMemoryUsage, C_AddOns.UpdateAddOnMemoryUsage = savedGlobal, savedCAddOns
+      assert.is_true(Vanilla.capabilities().addonMemory)
+    end)
+  end)
+
+  -- ============================================================ 2a. addonMemoryKB()
+  describe("addonMemoryKB() — Elmira's own memory, not the whole client's Lua heap (`/elm debug perf`)", function()
+    it("sums only addons whose name starts with 'Elmira', ignoring every other addon", function()
+      mock.addons[1] = { name = "Elmira", memory = 100 }
+      mock.addons[2] = { name = "Elmira_Paladin", memory = 50 }
+      mock.addons[3] = { name = "Elmira_ElvUI", memory = 20 }
+      mock.addons[4] = { name = "Recount", memory = 99999 }
+      mock.addons[5] = { name = "ElvUI", memory = 5000 }
+      assert.equal(170, Vanilla.addonMemoryKB())
+    end)
+
+    it("calls UpdateAddOnMemoryUsage BEFORE reading, so the figures are not stale", function()
+      -- Left at the stale default (0) until UpdateAddOnMemoryUsage() copies pendingMemory in — if
+      -- addonMemoryKB() summed without refreshing first, this would read back 0, not 250.
+      mock.addons[1] = { name = "Elmira", memory = 0, pendingMemory = 250 }
+      assert.equal(250, Vanilla.addonMemoryKB())
+    end)
+
+    it("returns nil, never 0, when the client cannot report per-addon usage (GetNumAddOns absent)", function()
+      mock.addons[1] = { name = "Elmira", memory = 100 }
+      local saved = C_AddOns.GetNumAddOns
+      C_AddOns.GetNumAddOns = nil
+      assert.is_nil(Vanilla.addonMemoryKB())
+      C_AddOns.GetNumAddOns = saved
+    end)
+
+    it("returns nil, never 0, when GetAddOnMemoryUsage is absent in every form", function()
+      mock.addons[1] = { name = "Elmira", memory = 100 }
+      local savedGlobal, savedCAddOns = _G.GetAddOnMemoryUsage, C_AddOns.GetAddOnMemoryUsage
+      _G.GetAddOnMemoryUsage, C_AddOns.GetAddOnMemoryUsage = nil, nil
+      assert.is_nil(Vanilla.addonMemoryKB())
+      _G.GetAddOnMemoryUsage, C_AddOns.GetAddOnMemoryUsage = savedGlobal, savedCAddOns
+    end)
+
+    it("works via the C_AddOns.* forms when the bare globals are absent", function()
+      mock.addons[1] = { name = "Elmira", memory = 0, pendingMemory = 42 }
+      local savedUpdate, savedUsage = _G.UpdateAddOnMemoryUsage, _G.GetAddOnMemoryUsage
+      _G.UpdateAddOnMemoryUsage, _G.GetAddOnMemoryUsage = nil, nil
+      assert.equal(42, Vanilla.addonMemoryKB())
+      _G.UpdateAddOnMemoryUsage, _G.GetAddOnMemoryUsage = savedUpdate, savedUsage
+    end)
   end)
 
   -- ============================================================ 3. powerCost()

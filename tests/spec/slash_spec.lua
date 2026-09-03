@@ -41,6 +41,75 @@ describe("Core.Slash", function()
     assert.is_true(#lines >= 1)
   end)
 
+  -- This command exists to answer "is Elmira expensive" — it used to open with the WHOLE client's
+  -- Lua heap under a bare "lua memory:" label, which read as if Elmira itself used 300 MB.
+  describe("'debug perf' memory reporting", function()
+    it("prints Elmira's own figure first when the adapter reports one", function()
+      local ns = helper.ns()
+      ns.Adapter = { addonMemoryKB = function() return 1234 end }
+      local lines = Slash.run("debug perf")
+      assert.is_true(hasLineMatching(lines, "^Elmira memory: 1234 KB$"))
+    end)
+
+    it("says it could not tell when the adapter cannot report per-addon usage", function()
+      local ns = helper.ns()
+      ns.Adapter = { addonMemoryKB = function() return nil end }
+      local lines = Slash.run("debug perf")
+      assert.is_true(hasLineMatching(lines,
+        "^Elmira memory: could not tell %(this client does not report per%-addon usage%)$"))
+    end)
+
+    it("says it could not tell when there is no adapter loaded at all", function()
+      local lines = Slash.run("debug perf")
+      assert.is_true(hasLineMatching(lines, "^Elmira memory: could not tell"))
+    end)
+
+    it("no longer prints the old bare 'lua memory:' line", function()
+      local ns = helper.ns()
+      ns.Adapter = { addonMemoryKB = function() return 1234 end }
+      local lines = Slash.run("debug perf")
+      assert.is_false(hasLineMatching(lines, "^lua memory:"))
+    end)
+
+    it("labels the heap total as covering ALL addons, not just Elmira's", function()
+      local lines = Slash.run("debug perf")
+      assert.is_true(hasLineMatching(lines, "^client Lua heap, ALL addons: %d+ KB$"))
+    end)
+  end)
+
+  -- Display.stats().build falls back to a resolved (not rendered) build when the display is hidden;
+  -- the reason belongs in the output only in that resolved case, never alongside a real render.
+  describe("'debug perf' build reason", function()
+    it("shows the reason in parentheses when the build was resolved, not rendered", function()
+      local ns = helper.ns()
+      ns.Display = {
+        isEnabled = function() return true end,
+        stats = function()
+          return { build = "PALADIN_EXODIN", buildReason = "no data pack for this class",
+                    renderers = 0, runs = 0, skipped = 0, visible = true, visibleReason = "ok",
+                    mode = "always" }
+        end,
+      }
+      local lines = Slash.run("debug perf")
+      assert.is_true(hasLineMatching(lines, "build=PALADIN_EXODIN %(no data pack for this class%)"))
+    end)
+
+    it("shows no parenthetical when the build key came from a real render", function()
+      local ns = helper.ns()
+      ns.Display = {
+        isEnabled = function() return true end,
+        stats = function()
+          return { build = "PALADIN_EXODIN", buildReason = nil,
+                    renderers = 1, runs = 4, skipped = 20, visible = true, visibleReason = "ok",
+                    mode = "always" }
+        end,
+      }
+      local lines = Slash.run("debug perf")
+      assert.is_true(hasLineMatching(lines, "build=PALADIN_EXODIN, renderers=1"))
+      assert.is_false(hasLineMatching(lines, "build=PALADIN_EXODIN %("))
+    end)
+  end)
+
   it("'debug bars' reports zero providers when none are registered", function()
     local lines = Slash.run("debug bars")
     assert.is_true(hasLineMatching(lines, "bar providers: 0"))
