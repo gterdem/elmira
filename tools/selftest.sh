@@ -47,7 +47,7 @@ check() { # check <name> <expected> <actual>
 
 echo "selftest: mutation gate, sandbox $SANDBOX"
 
-# Ground truth, with the fast path warm. Everything after this must agree with it.
+# Ground truth. Everything after this must agree with it.
 verdict >/dev/null 2>&1
 BASE_VERDICT="$(survivors)"
 [ -n "$BASE_VERDICT" ] || { echo "  FAIL  could not establish a baseline verdict"; exit 1; }
@@ -61,7 +61,7 @@ INJECTED="$(verdict | grep -cE '^  Elmira.*SELFTEST_UNPROTECTED|SELFTEST_UNPROTE
 check "detects an injected unprotected line" "1" "$([ "$INJECTED" -ge 1 ] && echo 1 || echo 0)"
 cp -p "$SANDBOX/st.bak" "$TARGET"
 
-# 5. The equivalent-mutant hatch must demand a written reason. A bare marker, or the phrase inside a
+# 2. The equivalent-mutant hatch must demand a written reason. A bare marker, or the phrase inside a
 #    string literal, previously exempted a line with no justification at all.
 verdict >/dev/null 2>&1
 LINE="$(grep -n '^local' "$TARGET" | head -1 | cut -d: -f1)"
@@ -74,12 +74,24 @@ sed -i "${LINE}s|\$| -- mutants: equivalent because the reason goes here|" "$TAR
 check "'mutants: equivalent <reason>' is reported as exempted" "1" \
   "$(verdict | grep -c "marked 'mutants: equivalent'" | head -1)"
 # The message alone is not evidence: without the `continue` the line is counted as exempt AND still
-# mutated, so the hatch silently stops working while the output still says it worked.
+# mutated, so the hatch silently stops working while the output still says it worked. This must run
+# while the legitimate marker is still applied.
 check "an exempted line is removed from the testable count" \
   "$((BEFORE_TESTABLE - 1))" "$(survivors | cut -d/ -f2)"
 cp -p "$SANDBOX/st.bak" "$TARGET"
 
-# 6. An already-red suite must abort. Otherwise every mutation "fails" and every line looks protected.
+# 2b. ...and the phrase must not exempt a line when it is INSIDE a Lua string literal. mutants.sh
+#     strips quoted spans before matching for exactly this reason, and the comment above that sed
+#     claimed this case was covered while nothing tested it: deleting the strip left all twelve
+#     cases green. A marker someone can smuggle into a string is not an argument anyone made.
+#     Asserted as an unchanged TESTABLE COUNT, not as a message: an exemption that silently happened
+#     is precisely what this case exists to catch.
+sed -i "${LINE}s|\$| local _SELFTEST_SPOOF = \"-- mutants: equivalent totally legit\"|" "$TARGET"
+check "a 'mutants: equivalent <reason>' inside a STRING does NOT exempt" \
+  "$BEFORE_TESTABLE" "$(survivors | cut -d/ -f2)"
+cp -p "$SANDBOX/st.bak" "$TARGET"
+
+# 3. An already-red suite must abort. Otherwise every mutation "fails" and every line looks protected.
 cp -p tests/spec/visibility_spec.lua "$SANDBOX/st.spec.bak"
 printf '\ndescribe("selftest", function() it("red", function() assert.is_true(false) end) end)\n' \
   >> tests/spec/visibility_spec.lua
@@ -90,7 +102,7 @@ if FILES="$TARGET" JOBS=4 ./tools/mutants.sh >/dev/null 2>&1; then STATUS=0; els
 check "a red baseline exits 2, not 0" "2" "$STATUS"
 cp -p "$SANDBOX/st.spec.bak" tests/spec/visibility_spec.lua
 
-# 7. The tree must come back byte-identical. Checking only for "-- MUTANT" residue could not fail,
+# 4. The tree must come back byte-identical. Checking only for "-- MUTANT" residue could not fail,
 #    because mutants.sh edits its own copy under $TMPDIR and never writes here at all -- so it would
 #    have passed even if the script had corrupted every source file in some other way.
 BEFORE_SUM="$(find Elmira* tests -name '*.lua' -exec cksum {} + | sort | cksum)"
@@ -98,7 +110,7 @@ verdict >/dev/null 2>&1
 check "leaves the tree byte-identical" "$BEFORE_SUM" \
   "$(find Elmira* tests -name '*.lua' -exec cksum {} + | sort | cksum)"
 
-# 8. The EXIT STATUS is the only thing CI consumes. Every case above reads stdout, so flipping
+# 5. The EXIT STATUS is the only thing CI consumes. Every case above reads stdout, so flipping
 #    `exit 1` to `exit 0` disarmed the gate completely while this file still reported success --
 #    survivors printed, build green. Assert both directions: survivors must fail the run, and a run
 #    with nothing to check must not.
@@ -108,11 +120,19 @@ if FILES="$TARGET" JOBS=4 ./tools/mutants.sh >/dev/null 2>&1; then STATUS=0; els
 check "a survivor makes the gate EXIT NONZERO" "1" "$STATUS"
 cp -p "$SANDBOX/st.bak" "$TARGET"
 
+# `FILES=""` falls through to `git diff $BASE`, so "nothing to check" is a property of the TREE, not
+# of the gate. Run from a work-in-progress checkout this case failed spuriously -- the sandbox is a
+# copy of the developer's tree, so the diff was the whole feature branch. A self-test that depends on
+# its environment is the thing this file exists to prevent, so make the diff empty by construction:
+# the sandbox is a throwaway copy, and committing it costs nothing.
+git -C "$SANDBOX" add -A >/dev/null 2>&1
+git -C "$SANDBOX" -c user.email=selftest@invalid -c user.name=selftest \
+  commit -qm "selftest snapshot" >/dev/null 2>&1 || true
 if FILES="" BASE=HEAD JOBS=4 ./tools/mutants.sh >/dev/null 2>&1; then STATUS=0; else STATUS=1; fi
 check "a run with nothing to check exits ZERO" "0" "$STATUS"
 
 
-# 8. tools/coverage.sh is a gate too, and until now nothing tested it: nulling its shipped-file
+# 6. tools/coverage.sh is a gate too, and until now nothing tested it: nulling its shipped-file
 #    enumeration made the loop body never run, so it printed "every shipped file is exercised" and
 #    exited 0 having checked nothing. Prove it actually notices a file no spec loads.
 # toc_spec requires every Core/Adapters/Display/Options source to be listed in the TOC, so a bare
@@ -131,13 +151,55 @@ check "coverage names it" "1" \
   "$(./tools/coverage.sh 2>&1 | grep -c 'Unreached.lua.*NEVER LOADED')"
 rmTempSource Unreached
 
-# 9. A brand-new file is untracked, so `git diff` cannot see it -- and it is precisely where untested
+# 7. A brand-new file is untracked, so `git diff` cannot see it -- and it is precisely where untested
 #    code arrives. That target path had no case, so disabling it left every gate self-test green.
 addTempSource BrandNew
 sed -i 's|^local T = 1$|local BRANDNEW = 1|' Elmira/Core/BrandNew.lua
 check "an untracked new file is mutated, not skipped" "1" \
   "$(BASE=HEAD JOBS=4 ./tools/mutants.sh 2>&1 | grep -c 'BRANDNEW')"
 rmTempSource BrandNew
+
+# 8. `make lint` carries two gates that no spec and no mutation run can reach: the `UNVERIFIED(`
+#    grep and .luacheckrc's per-directory `read_globals`. tools/mutants.sh only mutates
+#    Elmira*/**/*.lua, so neither the Makefile nor .luacheckrc is ever mutated, and nothing else
+#    reads them. An audit found all three lines below survive deletion -- correct, load-bearing, and
+#    unprotected. Shipped class data moved into Elmira/Classes/ at M4b and these are what stop that
+#    move from silently un-arming the ID policy.
+CLASSFILE="Elmira/Classes/Paladin.lua"
+cp -p "$CLASSFILE" "$SANDBOX/st.class.bak"
+
+# PRECONDITION. Every case below injects a defect and expects `make lint` to fail. If lint is ALREADY
+# failing for an unrelated reason, all three pass while testing nothing -- which is exactly what
+# happened when a spec of ours shipped a shadowing warning: three green cases, zero coverage. So
+# assert the starting state, and assert each case's SPECIFIC message rather than just a nonzero exit.
+make lint >/dev/null 2>&1
+check "lint is green before the gate cases run (else they pass vacuously)" "0" "$?"
+
+printf '\n-- UNVERIFIED(12345)\n' >> "$CLASSFILE"
+check "the UNVERIFIED gate scans Elmira/Classes/" "1" \
+  "$(make lint 2>&1 | grep -c 'ERROR: unverified IDs remain')"
+cp -p "$SANDBOX/st.class.bak" "$CLASSFILE"
+
+# Hard rule 3: Elmira/Classes/ is inside core now, so a WoW API call there is as wrong as one in
+# Core/. .luacheckrc grants that directory `read_globals = {}`; widening it to WOW_API leaves lint
+# green, so the enforcement half of that entry needs its own case.
+printf '\nlocal _UNUSED_SELFTEST = GetSpellCooldown\n' >> "$CLASSFILE"
+check "luacheck forbids WoW globals in Elmira/Classes/ (hard rule 3)" "1" \
+  "$(make lint 2>&1 | grep -c 'accessing undefined variable .GetSpellCooldown')"
+cp -p "$SANDBOX/st.class.bak" "$CLASSFILE"
+
+# The directory guard exists so the UNVERIFIED grep fails LOUDLY if its target is ever renamed away,
+# rather than passing green while scanning nothing -- which is what it did before M4b moved the data.
+# Stashed OUTSIDE the sandbox: $SANDBOX is the working directory being linted, so parking the folder
+# anywhere inside it just moves the same .lua files to a path .luacheckrc has no entry for. luacheck
+# then fails on line length before make ever reaches the guard, and the case passes on the wrong
+# error -- which is what it did until the assertion started naming the message it wanted.
+CLASSSTASH="$(mktemp -d)"
+mv Elmira/Classes "$CLASSSTASH/Classes"
+check "lint fails loudly if Elmira/Classes/ disappears" "1" \
+  "$(make lint 2>&1 | grep -c 'the UNVERIFIED gate is scanning nothing')"
+mv "$CLASSSTASH/Classes" Elmira/Classes
+rmdir "$CLASSSTASH"
 
 echo
 if [ "$FAILED" -gt 0 ]; then echo "selftest: $FAILED case(s) FAILED"; exit 1; fi

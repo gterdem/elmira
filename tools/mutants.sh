@@ -106,19 +106,11 @@ filter_lines() {
   done
 }
 
-# --- spec selection ------------------------------------------------------------------------------
-# Cost here is (lines changed) x (suite duration), so it is the one thing in this repo that gets worse
-# as the suite grows. Two facts make that avoidable: a mutation in file X can only be observed by a
-# spec that EXECUTES file X, and one spec file runs ~20x faster than all of them.
-#
-# So: run only the specs that load the mutated file, and stop at the first failure. That settles the
-# common case -- a caught mutation -- in ~0.02s instead of ~0.47s.
-#
-# The verdict is never weakened by this. A fast-path FAILURE is a real test failing, so "caught" is
-# always true. A fast-path PASS is only a suspicion, because a spec can read a source file as TEXT
-# without executing it (toc_spec, data_sourcing_spec do exactly that) and coverage cannot see that
-# dependency. So every suspected survivor is re-checked against the WHOLE suite before it is
-# reported. The output is therefore identical to running everything, at a fraction of the cost.
+# --- no spec selection, deliberately -----------------------------------------------------------
+# Running only the specs that load the mutated file was built and removed the same day: it saved 1.6s
+# on 16 cores and cost 89 lines and three vacuous-pass defects. ADR-0012 records why, and this comment
+# exists so the next reader reaches the ADR before rebuilding it. Every mutation runs the whole suite.
+
 # --- worker -----------------------------------------------------------------------------------
 # Each worker owns a private copy of the tree, so mutations never race and never touch $ROOT.
 run_worker() {
