@@ -22,6 +22,15 @@ local LABELS = {
   combat = "In combat only",
 }
 
+-- Screen edges, named for humans. Overlay.EDGES is the authority on which ones exist; this only
+-- names them, so adding an edge there cannot leave an unnamed entry here.
+local EDGE_LABELS = { left = "Left", right = "Right", top = "Top", bottom = "Bottom" }
+local function edgeChoices()
+  local out = {}
+  for _, e in ipairs((ns.Overlay and ns.Overlay.EDGES) or {}) do out[e] = L[EDGE_LABELS[e] or e] end
+  return out
+end
+
 local function profile()
   return ns.db and ns.db.profile
 end
@@ -62,27 +71,66 @@ local function overlayGroup()
         set = function() end,
       }
     else
+      -- One inline group per cue rather than a bare toggle: the owner asked for colour and edge to be
+      -- adjustable on every cue, and a flare you cannot aim or recolour is one you turn off. The
+      -- appearance controls are greyed out until the cue is ON, because the stored record only exists
+      -- while it is (Overlay.SetOption refuses to write otherwise).
+      local function enabled() return (ns.Overlay.isEnabled(cue)) end
+      local function off() return not enabled() end
+      -- Every appearance change previews itself. Reading a hex value tells you nothing about whether
+      -- you will catch it in peripheral vision, which is the only thing this setting is for.
+      local function preview()
+        ns.Overlay.Flare(ns.Overlay.GetOption(cue, "edge"), ns.Overlay.GetOption(cue, "color"),
+                         ns.Overlay.GetOption(cue, "intensity"))
+      end
+
       args["cue" .. i] = {
-        type = "toggle", order = i, width = "full",
-        name = label,
-        desc = (cue.edge and (L["Edge: "] .. cue.edge)) or nil,
-        get = function() return (ns.Overlay.isEnabled(cue)) end,
-        set = function(_, v)
-          ns.Overlay.SetEnabled(cue, v)
-          -- The driver only repaints when the QUEUE changes, and turning a cue on changes neither
-          -- the queue nor the build. Without this the newly enabled cue waits for the rotation to
-          -- move before it is ever evaluated — and if its spell is stuck at the top (an Exorcism
-          -- that is not on any bar, say) that never happens and the cue looks dead. Forcing the
-          -- repaint is what makes the reset inside SetEnabled actually reach the renderer.
-          if ns.Display then ns.Display.refresh() end
-          -- Show it once on enable. A cue the user just turned on and cannot picture is a cue they
-          -- turn straight back off.
-          if v then
-            local _, setting = ns.Overlay.isEnabled(cue)
-            ns.Overlay.Flare(setting and setting.edge, setting and setting.color,
-                             setting and setting.intensity)
-          end
-        end,
+        type = "group", inline = true, order = i, name = label,
+        args = {
+          enabled = {
+            type = "toggle", order = 1, width = "full", name = L["Enabled"],
+            desc = cue.reason,
+            get = enabled,
+            set = function(_, v)
+              ns.Overlay.SetEnabled(cue, v)
+              -- The driver only repaints when the QUEUE changes, and turning a cue on changes neither
+              -- the queue nor the build. Without this the newly enabled cue waits for the rotation to
+              -- move before it is ever evaluated — and if its spell is stuck at the top (an Exorcism
+              -- that is not on any bar, say) that never happens and the cue looks dead. Forcing the
+              -- repaint is what makes the reset inside SetEnabled actually reach the renderer.
+              if ns.Display then ns.Display.refresh() end
+              -- Show it once on enable. A cue the user just turned on and cannot picture is a cue they
+              -- turn straight back off.
+              if v then preview() end
+            end,
+          },
+          color = {
+            type = "color", order = 2, name = L["Colour"], hasAlpha = false,
+            disabled = off,
+            get = function()
+              local c = ns.Overlay.GetOption(cue, "color") or {}
+              return c[1] or 1, c[2] or 1, c[3] or 1
+            end,
+            set = function(_, r, g, b)
+              -- Only preview what was actually stored. Flaring after a refused write shows the user
+              -- a change that did not happen.
+              if ns.Overlay.SetOption(cue, "color", { r, g, b }) then preview() end
+            end,
+          },
+          edge = {
+            type = "select", order = 3, name = L["Edge"],
+            desc = L["Which screen edge this cue flares on."],
+            values = edgeChoices, disabled = off,
+            get = function() return ns.Overlay.GetOption(cue, "edge") end,
+            set = function(_, v) if ns.Overlay.SetOption(cue, "edge", v) then preview() end end,
+          },
+          intensity = {
+            type = "range", order = 4, name = L["Intensity"],
+            min = 0.05, max = 1.0, step = 0.05, isPercent = true, disabled = off,
+            get = function() return ns.Overlay.GetOption(cue, "intensity") end,
+            set = function(_, v) if ns.Overlay.SetOption(cue, "intensity", v) then preview() end end,
+          },
+        },
       }
     end
   end

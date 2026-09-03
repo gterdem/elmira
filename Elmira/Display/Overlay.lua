@@ -22,6 +22,10 @@ local lastNow                -- the previous now-slot spell, so we can detect "c
 local lastKey                -- the build the above was observed under; a switch invalidates it
 local lastFired = {}         -- cue id -> when it last flared, for `/elm debug cues`
 
+-- The edges a flare can use. Named here rather than in Options because Overlay is what can actually
+-- draw them; Options only decides what to call them.
+Overlay.EDGES = { "left", "right", "top", "bottom" }
+
 local MEDIA = "Interface\\AddOns\\Elmira\\media\\"
 local EDGE_THICKNESS = 96
 
@@ -102,6 +106,14 @@ local function cueID(cue)
   return (cue.event or "?") .. ":" .. tostring(cue.spell or cue.key or cue.index)
 end
 
+-- An edge Flare cannot draw makes the cue silently never appear -- the exact failure this module has
+-- just been fixed for. The options dropdown cannot produce one, but a BUILD's cue definition can
+-- (`cue.edge` is data a data pack author writes), and so can an opts.edge passed to SetEnabled.
+local function validEdge(v)
+  for _, e in ipairs(Overlay.EDGES) do if e == v then return true end end
+  return false -- mutants: equivalent — nil is falsy and every caller uses this only as a condition
+end
+
 function Overlay.isEnabled(cue)
   local cues = profile().overlay and profile().overlay.cues or {}
   local setting = cues[cueID(cue)]
@@ -130,11 +142,50 @@ function Overlay.SetEnabled(cue, enabled, opts)
   local setting = p.overlay.cues[id] or {}
   setting.enabled = true
   setting.color = (opts and opts.color) or setting.color or cue.color
-  setting.edge = (opts and opts.edge) or setting.edge or cue.edge or "left"
+  -- Same validation as SetOption, because this is the path a bad edge actually arrives on: a build
+  -- shipping `edge = "middle"` would otherwise be stored verbatim and the cue would never fire.
+  -- Falling back to a drawable edge is better than a cue that is silently dead.
+  local edge = (opts and opts.edge) or setting.edge or cue.edge or "left"
+  setting.edge = validEdge(edge) and edge or "left"
   setting.intensity = (opts and opts.intensity) or setting.intensity or 0.5
   setting.sound = (opts and opts.sound) or setting.sound
   p.overlay.cues[id] = setting
   return true
+end
+
+-- Per-cue appearance, once the cue is ON. Deliberately refuses to write for a cue that is off:
+-- opting out DELETES the whole record (absent means "never asked for", ADR-0009), so storing a colour
+-- for an off cue would resurrect it as a half-record that isEnabled() reports false for and the next
+-- SetEnabled would overwrite anyway. The options screen greys these controls out to match.
+local SETTABLE = { color = true, edge = true, intensity = true, sound = true }
+
+function Overlay.SetOption(cue, key, value)
+  if not SETTABLE[key] then return false end
+  if key == "edge" and not validEdge(value) then return false end
+  local cues = profile().overlay and profile().overlay.cues
+  local setting = cues and cues[cueID(cue)]
+  if not setting then return false end
+  setting[key] = value
+  return true
+end
+
+-- The stored value if the user has set one, otherwise what the BUILD suggested, otherwise the
+-- shipped default. Three layers, because a cue the user has never customised must still show the
+-- colour it will actually flare in rather than a blank swatch.
+function Overlay.GetOption(cue, key)
+  local _, setting = Overlay.isEnabled(cue)
+  if setting and setting[key] ~= nil then return setting[key] end
+  if key == "edge" then return cue.edge or "left" end
+  -- Flare falls back to Colors.HIGHLIGHT for a cue whose build names no colour, so returning nil
+  -- here would show a white swatch for a flare that is not white -- and the picker would then STORE
+  -- that white, silently overriding the fallback the moment anyone opened the colour control.
+  if key == "color" then
+    local c = ns.Colors and ns.Colors.HIGHLIGHT
+    return cue.color or (c and { c.r, c.g, c.b })
+  end
+  if key == "intensity" then return 0.5 end
+  -- Any other key has no default, and falling off the end says so. An explicit `return nil` here
+  -- would be an equivalent mutant: Lua returns nil either way, so no test could ever tell them apart.
 end
 
 function Overlay.Flare(edge, color, intensity, duration)

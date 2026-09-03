@@ -1,5 +1,10 @@
 # Changelog
 ## Unreleased
+- **Every screen-edge cue now has its own colour, edge and intensity.** Previously a cue flared in
+  whatever the playstyle suggested and only on the edge it named, which is no use if you want two
+  cues on different sides of the screen or you cannot pick that particular red out of your peripheral
+  vision. Each change flares once as you make it, because a colour swatch tells you nothing about
+  whether you will actually catch it mid-fight. The controls stay greyed out until the cue is on.
 - Fixed: a screen-edge cue you turned on during a fight never fired. Elmira remembers which
   suggestion it last flared for, so it does not flash ten times a second while the same spell stays
   on top — but it kept that memory when you enabled a cue, so a cue switched on while its spell was

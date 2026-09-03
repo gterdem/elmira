@@ -166,6 +166,178 @@ describe("Display.Overlay", function()
     end)
   end)
 
+  describe("EDGES", function()
+    it("lists the four screen edges Overlay can actually draw", function()
+      assert.same({ "left", "right", "top", "bottom" }, Overlay.EDGES)
+    end)
+  end)
+
+  -- SetOption() validates `edge` (covered above), but SetEnabled() has its own inline use of the
+  -- same validEdge() guard (`setting.edge = validEdge(edge) and edge or "left"`) — a second call
+  -- site that could quietly regress to `setting.edge = edge` while SetOption's test stays green.
+  -- A build's cue.edge is data a class-pack author writes and never runs through SetOption at all,
+  -- so this is the path a bad edge actually arrives on in play.
+  describe("SetEnabled() edge validation", function()
+    it("a build naming an undrawable edge on the cue itself is not stored verbatim -- it falls back to 'left'", function()
+      local cue = { event = "now_slot", spell = "EXORCISM", color = {1,0,0}, edge = "middle" }
+      Overlay.SetEnabled(cue, true)
+      local _, setting = Overlay.isEnabled(cue)
+      assert.are_not.equal("middle", setting.edge)
+      assert.equal("left", setting.edge)
+    end)
+
+    it("an undrawable edge passed via opts.edge is not stored verbatim either -- it falls back to 'left'", function()
+      local cue = { event = "now_slot", spell = "EXORCISM", color = {1,0,0}, edge = "left" }
+      Overlay.SetEnabled(cue, true, { edge = "middle" })
+      local _, setting = Overlay.isEnabled(cue)
+      assert.are_not.equal("middle", setting.edge)
+      assert.equal("left", setting.edge)
+    end)
+
+    -- The fallback must not swallow good data: every edge Overlay can actually draw must survive
+    -- SetEnabled unchanged, driven off Overlay.EDGES so a future edge cannot leave this stale.
+    it("a valid edge named by the build is stored as-is, for every edge Overlay actually knows", function()
+      for _, e in ipairs(Overlay.EDGES) do
+        local cue = { event = "now_slot", spell = "EXORCISM_" .. e, color = {1,0,0}, edge = e }
+        Overlay.SetEnabled(cue, true)
+        local _, setting = Overlay.isEnabled(cue)
+        assert.equal(e, setting.edge)
+      end
+    end)
+
+    it("a valid edge passed via opts.edge is stored as-is, for every edge Overlay actually knows", function()
+      for _, e in ipairs(Overlay.EDGES) do
+        local cue = { event = "now_slot", spell = "EXORCISM_OPT_" .. e, color = {1,0,0}, edge = "left" }
+        Overlay.SetEnabled(cue, true, { edge = e })
+        local _, setting = Overlay.isEnabled(cue)
+        assert.equal(e, setting.edge)
+      end
+    end)
+  end)
+
+  describe("SetOption() / GetOption() — per-cue appearance (colour/edge/intensity)", function()
+    local cue
+
+    before_each(function()
+      cue = { event = "now_slot", spell = "EXORCISM", color = {0.9,0.2,0.2}, edge = "left" }
+      -- The real module, not a stubbed colour table: a wrong HIGHLIGHT constant here must fail the
+      -- fallback test below, not pass it.
+      helper.load("Elmira/Core/Colors.lua")
+    end)
+
+    describe("SetOption()", function()
+      it("refuses to write for a cue that is not enabled, and leaves no record behind", function()
+        local ok = Overlay.SetOption(cue, "color", {0,1,0})
+        assert.is_false(ok)
+        local on, setting = Overlay.isEnabled(cue)
+        assert.is_false(on)
+        assert.is_nil(setting)
+      end)
+
+      it("writes for a cue that is enabled", function()
+        Overlay.SetEnabled(cue, true)
+        local ok = Overlay.SetOption(cue, "color", {0,1,0})
+        assert.is_true(ok)
+        local _, setting = Overlay.isEnabled(cue)
+        assert.same({0,1,0}, setting.color)
+      end)
+
+      it("refuses an unknown key even for an enabled cue", function()
+        Overlay.SetEnabled(cue, true)
+        local ok = Overlay.SetOption(cue, "bogus", "x")
+        assert.is_false(ok)
+        local _, setting = Overlay.isEnabled(cue)
+        assert.is_nil(setting.bogus)
+      end)
+
+      -- An edge Flare cannot draw makes the cue silently never appear -- the exact failure this
+      -- module was just fixed for. Driven off Overlay.EDGES itself so a future edge cannot leave
+      -- this test asserting a stale set.
+      it("refuses an edge value Flare cannot draw, and writes nothing", function()
+        Overlay.SetEnabled(cue, true)
+        local ok = Overlay.SetOption(cue, "edge", "diagonal")
+        assert.is_false(ok)
+        local _, setting = Overlay.isEnabled(cue)
+        -- unaffected: still whatever SetEnabled seeded it with, never "diagonal"
+        assert.are_not.equal("diagonal", setting.edge)
+        assert.equal("left", setting.edge)
+      end)
+
+      it("accepts every edge Overlay actually knows how to draw", function()
+        Overlay.SetEnabled(cue, true)
+        for _, e in ipairs(Overlay.EDGES) do
+          local ok = Overlay.SetOption(cue, "edge", e)
+          assert.is_true(ok)
+          local _, setting = Overlay.isEnabled(cue)
+          assert.equal(e, setting.edge)
+        end
+      end)
+
+      -- The validity flag must be re-derived on every call, not remembered from the last one: a
+      -- valid edge accepted a moment ago must not leave the NEXT, invalid edge waved through.
+      it("rejects an invalid edge even right after a valid one was accepted", function()
+        Overlay.SetEnabled(cue, true)
+        assert.is_true(Overlay.SetOption(cue, "edge", "right"))
+        local ok = Overlay.SetOption(cue, "edge", "diagonal")
+        assert.is_false(ok)
+        local _, setting = Overlay.isEnabled(cue)
+        assert.equal("right", setting.edge) -- unaffected by the rejected write
+      end)
+    end)
+
+    describe("GetOption()", function()
+      it("returns the BUILD's colour/edge before any customising", function()
+        assert.same({0.9,0.2,0.2}, Overlay.GetOption(cue, "color"))
+        assert.equal("left", Overlay.GetOption(cue, "edge"))
+      end)
+
+      it("returns the shipped default intensity (0.5) when nothing is stored", function()
+        assert.equal(0.5, Overlay.GetOption(cue, "intensity"))
+      end)
+
+      it("falls back to 'left' for edge when the cue itself has none and nothing is stored", function()
+        local edgeless = { event = "now_slot", spell = "JUDGEMENT", color = {1,1,1} }
+        assert.equal("left", Overlay.GetOption(edgeless, "edge"))
+      end)
+
+      it("returns the stored override once the cue has been customised, not the build's default", function()
+        Overlay.SetEnabled(cue, true)
+        Overlay.SetOption(cue, "color", {0.1,0.2,0.3})
+        Overlay.SetOption(cue, "edge", "right")
+        Overlay.SetOption(cue, "intensity", 0.9)
+        assert.same({0.1,0.2,0.3}, Overlay.GetOption(cue, "color"))
+        assert.are_not.same(cue.color, Overlay.GetOption(cue, "color"))
+        assert.equal("right", Overlay.GetOption(cue, "edge"))
+        assert.equal(0.9, Overlay.GetOption(cue, "intensity"))
+        assert.are_not.equal(0.5, Overlay.GetOption(cue, "intensity"))
+      end)
+
+      -- Flare falls back to Colors.HIGHLIGHT for a cue whose build names no colour (see Flare()); the
+      -- swatch must promise the colour it will actually flare in, not a white default that the picker
+      -- would then silently store over the real fallback.
+      describe("colour fallback to Colors.HIGHLIGHT", function()
+        it("returns HIGHLIGHT's rgb for a cue with no colour of its own -- not nil, not white", function()
+          local colorless = { event = "now_slot", spell = "JUDGEMENT", edge = "left" }
+          local c = Overlay.GetOption(colorless, "color")
+          assert.is_not_nil(c)
+          assert.are_not.same({1, 1, 1}, c)
+          assert.same({ns.Colors.HIGHLIGHT.r, ns.Colors.HIGHLIGHT.g, ns.Colors.HIGHLIGHT.b}, c)
+        end)
+
+        it("still returns the cue's own colour when the build named one", function()
+          assert.same({0.9, 0.2, 0.2}, Overlay.GetOption(cue, "color"))
+        end)
+
+        it("a stored override still wins over the HIGHLIGHT fallback", function()
+          local colorless = { event = "now_slot", spell = "JUDGEMENT", edge = "left" }
+          Overlay.SetEnabled(colorless, true)
+          Overlay.SetOption(colorless, "color", {0.4, 0.5, 0.6})
+          assert.same({0.4, 0.5, 0.6}, Overlay.GetOption(colorless, "color"))
+        end)
+      end)
+    end)
+  end)
+
   describe("Render() while the display is hidden", function()
     it("fires no cue when the driver says hidden, even with a queue", function()
       local flared = {}
