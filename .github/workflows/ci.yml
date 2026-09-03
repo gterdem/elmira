@@ -37,6 +37,11 @@ jobs:
       - name: Coverage — no shipped file may be unreachable from the suite
         run: make coverage
 
+      # The gates decide whether everything above is trusted, so they get tested too. Each case here
+      # is a defect that actually shipped and made the gate report a vacuous pass.
+      - name: Self-test the quality gates
+        run: make selftest
+
       # Diff-scoped, so it costs seconds: every line this push changed is deleted in a throwaway copy
       # and the suite must go red. A survivor is a changed line no test actually checks.
       - name: Mutation gate — every changed line must be protected by a test

@@ -9,7 +9,7 @@ REPORTS_DIR ?= /mnt/d/Addon-Testing/Elmira/reports
 PKGDIR      := .release
 ADDONS      := $(notdir $(wildcard Elmira*))
 
-.PHONY: test lint mutants coverage package libs deploy deploy-package release-zip collect
+.PHONY: test lint mutants coverage selftest package libs deploy deploy-package release-zip collect
 
 test:
 	busted --lua=$(LUA) tests/spec
@@ -27,6 +27,12 @@ mutants:
 
 coverage:
 	@./tools/coverage.sh
+
+# Tests for the gates themselves. tools/mutants.sh decides whether every other check here is trusted,
+# and it has already shipped three defects that made it pass VACUOUSLY (a renamed spec, a dangling
+# index entry, a missing luacov). Nothing else in the repo covers tools/.
+selftest:
+	@./tools/selftest.sh
 
 lint:
 	luacheck . --no-color
