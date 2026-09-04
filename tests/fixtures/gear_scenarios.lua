@@ -320,7 +320,7 @@ return {
   -- Ambiguous keys (more than one entry can produce them): JUDGEMENT x3, EXORCISM x2, DIVINE_STORM
   -- x2, CONSECRATION x2 -- every scenario below that touches one of those carries `expectLabels`.
   --
-  -- Both AVENGING_WRATH and AURA_MASTERY carry no `cooldown` in Data/Spells.lua, so Simulation's
+  -- AVENGING_WRATH and AURA_MASTERY carried no `cooldown` when this block was first written, so Simulation's
   -- fallback (`nominal <= 0 -> entry.cooldownSecs -> one time step`) gives them a synthetic ~1-GCD
   -- "cooldown" in the PREVIEW only -- the real adapter would supply their true (multi-minute)
   -- cooldown via state:baseCooldown()/GetSpellCooldown in game. AVENGING_WRATH's own gating buff
@@ -329,9 +329,8 @@ return {
   -- t>0 regardless of that synthetic cooldown. AURA_MASTERY's gating buff (AVENGING_WRATH_BUFF) is
   -- NOT a proc, so it is NOT suppressed that way -- see `aura_mastery_only` below for how this
   -- fixture avoids relying on the exact-boundary coincidence that would otherwise make it reappear.
-  -- This is a pre-existing Data gap shared with PALADIN_EXODIN's identical two entries, not something
-  -- introduced here or specific to Wrath-like -- flagged in the task report, not fixed (not this
-  -- fixture's build to edit).
+  -- That gap was shared with PALADIN_EXODIN's identical two entries and has since been closed:
+  -- Data.Spells carries both cooldowns, pinned by data_sourcing_spec and `aura_mastery_then_core`.
   PALADIN_WRATHLIKE = {
     ---------------------------------------------------------------- W2: the baseline order
     -- Runes engraved (default `usable`), no sets, no soul, seal up with 25s remaining: nothing gated
@@ -517,9 +516,9 @@ return {
     ---------------------------------------------------------------- extra: entry 3 (with AW) in isolation
     -- AVENGING_WRATH_BUFF present (simulating "already popped Avenging Wrath") with no VENGEANCE_BUFF,
     -- so entry 2 never competes. Unlike VENGEANCE_BUFF, AVENGING_WRATH_BUFF carries no `proc = true`,
-    -- so it is NOT suppressed at a simulated t>0 -- combined with AURA_MASTERY's missing `cooldown`
-    -- data (see the section header above), it would read as "ready again" exactly one non-`hold` cast
-    -- later. Every other rotation entry is deliberately silenced here (`usable = false`) so nothing
+    -- so it is NOT suppressed at a simulated t>0. AURA_MASTERY now carries its 2-minute cooldown, so
+    -- it would not read as "ready again" (the `aura_mastery_then_core` scenario proves that); this one
+    -- still silences every other rotation entry (`usable = false`) to isolate entry 3, so nothing
     -- ever supplies that intervening non-`hold` cast: Engine.pick finds nothing after slot 1 and
     -- Simulation.queue truncates, the same legitimate shortening Exodin's
     -- low_mana_judgement_still_offered scenario exercises, rather than this fixture asserting a
@@ -535,6 +534,17 @@ return {
       buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 }, AVENGING_WRATH_BUFF = { remaining = 20 } },
       expect = { "AURA_MASTERY" },
       expectLabels = { "with AW" } },
+
+    ---------------------------------------------------------------- entry 3 followed by the core: Aura Mastery's own cooldown
+    -- Same start, nothing silenced but Avenging Wrath. Aura Mastery is `hold`, so it costs no time --
+    -- which is exactly why its cooldown matters: without the 2-minute `cooldown` Data.Spells now carries
+    -- it would be eligible again in slot 2 and the queue would read "Aura Mastery, Aura Mastery, ...".
+    -- Labels: slot 1 is entry 3 ("with AW"); slots 2-3 are the baseline core (Crusader Strike, Exorcism).
+    { name = "aura_mastery_then_core", sets = {}, usable = { AVENGING_WRATH = false },
+      seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 }, AVENGING_WRATH_BUFF = { remaining = 20 } },
+      expect = { "AURA_MASTERY", "CRUSADER_STRIKE", "EXORCISM" },
+      expectLabels = { "with AW", false, false } },
 
     ---------------------------------------------------------------- extra: entry 12 (Filler) itself
     -- Mirrors Exodin's fully_geared_judgement_slot1_when_idle: Crusader Strike, Exorcism and Divine
@@ -606,9 +616,9 @@ return {
   --      do not want AVENGING_WRATH to win still silence it (`usable = { AVENGING_WRATH = false }`),
   --      because it is `hold` and would otherwise take slot 1 of every in-combat scenario.
   --
-  --  (b) AVENGING_WRATH carries no `cooldown` in Data.Spells (the live adapter reports the real one;
-  --      the headless preview falls back to one time step), so `pull_avenging_wrath` supplies an
-  --      explicit `baseCooldown`, mirroring an adapter that has observed a real GetSpellCooldown.
+  --  (b) AVENGING_WRATH carried no `cooldown` when this block was first written, so `pull_avenging_wrath`
+  --      supplied an explicit `baseCooldown`. Data.Spells now carries the page's 3-minute cooldown and
+  --      the stand-in is gone: this scenario is what pins that data line.
   --      AVENGERS_SHIELD had the same gap when this block was first written and showed three times
   --      in a row in `aoe_three`; it now carries `cooldown = 15` (its Wowhead page), which is why that
   --      scenario alternates into Consecration.
@@ -678,13 +688,11 @@ return {
     -- Wowhead: "better to use this ASAP on a pull ... to facilitate a better threat curve" -- no
     -- Vengeance/Holy Power gate, just `in_combat` (hardcoded true in FakeState, finding (a) above).
     -- AVENGING_WRATH is left at its default `usable = true` here specifically to exercise the gate;
-    -- `baseCooldown` is set to a large number to stand in for the real multi-minute cooldown the live
-    -- adapter would report (finding (b)) -- without it, AVENGING_WRATH's own synthetic ~1-GCD "cooldown"
-    -- would make it win slot 3 again, which is not what a real player would ever see (the true cooldown
-    -- is minutes, not seconds).
+    -- Avenging Wrath's 3-minute `cooldown` now comes from Data.Spells, so no `baseCooldown` stand-in is
+    -- needed and this scenario is what pins that data line: without it, AVENGING_WRATH's own synthetic
+    -- ~1-GCD "cooldown" would make it win slot 3 again, which is not what a real player would ever see.
     -- Labels: slot 1 is entry 4 ("Threat burst"); slots 2-3 fall through to the single-target core (7, 8).
     { name = "pull_avenging_wrath", sets = {}, seal = "SEAL_OF_MARTYRDOM",
-      baseCooldown = { AVENGING_WRATH = 600 },
       buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
                 SEAL_OF_MARTYRDOM = { remaining = 25 } },
       expect = { "AVENGING_WRATH", "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS" },
@@ -973,7 +981,7 @@ return {
   -- `seal_expiring_core_available` scenario does for its build. Recorded as a finding, not a defect:
   -- the placement matches the source dossier verbatim, so it is authored intent, not an authoring slip.
   --
-  -- FINDING (AVENGING_WRATH has no `cooldown`/`baseCooldown` fallback data, same gap as every other
+  -- FORMER FINDING, now closed (AVENGING_WRATH had no `cooldown` fallback data, same gap as every other
   -- Paladin build's copy): its own gate reads `HOLY_POWER_BUFF` and a `set` count, NEITHER of which
   -- Simulation's virtual state decays or overrides once the entry has been cast (Core/Simulation.lua's
   -- `v:buff` only intercepts a spell's OWN aura, and HOLY_POWER_BUFF is not AVENGING_WRATH's own aura).
@@ -981,7 +989,8 @@ return {
   -- any scenario that lets AVENGING_WRATH actually fire needs an explicit `baseCooldown` standing in for
   -- the real multi-minute cooldown, or it re-appears one non-`hold` cast later and silently displaces
   -- whatever this fixture is actually trying to isolate. `holy_t35_2p`, `burst_pull_no_set` and `bis`
-  -- below all carry `baseCooldown = { AVENGING_WRATH = 600 }` for exactly this reason; every other
+  -- below carried `baseCooldown = { AVENGING_WRATH = 600 }` for exactly this reason until Data.Spells
+  -- gained the page's 3-minute cooldown; the stand-ins are gone and these scenarios pin that line; every other
   -- scenario instead silences it (`usable = { AVENGING_WRATH = false }`), because with no Holy T3.5
   -- 2-set worn its `any` gate's `not set ... min = 2` branch is true unconditionally (0 < 2), so it
   -- would otherwise win slot 1 of every scenario below regardless of what that scenario is testing.
@@ -1046,12 +1055,11 @@ return {
     -- bonusExpected pins that down directly. Entry 2's OWN gate is different: with 2 pieces its `not
     -- set ... min = 2` branch is now false, but the `buff HOLY_POWER_BUFF min = 3` branch is TRUE (we
     -- already have 3 stacks), so Avenging Wrath fires anyway -- "waits for 3 HP" and HAS it, rather than
-    -- being held the way `burst_held_2p` below shows at 2 stacks. `baseCooldown` stands in for the real
-    -- multi-minute cooldown per the header FINDING, so it does not reappear in slot 3.
+    -- being held the way `burst_held_2p` below shows at 2 stacks. Its 3-minute `cooldown` from Data.Spells
+    -- is why it does not reappear in slot 3.
     -- Labels: slot 1 is entry 2 ("Burst"); slots 2-3 are the unconditional baseline (6, 7) -- none of
     -- the "3 HP" entries can fire at this gear point.
     { name = "holy_t35_2p", sets = { PALADIN_T35_INQUISITION_HOLY = 2 }, seal = "SEAL_OF_RIGHTEOUSNESS",
-      baseCooldown = { AVENGING_WRATH = 600 },
       buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
       bonusExpected = { HOLY_POWER_CONSUME_HOLY = false },
       expect = { "AVENGING_WRATH", "HOLY_SHOCK", "EXORCISM" },
@@ -1141,10 +1149,9 @@ return {
     -- Zero PALADIN_T35_INQUISITION_HOLY pieces: `not set ... min = 2` is unconditionally true (0 < 2),
     -- so Avenging Wrath's `any` passes on that branch alone regardless of Holy Power -- it fires on
     -- pull, exactly like the no-set case for every other Ret build's Vengeance-gated copy.
-    -- `baseCooldown` again stands in for the real cooldown per the header FINDING.
+    -- Its 3-minute `cooldown` from Data.Spells keeps it out of slots 2-3.
     -- Labels: slot 1 is entry 2 ("Burst"); slots 2-3 are the unconditional baseline (6, 7).
     { name = "burst_pull_no_set", sets = {}, seal = "SEAL_OF_RIGHTEOUSNESS",
-      baseCooldown = { AVENGING_WRATH = 600 },
       buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 } },
       expect = { "AVENGING_WRATH", "HOLY_SHOCK", "EXORCISM" },
       expectLabels = { "Burst", false, false } },
@@ -1168,14 +1175,11 @@ return {
     -- purpose: at 6 pieces (>= 2) its `not set` branch is false, but 3 Holy Power stacks satisfy the
     -- other half of its `any`, so it fires -- this is the gear point where a real character sees both
     -- the burst line AND a Holy Power spender in the same 3-slot window, which is what distinguishes
-    -- this scenario's shape from every lower-gear scenario above. `baseCooldown` again stands in for
-    -- the real cooldown per the header FINDING.
+    -- this scenario's shape from every lower-gear scenario above.
     -- Labels: slot 1 is entry 2 ("Burst"); slot 2 is entry 3 ("3 HP", Holy Shock -- not yet on cooldown
     -- at the same t=0 Avenging Wrath's `hold = true` leaves behind); slot 3 is entry 4 ("3 HP", Divine
-    -- Storm) -- Holy Shock is now on its own 30s cooldown and Avenging Wrath is blocked by its own
-    -- `baseCooldown` override.
+    -- Storm) -- Holy Shock is now on its own 30s cooldown and Avenging Wrath by its 3-minute one.
     { name = "bis", sets = { PALADIN_T35_INQUISITION_HOLY = 6 }, seal = "SEAL_OF_RIGHTEOUSNESS",
-      baseCooldown = { AVENGING_WRATH = 600 },
       buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
       bonusExpected = { HOLY_POWER_CONSUME_HOLY = true },
       expect = { "AVENGING_WRATH", "HOLY_SHOCK", "DIVINE_STORM" },

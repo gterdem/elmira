@@ -355,6 +355,14 @@ describe("Data sourcing policy (docs/03)", function()
       assert.is_true(pack.sealLingerWindow > 0, "sealLingerWindow must be positive")
     end)
 
+    -- The two burst cooldowns are the only ones a 3-slot preview cannot distinguish from a wrong value
+    -- (any number over ~5s keeps them out of the window), so the VALUE is pinned here against what the
+    -- Wowhead pages print: "Cooldown: 3 minutes" (407788) and "Cooldown: 2 minutes" (407624).
+    it("carries the page cooldowns for the two burst spells the preview cannot otherwise check", function()
+      assert.equal(180, pack.spells.AVENGING_WRATH.cooldown)
+      assert.equal(120, pack.spells.AURA_MASTERY.cooldown)
+    end)
+
     it("carries a src line for every constant, and says the window is not Blizzard-published", function()
       local text = timingSource()
       assert.truthy(text:find("-- src:", 1, true), "the class file carries no src line")

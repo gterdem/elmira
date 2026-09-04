@@ -1,5 +1,9 @@
 # Changelog
 ## Unreleased
+- Fixed: the queue could suggest Avenging Wrath or Aura Mastery again a slot after suggesting them —
+  in `/elm debug queue` always, and in the live queue the first time each session, before the client had
+  reported their cooldown. Both now carry their cooldowns (3 and 2 minutes) so the preview knows
+  them from the start.
 - **New playstyle: Shockadin (experimental).** The Holy caster: Holy Shock and Exorcism on cooldown,
   Judgement of Righteousness, Crusader Strike when runed, and with the Holy T3.5 4-set, three Holy
   Power spent on Holy Shock or Divine Storm. No published Phase 8 guide exists for this build — the

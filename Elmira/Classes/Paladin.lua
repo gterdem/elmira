@@ -88,8 +88,11 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- Read from the live client 2026-09-01 (docs/07 §9.12): the applied aura's spellId IS the ability's
     -- id, confirming the staged guess. Duration 20 s, dispel type Magic.
     AVENGING_WRATH_BUFF  = { id = 407788, src = "https://www.wowhead.com/classic/spell=407788" },
-    AVENGING_WRATH       = { id = 407788, src = "https://www.wowhead.com/classic/spell=407788" },
-    AURA_MASTERY         = { id = 407624, src = "https://www.wowhead.com/classic/spell=407624" },
+    -- Cooldowns as printed on the pages ("Cooldown: 3 minutes" / "Cooldown: 2 minutes", read 2026-09-03).
+    -- Fallbacks only -- the client's answer wins at runtime -- but without them the headless preview
+    -- treated both as one-GCD spells and every fixture had to hand in a `baseCooldown` stand-in.
+    AVENGING_WRATH       = { id = 407788, src = "https://www.wowhead.com/classic/spell=407788", cooldown = 180 },
+    AURA_MASTERY         = { id = 407624, src = "https://www.wowhead.com/classic/spell=407624", cooldown = 120 },
     REBUKE               = { id = 425609, src = "https://www.wowhead.com/classic/spell=425609" },
     HORN_OF_LORDAERON    = { id = 425600, src = "https://www.wowhead.com/classic/spell=425600" },
     VENGEANCE_BUFF       = { id = 20049,  src = "https://www.wowhead.com/classic/spell=20049", proc = true },
