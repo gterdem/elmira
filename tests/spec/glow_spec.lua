@@ -179,3 +179,19 @@ describe("Display.Glow", function()
     end)
   end)
 end)
+
+-- The options panel's preview asks this before stopping a glow it started: between lighting a
+-- button and its timer firing, the render loop can take the same frame for the real suggestion.
+describe("Glow.isNowFrame", function()
+  local helper5 = require("tests.helper")
+
+  it("knows which frames the render loop is lighting", function()
+    helper5.reset()
+    local G = helper5.load("Elmira/Display/Glow.lua")
+    local frame = { "button" }
+    assert.is_false(G.isNowFrame(frame))
+    assert.is_false(G.isNowFrame(nil))
+    G.StopAll()
+    assert.is_false(G.isNowFrame(frame))
+  end)
+end)

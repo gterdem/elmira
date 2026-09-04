@@ -43,6 +43,268 @@ local function redraw()
   if ns.Display then ns.Display.refresh() end
 end
 
+
+-- ============================================================ Action Bars
+-- The section that answers "why is nothing glowing" without the player having to type a slash
+-- command or know what a provider is. Three parts: which bar addon is in use, a preview that proves
+-- the glow itself works, and a per-spell check.
+--
+-- Vocabulary rule for everything below: "bar addon", "button", "your action bars". Never "provider",
+-- "library" or "adapter" -- those are correct in the code and meaningless in a settings panel.
+
+local BAR_STATE = {
+  active   = "Detected — in use",
+  inactive = "installed, but %s is handling your bars",
+  absent   = "not installed",
+  fallback = "available (fallback)",
+}
+
+local BAR_BLURB = {
+  ElvUI        = "Elmira is glowing buttons on your ElvUI action bars.",
+  Bartender4   = "Elmira is glowing buttons on your Bartender4 action bars.",
+  Dominos      = "Elmira is glowing buttons on your Dominos action bars.",
+  ["Action bars"] = "Elmira is glowing buttons on your action bars.",
+  Blizzard     = "Elmira is glowing buttons on the default action bars.",
+}
+
+local BAR_NAMES = { Blizzard = "Blizzard default bars" }
+
+local function barRows()
+  local args, order = {}, 0
+  for _, r in ipairs((ns.BarProviders and type(ns.BarProviders.status) == "function" and ns.BarProviders.status()) or {}) do
+    order = order + 1
+    local label = L[BAR_NAMES[r.name] or r.name]
+    local state = r.state == "inactive"
+      and string.format(L[BAR_STATE.inactive], tostring(r.activeName))
+      or L[BAR_STATE[r.state]]
+    -- Glyph AND words: colour alone is not a signal, and this list is read at a glance.
+    local mark = (r.state == "active") and "|cff40c057●|r" or "|cff9AA0A6○|r"
+    local grey = (r.state == "absent") and "|cff9AA0A6" or "|cffFFFFFF"
+    args["row" .. order] = {
+      type = "description", order = order, width = "full",
+      name = string.format("%s %s%s|r  |cff9AA0A6%s|r", mark, grey, label, state),
+    }
+    if r.state == "active" and BAR_BLURB[r.name] then
+      order = order + 1
+      args["blurb" .. order] = {
+        type = "description", order = order, width = "full",
+        name = "      |cff9AA0A6" .. L[BAR_BLURB[r.name]] .. "|r",
+      }
+    end
+  end
+  return args
+end
+
+-- Preview state. A previewed frame is NOT in the render loop's `nowFrames` set, so nothing in
+-- Display/Glow.lua will ever clear it -- the preview has to stop itself or it burns until the next
+-- StopAll. Held here so a second click, or the panel closing, can cancel an in-flight one.
+local previewFrame, previewTimer, previewNote = nil, nil, ""
+
+local function stopPreview()
+  local frame, timer = previewFrame, previewTimer
+  previewFrame, previewTimer = nil, nil
+  -- Cancel FIRST. Without this the first click's timer is still pending when a second preview
+  -- starts, and fires four seconds after click one -- killing the second preview early.
+  if timer and ns.addon and ns.addon.CancelTimer then pcall(ns.addon.CancelTimer, ns.addon, timer) end
+  if not (frame and ns.Glow) then return end
+  -- Between lighting this button and getting here, the rotation may have moved on and the render
+  -- loop may have taken the same frame for the REAL suggestion. Stopping it then darkens a button
+  -- that should be lit, and SetNowSlot still believes it is lit, so it stays dark until the
+  -- suggestion changes away and back.
+  if ns.Glow.isNowFrame and ns.Glow.isNowFrame(frame) then return end
+  ns.Glow.Stop(frame)
+end
+
+-- Fires the real glow, on demand, with no combat and no rotation state. This is the single most
+-- useful control in the panel: it separates "the glow is broken" from "nothing is being suggested
+-- right now", which are indistinguishable to a player standing in a city and are the likeliest
+-- source of a bug report that is not a bug.
+function Options.previewGlow()
+  stopPreview()
+  local key = Options.checkSpell()
+  local buttons = key and ns.BarGlow and ns.BarGlow.buttonsFor(key)
+  local frame = buttons and buttons[1]
+  if not frame then
+    previewNote = L["No button to preview: the spell below is not on a bar Elmira can see."]
+    return false
+  end
+  local p = profile()
+  local style = (p and p.glow and p.glow.style) or "PIXEL"
+  if not (ns.Glow and ns.Glow.Start(frame, style)) then
+    previewNote = L["The glow library is not loaded, so Elmira cannot draw a glow at all."]
+    return false
+  end
+  previewFrame = frame
+  if ns.addon and ns.addon.ScheduleTimer then
+    previewTimer = ns.addon:ScheduleTimer(stopPreview, 4)
+    previewNote = L["Glowing that button now — look at your action bars."]
+  else
+    -- No timer means nothing will ever stop this. Say so rather than claiming a preview that ends:
+    -- a glow the player cannot get rid of is a worse outcome than no preview.
+    previewNote = L["Glowing that button now — it will stay lit until the next suggestion changes."]
+  end
+  return true
+end
+
+-- Which spell the per-spell check runs against. Defaults to the current top suggestion, so the
+-- common case needs no typing; the dropdown exists for the more interesting one, where the spell
+-- you want to ask about is precisely the one that is NOT being suggested.
+local chosenSpell = nil
+
+function Options.checkSpell()
+  if chosenSpell then return chosenSpell end
+  if not (ns.Display and type(ns.Display.computeQueue) == "function") then return nil end
+  local ok, queue = pcall(ns.Display.computeQueue, 1)
+  local slot = ok and type(queue) == "table" and queue[1]
+  return slot and slot.spell or nil
+end
+
+function Options.setCheckSpell(key)
+  chosenSpell = key
+end
+
+-- Symbolic keys (`HAMMER_OF_WRATH`) are how the engine names spells and are not what the player
+-- calls them. Show the real name where the client can resolve one; fall back to the key rather than
+-- to nothing, because a blank row is worse than an ugly one.
+local function spellLabel(key)
+  local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
+  local data = pack and pack.spells and pack.spells[key]
+  local name = data and data.id and ns.BarGlow and ns.BarGlow.spellName(data.id)
+  return name or tostring(key)
+end
+
+local function spellChoices()
+  local out = {}
+  local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
+  for key in pairs((pack and pack.spells) or {}) do out[key] = spellLabel(key) end
+  local current = Options.checkSpell()
+  if current then out[current] = spellLabel(current) end
+  return out
+end
+
+local CHECK_LABELS = {
+  bars    = "Bar addon detected",
+  placed  = "Spell is on a bar",
+  visible = "Button is visible",
+  glow    = "Glow is switched on",
+  showing = "Elmira is showing right now",
+  spell   = "Spell is in your playstyle",
+}
+
+-- The highest-value strings in the whole panel: on failure a row has to say what to DO, in a
+-- sentence, without the reader knowing anything about how Elmira works.
+local CHECK_FAILED = {
+  placed  = "not on any action bar — drag it onto a bar, or into a macro on one",
+  visible = "on a bar you cannot see right now — check your stance, form or bar paging",
+  spell   = "not part of your current playstyle, so it is never suggested",
+}
+
+-- Three different switches can leave a perfectly placed, perfectly visible button dark, and the
+-- panel used to blame the same one every time -- telling people to turn on a toggle that was
+-- already on. `detail` says which.
+local GLOW_OFF = {
+  addon = "Elmira itself is switched off — turn on \"Show the queue\"",
+  queue = "the glow is switched off — turn on \"Glow the next cast\" under Glow",
+  bars  = "switched off above — turn on \"Also glow your action bar\"",
+}
+
+-- Why the display is hidden, in the player's words. Display.shouldShow's reasons are internal.
+local HIDDEN_BECAUSE = {
+  ["out of combat"] = "hidden until you are in combat — that is this profile's setting",
+  ["out of combat, no target"] = "hidden until you are in combat or have a target",
+  ["display disabled"] = "the queue is switched off",
+}
+
+-- Turns a row's DATA into the words for it. Detail is never a sentence on the Display side, so all
+-- the English -- and all the AceLocale -- lives here.
+local function checkDetail(r)
+  if r.label == "glow" and r.ok == false then return L[GLOW_OFF[r.detail] or GLOW_OFF.bars] end
+  if r.label == "showing" and r.ok == false then
+    return L[HIDDEN_BECAUSE[r.detail] or "hidden right now"]
+  end
+  if r.ok == false then return L[CHECK_FAILED[r.label] or ""] end
+  if r.label == "bars" then
+    return r.detail == "blizzard" and L["Blizzard default bars"] or tostring(r.detail)
+  end
+  if r.label == "placed" then
+    return r.detail == 1 and L["on one button"] or string.format(L["on %d buttons"], r.detail or 0)
+  end
+  return r.detail and tostring(r.detail) or ""
+end
+
+-- Keyed by the row's `ok`: true, false, and nil for "not reached".
+local CHECK_MARKS = setmetatable(
+  { [true] = { "✔", "|cff40c057" }, [false] = { "✘", "|cffe03131" } },
+  { __index = function() return { "—", "|cff9AA0A6" } end })
+
+local function checkRows()
+  local key = Options.checkSpell()
+  if not key then
+    return { none = { type = "description", order = 1, width = "full",
+                      name = L["Nothing is being suggested right now, so there is nothing to check."] } }
+  end
+  local args = { header = { type = "description", order = 0, width = "full",
+                            name = string.format(L["Checking %s:"], spellLabel(key)) } }
+  for i, r in ipairs((ns.BarGlow and type(ns.BarGlow.check) == "function" and ns.BarGlow.check(key)) or {}) do
+    -- Glyph AND colour, never colour alone: red/green is the first thing to go for a colour-blind
+    -- reader, and "—" has to be visibly different from a tick, not merely a different green.
+    local look = CHECK_MARKS[r.ok]
+    local mark, colour = look[1], look[2]
+    args["row" .. i] = {
+      type = "description", order = i, width = "full",
+      name = string.format("%s%s|r %s  |cff9AA0A6%s|r",
+        colour, mark, L[CHECK_LABELS[r.label] or r.label], checkDetail(r)),
+    }
+  end
+  return args
+end
+
+local function actionBarsGroup()
+  previewNote = ""
+  return {
+    intro = {
+      type = "description", order = 0, width = "full",
+      name = L["Elmira glows the button holding your next suggested spell."],
+    },
+    bars = {
+      type = "group", inline = true, order = 1, name = L["Bar addon"],
+      args = barRows(),
+    },
+    barGlow = {
+      type = "toggle", order = 2, width = "full", name = L["Also glow your action bar"],
+      desc = L["Highlights the button on your bars, not just the queue icon."],
+      get = function() return profile().glow.barGlow end,
+      set = function(_, v)
+        profile().glow.barGlow = v
+        if ns.Glow then ns.Glow.StopAll() end   -- drop glows we will no longer be refreshing
+        redraw()
+      end,
+    },
+    preview = {
+      type = "execute", order = 3, name = L["Preview glow"],
+      desc = L["Glows the button for your current suggestion for a few seconds, so you can see the effect without waiting for a fight."],
+      func = function() Options.previewGlow() end,
+    },
+    previewNote = {
+      type = "description", order = 4, width = "full",
+      name = function() return previewNote end,
+    },
+    check = {
+      type = "group", inline = true, order = 5, name = L["Is my spell showing?"],
+      args = {
+        pick = {
+          type = "select", order = 0, name = L["Test with"],
+          desc = L["Defaults to whatever Elmira is suggesting right now."],
+          values = spellChoices,
+          get = function() return Options.checkSpell() end,
+          set = function(_, v) Options.setCheckSpell(v) end,
+        },
+        rows = { type = "group", inline = true, order = 1, name = "", args = checkRows() },
+      },
+    },
+  }
+end
+
 local function overlayGroup()
   local args = {}
   local cues = ns.Overlay and ns.Overlay.availableCues() or {}
@@ -177,7 +439,7 @@ end
 
 local function exchangeGroup()
   return {
-    type = "group", order = 5, name = L["Import / Export"],
+    type = "group", order = 6, name = L["Import / Export"],
     args = {
       text = {
         type = "input", multiline = 8, width = "full", order = 1, name = L["Build string"],
@@ -271,27 +533,31 @@ function Options.table()
           },
         },
       },
+      bars = {
+        type = "group", order = 2, name = L["Action bars"],
+        args = actionBarsGroup(),
+      },
       glow = {
-        type = "group", order = 2, name = L["Glow"],
+        type = "group", order = 3, name = L["Glow"],
         args = {
           enabled = {
             type = "toggle", order = 1, name = L["Glow the next cast"],
             get = function() return profile().glow.enabled end,
             set = function(_, v) profile().glow.enabled = v; redraw() end,
           },
-          barGlow = {
-            type = "toggle", order = 2, name = L["Also glow your action bar"],
-            desc = L["Highlights the button on your bars, not just the queue icon."],
-            get = function() return profile().glow.barGlow end,
-            set = function(_, v)
-              profile().glow.barGlow = v
-              if ns.Glow then ns.Glow.StopAll() end   -- drop glows we will no longer be refreshing
-              redraw()
-            end,
-          },
+          -- "Also glow your action bar" used to live here. It moved to Action Bars, where the rest
+          -- of the bar settings and the diagnostics are: a toggle whose effect is invisible without
+          -- the status list next to it is where "I turned it on and nothing happened" starts.
           style = {
             type = "select", order = 3, name = L["Style"],
-            values = { PIXEL = L["Pixel"], BUTTON = L["Button"], AUTOCAST = L["Autocast"] },
+            -- Derived from Glow.STYLES rather than repeated: a literal here silently drifts the
+            -- moment a style is added, offering a choice the renderer does not have.
+            values = function()
+              local names = { PIXEL = L["Pixel"], BUTTON = L["Button"], AUTOCAST = L["Autocast"] }
+              local out = {}
+              for key in pairs((ns.Glow and ns.Glow.STYLES) or {}) do out[key] = names[key] or key end
+              return out
+            end,
             get = function() return profile().glow.style end,
             set = function(_, v)
               profile().glow.style = v
@@ -302,11 +568,11 @@ function Options.table()
         },
       },
       overlay = {
-        type = "group", order = 3, name = L["Peripheral cues"],
+        type = "group", order = 4, name = L["Peripheral cues"],
         args = overlayGroup(),
       },
       sounds = {
-        type = "group", order = 4, name = L["Sounds"],
+        type = "group", order = 5, name = L["Sounds"],
         args = {
           enabled = {
             type = "toggle", order = 1, name = L["Play cue sounds"],

@@ -59,7 +59,7 @@ describe("Options (overlay/peripheral cues)", function()
 
     it("describes itself: a group of its own holding one multiline input", function()
       local group = Options.table().args.exchange
-      assert.equal("group", group.type); assert.equal(5, group.order); assert.equal("Import / Export", group.name)
+      assert.equal("group", group.type); assert.equal(6, group.order); assert.equal("Import / Export", group.name)
       assert.equal("input", box().text.type); assert.equal(8, box().text.multiline)
       assert.equal("Build string", box().text.name)
       assert.truthy(box().text.desc:find("ELM1:", 1, true))

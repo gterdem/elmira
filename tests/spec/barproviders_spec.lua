@@ -400,6 +400,69 @@ describe("Display.BarProviders", function()
     end)
   end)
 
+  -- What the options panel lists. Every supported bar addon gets a row whether or not it is
+  -- installed: listing only what registered gives no signal at all when the thing you installed did
+  -- not show up, which is the failure mode of the dynamic-list pattern this deliberately rejects.
+  describe("status()", function()
+    local function stateOf(rows, name)
+      for _, r in ipairs(rows) do if r.name == name then return r end end
+    end
+
+    it("lists every supported bar addon, plus Blizzard, with nothing installed", function()
+      local rows = BarProviders.status()
+      assert.equal("absent", stateOf(rows, "ElvUI").state)
+      assert.equal("absent", stateOf(rows, "Bartender4").state)
+      assert.equal("absent", stateOf(rows, "Dominos").state)
+      -- With no bar addon the Blizzard bars are not a fallback, they ARE what is in use.
+      assert.equal("active", stateOf(rows, "Blizzard").state)
+    end)
+
+    it("marks the highest-priority bar addon active and the rest inactive", function()
+      libs["LibActionButton-1.0-ElvUI"] = library(set(button("ElvUI_Bar1Button1", { slot = 1 })))
+      libs["LibActionButton-1.0"] = library(set(button("BT4Button1", { slot = 2 })))
+      BarProviders.Register()
+      local rows = BarProviders.status()
+      assert.equal("active", stateOf(rows, "ElvUI").state)
+      assert.equal("inactive", stateOf(rows, "Bartender4").state)
+      -- The inactive row has to be able to name the winner, or "why is only one glowing" has no
+      -- answer anywhere in the UI.
+      assert.equal("ElvUI", stateOf(rows, "Bartender4").activeName)
+      assert.equal("fallback", stateOf(rows, "Blizzard").state)
+    end)
+
+    -- Otherwise the panel says "not installed" three times to somebody whose bars are working.
+    it("gives an unrecognised bar addon a row of its own", function()
+      libs["LibActionButton-1.0-Unknown"] = library(set(button("WhateverButton1", { slot = 1 })))
+      BarProviders.Register()
+      local rows = BarProviders.status()
+      assert.equal("active", stateOf(rows, "Action bars").state)
+      assert.equal("Action bars", stateOf(rows, "Action bars").activeName)
+      assert.equal("fallback", stateOf(rows, "Blizzard").state)
+    end)
+
+    it("names the winner on an unrecognised addon's row too, when a known one outranks it", function()
+      libs["LibActionButton-1.0-ElvUI"] = library(set(button("ElvUI_Bar1Button1", { slot = 1 })))
+      libs["LibActionButton-1.0-Unknown"] = library(set(button("WhateverButton1", { slot = 2 })))
+      BarProviders.Register()
+      local row = stateOf(BarProviders.status(), "Action bars")
+      assert.equal("inactive", row.state)
+      assert.equal("ElvUI", row.activeName)
+    end)
+
+    it("does not invent a generic row when no unrecognised addon registered", function()
+      libs["LibActionButton-1.0-ElvUI"] = library(set(button("ElvUI_Bar1Button1", { slot = 1 })))
+      BarProviders.Register()
+      assert.is_nil(stateOf(BarProviders.status(), "Action bars"))
+    end)
+
+    it("still lists the bar addons when the API is unavailable", function()
+      ns.API = nil
+      local rows = BarProviders.status()
+      assert.equal("absent", stateOf(rows, "ElvUI").state)
+      assert.equal("active", stateOf(rows, "Blizzard").state)
+    end)
+  end)
+
   -- The migration hazard, in the one place it can be caught. A retired companion addon left in the
   -- AddOns folder registers a second provider with the same name; the registry sort is stable only
   -- on (priority, name), so which one answers depends on load order. That is how a stale

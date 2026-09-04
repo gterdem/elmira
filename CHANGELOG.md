@@ -1,5 +1,18 @@
 # Changelog
 ## Unreleased
+- **New: an Action Bars settings page that tells you why nothing is glowing.** `/elm options` has a
+  new section listing every bar addon Elmira can use — ElvUI, Bartender4, Dominos and the default
+  Blizzard bars — and saying which one it is actually using, in words. If you have two installed it
+  says which one won. A **Preview glow** button flashes the button for your current suggestion on
+  demand, so you can check the effect standing in a city instead of waiting for a fight. And a
+  per-spell check walks the things that have to be true — the spell is on a bar, that button is on
+  screen right now, the glow is switched on, and Elmira is showing at all — and names the one that
+  is not, with what to do about it. It tells apart the cases that look identical from the outside:
+  a spell you never dragged onto a bar, a button hidden by your current stance, and the three
+  separate switches that can leave a perfectly placed button dark. Pick any spell in your playstyle
+  to check, not just the one being suggested.
+- "Also glow your action bar" has moved from Glow to Action Bars, next to the list that shows you
+  whether it is working.
 - **One addon folder.** Elmira used to install as five: the addon plus `Elmira_ElvUI`,
   `Elmira_ItemRack`, `Elmira_WoWSims` and `Elmira_Insights`. Everything that did something is now
   inside Elmira itself, so there is one box to tick in the AddOns list, one thing to update, and one

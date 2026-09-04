@@ -211,5 +211,43 @@ function BarProviders.Subscribe(onChange)
   return wired
 end
 
+-- What the options panel lists. Every bar addon we can support gets a row whether or not it is
+-- installed, and the row carries its own state -- the Details!-plugin-tab pattern. The alternative,
+-- listing only what registered, gives no signal at all when the thing you installed did not show up.
+--
+-- `state` is one of:
+--   "active"   this is the one supplying buttons
+--   "inactive" installed, but another bar addon outranks it
+--   "absent"   not installed; a plain fact, not an error
+--   "fallback" the Blizzard bars, which are always there
+-- The caller turns these into sentences; deciding the WORDS here would put user-facing English in
+-- Display, and it all has to go through AceLocale.
+function BarProviders.status()
+  local API = ns.API
+  local registered = API and API.GetProviders("barProviders") or {}
+  local byName, active = {}, registered[1] and registered[1].name
+  for _, spec in ipairs(registered) do byName[spec.name] = spec end
+
+  local rows = {}
+  for _, owner in ipairs(OWNERS) do
+    rows[#rows + 1] = {
+      name = owner.name,
+      state = byName[owner.name] and (owner.name == active and "active" or "inactive") or "absent",
+      activeName = active,
+    }
+  end
+  -- A fork we do not recognise still registered, under the generic name. It has to appear, or the
+  -- panel says "not installed" four times to somebody whose bars are working.
+  if byName[GENERIC.name] then
+    rows[#rows + 1] = {
+      name = GENERIC.name,
+      state = GENERIC.name == active and "active" or "inactive",
+      activeName = active,
+    }
+  end
+  rows[#rows + 1] = { name = "Blizzard", state = active and "fallback" or "active", activeName = active }
+  return rows
+end
+
 ns.BarProviders = BarProviders
 return BarProviders

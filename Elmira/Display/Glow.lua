@@ -125,6 +125,15 @@ function Glow.SetNowSlot(queueButton, slot)
   nowFrames = wanted
 end
 
+-- Is this frame currently lit for the REAL suggestion? The options panel's preview needs to know
+-- before it stops a glow it started: between lighting a button and its timer firing, the rotation
+-- can move on and the render loop can take that same frame for the actual now-slot. Stopping it
+-- then puts the button dark AND leaves SetNowSlot believing it is already lit, so it is not relit
+-- until the suggestion changes away and back.
+function Glow.isNowFrame(frame)
+  return frame ~= nil and nowFrames[frame] == true
+end
+
 function Glow.activeCount()
   local n = 0
   for _ in pairs(active) do n = n + 1 end

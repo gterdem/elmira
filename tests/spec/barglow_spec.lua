@@ -462,3 +462,211 @@ describe("BarGlow Blizzard scan", function()
     end)
   end)
 end)
+
+-- BarGlow.check() — the five-stage chain the Action Bars panel renders.
+--
+-- The whole value of this function is SEPARATING the causes of "nothing is glowing". Four different
+-- problems need four different actions from the player: no bar addon, the spell is not placed, the
+-- button is on a bar they cannot see right now, and the bar glow is switched off. Collapsing them
+-- into one "not found" is what sends someone to reinstall an addon that was never the problem. So
+-- every test below asserts WHICH stage failed, never merely that something did.
+-- Symbolic keys are how the engine names spells; they are not what the player calls them, and the
+-- options panel needs the real name.
+describe("BarGlow.spellName", function()
+  local helper4 = require("tests.helper")
+  local mock4 = require("tests.wow_mock")
+
+  it("resolves an id to the client's name for it", function()
+    helper4.reset(); mock4.reset()
+    local BG = helper4.load("Elmira/Display/BarGlow.lua")
+    mock4.knownSpells[415073] = true
+    mock4.spellNames[415073] = "Exorcism"
+    assert.equal("Exorcism", BG.spellName(415073))
+    assert.is_nil(BG.spellName(nil))
+    assert.is_nil(BG.spellName(999999))
+  end)
+end)
+
+describe("BarGlow.check", function()
+  local helper3 = require("tests.helper")
+  local mock3 = require("tests.wow_mock")
+  local BarGlow3, ns3
+
+  local function load3(opts)
+    opts = opts or {}
+    helper3.reset()
+    mock3.reset()
+    ns3 = _G.__ELM_NS
+    helper3.load("Elmira/Core/API.lua")
+    BarGlow3 = helper3.load("Elmira/Display/BarGlow.lua")
+    ns3.Display = { currentPack = function() return { spells = { EXORCISM = { id = 415073 } } } end }
+    ns3.db = { profile = { glow = { enabled = opts.enabled ~= false, barGlow = opts.barGlow ~= false } } }
+    return BarGlow3
+  end
+
+  local function frame3(visible, name, slot)
+    return { IsVisible = function() return visible end, GetName = function() return name end,
+             action = slot }
+  end
+
+  local function stage(rows, label)
+    for _, r in ipairs(rows) do if r.label == label then return r end end
+  end
+
+  before_each(function() load3() end)
+  after_each(function() _G.ActionButton1 = nil end)
+
+  it("reports an unknown spell as a spell problem, not a bar problem", function()
+    local rows = BarGlow3.check("NOT_IN_THE_BUILD")
+    assert.equal(1, #rows)
+    assert.is_false(stage(rows, "spell").ok)
+    assert.is_nil(stage(rows, "bars"))
+  end)
+
+  it("names the bar addon in use, and says blizzard when there is none", function()
+    assert.equal("blizzard", stage(BarGlow3.check("EXORCISM"), "bars").detail)
+    ns3.API.RegisterBarProvider{ name = "ElvUI", priority = 10, buttonsForSpell = function() return {} end }
+    assert.equal("ElvUI", stage(BarGlow3.check("EXORCISM"), "bars").detail)
+  end)
+
+  it("passes every stage for a spell on a visible button with the glow on", function()
+    ns3.API.RegisterBarProvider{ name = "ElvUI",
+      buttonsForSpell = function() return { frame3(true, "ElvUI_Bar1Button3") } end }
+    local rows = BarGlow3.check("EXORCISM")
+    assert.is_true(stage(rows, "placed").ok)
+    assert.is_true(stage(rows, "visible").ok)
+    assert.equal("ElvUI_Bar1Button3", stage(rows, "visible").detail)
+    assert.is_true(stage(rows, "glow").ok)
+  end)
+
+  it("fails at 'placed', and does not pretend to have answered the later questions", function()
+    local rows = BarGlow3.check("EXORCISM")
+    assert.equal(4, #rows)                     -- and it STOPS: no stage is answered twice
+    assert.is_false(stage(rows, "placed").ok)
+    assert.is_nil(stage(rows, "visible").ok)   -- not reached, distinct from failed
+    assert.is_nil(stage(rows, "glow").ok)
+  end)
+
+  -- The distinction the whole function exists for. Both of these end in no glow; one is a
+  -- five-second fix and the other is a stance, and a player told "not found" cannot tell which.
+  it("separates 'not on any bar' from 'on a bar you cannot see'", function()
+    ns3.API.RegisterBarProvider{ name = "ElvUI",
+      buttonsForSpell = function() return { frame3(false, "ElvUI_Bar5Button1") } end }
+    local rows = BarGlow3.check("EXORCISM")
+    assert.equal(4, #rows)
+    assert.is_true(stage(rows, "placed").ok)    -- it IS placed
+    assert.is_false(stage(rows, "visible").ok)  -- just not on screen
+    assert.is_nil(stage(rows, "glow").ok)
+  end)
+
+  -- Everything above can pass while the bar glow is off. A chain of ticks ending in no glow is the
+  -- exact report this is meant to pre-empt.
+  it("reports the bar glow being switched off as its own stage", function()
+    load3{ barGlow = false }
+    ns3.API.RegisterBarProvider{ name = "ElvUI",
+      buttonsForSpell = function() return { frame3(true, "ElvUI_Bar1Button1") } end }
+    local rows = BarGlow3.check("EXORCISM")
+    assert.is_true(stage(rows, "visible").ok)
+    assert.is_false(stage(rows, "glow").ok)
+
+    load3{ enabled = false }
+    ns3.API.RegisterBarProvider{ name = "ElvUI",
+      buttonsForSpell = function() return { frame3(true, "ElvUI_Bar1Button1") } end }
+    assert.is_false(stage(BarGlow3.check("EXORCISM"), "glow").ok)
+  end)
+
+  it("falls back to the Blizzard bars when no provider holds the spell", function()
+    mock3.actionInfo[3] = { "spell", 415073 }
+    _G.ActionButton1 = frame3(true, "ActionButton1", 3)
+    ns3.API.RegisterBarProvider{ name = "ElvUI", buttonsForSpell = function() return {} end }
+    BarGlow3.Invalidate()
+    local rows = BarGlow3.check("EXORCISM")
+    assert.is_true(stage(rows, "placed").ok)
+    assert.equal("ActionButton1", stage(rows, "visible").detail)
+  end)
+
+  it("quotes the button name back, and copes when the button will not give one", function()
+    ns3.API.RegisterBarProvider{ name = "Nameless",
+      buttonsForSpell = function() return { { IsVisible = function() return true end } } end }
+    assert.is_nil(stage(BarGlow3.check("EXORCISM"), "visible").detail)
+  end)
+
+  -- The defect a pre-commit audit found by probing, which no mutation could see because the bug was
+  -- in code that was ABSENT: check() walked providers itself and stopped at the first one returning
+  -- ANY button, while buttonsFor() skips a provider whose buttons are all hidden and falls through.
+  -- With two bar addons installed the panel said "you cannot see that button" while the glow was
+  -- working perfectly on the second one.
+  describe("agreeing with what actually glows", function()
+    it("does not blame the stance when a second bar addon has the visible button", function()
+      ns3.API.RegisterBarProvider{ name = "ElvUI", priority = 10,
+        buttonsForSpell = function() return { frame3(false, "ElvUI_Bar5Button1") } end }
+      ns3.API.RegisterBarProvider{ name = "Bartender4", priority = 9,
+        buttonsForSpell = function() return { frame3(true, "BT4Button7") } end }
+      local rows = BarGlow3.check("EXORCISM")
+      assert.equal(1, #BarGlow3.buttonsFor("EXORCISM"))   -- the glow works
+      assert.is_true(stage(rows, "visible").ok)           -- so the panel must not say otherwise
+      assert.equal("BT4Button7", stage(rows, "visible").detail)
+      assert.equal("Bartender4", stage(rows, "bars").detail)
+    end)
+
+    it("counts buttons across every source, not just the first that answered", function()
+      ns3.API.RegisterBarProvider{ name = "ElvUI", priority = 10,
+        buttonsForSpell = function() return { frame3(false, "ElvUI_Bar5Button1") } end }
+      ns3.API.RegisterBarProvider{ name = "Bartender4", priority = 9,
+        buttonsForSpell = function() return { frame3(true, "BT4Button7") } end }
+      assert.equal(2, stage(BarGlow3.check("EXORCISM"), "placed").detail)
+    end)
+  end)
+
+  -- A green chain has to mean a glow. These three states passed every bar question while nothing
+  -- could possibly light up, which is the exact lie this panel exists to prevent.
+  describe("not reporting all-clear when nothing can glow", function()
+    local function placedAndVisible()
+      ns3.API.RegisterBarProvider{ name = "ElvUI",
+        buttonsForSpell = function() return { frame3(true, "ElvUI_Bar1Button1") } end }
+    end
+
+    it("names Elmira itself being switched off, not the bar toggle", function()
+      load3(); ns3.db.profile.enabled = false
+      placedAndVisible()
+      local g = stage(BarGlow3.check("EXORCISM"), "glow")
+      assert.is_false(g.ok)
+      assert.equal("addon", g.detail)
+    end)
+
+    it("distinguishes the queue glow being off from the bar glow being off", function()
+      load3(); ns3.db.profile.glow.enabled = false
+      placedAndVisible()
+      assert.equal("queue", stage(BarGlow3.check("EXORCISM"), "glow").detail)
+
+      load3{ barGlow = false }
+      placedAndVisible()
+      assert.equal("bars", stage(BarGlow3.check("EXORCISM"), "glow").detail)
+    end)
+
+    -- Being hidden is not a misconfiguration -- it is the display doing what it was told -- but a
+    -- chain of ticks over a dark bar still has to be explained.
+    it("says when the display is simply hidden right now", function()
+      load3()
+      placedAndVisible()
+      ns3.Display.shouldShow = function() return false, "out of combat, no target" end
+      local rows = BarGlow3.check("EXORCISM")
+      assert.is_true(stage(rows, "glow").ok)
+      assert.is_false(stage(rows, "showing").ok)
+      assert.equal("out of combat, no target", stage(rows, "showing").detail)
+    end)
+
+    it("says nothing about visibility when the display is showing", function()
+      load3()
+      placedAndVisible()
+      ns3.Display.shouldShow = function() return true, "in combat" end
+      assert.is_nil(stage(BarGlow3.check("EXORCISM"), "showing"))
+    end)
+  end)
+
+  it("survives a provider that throws instead of answering", function()
+    ns3.API.RegisterBarProvider{ name = "Broken", buttonsForSpell = function() error("their bug") end }
+    local rows = BarGlow3.check("EXORCISM")
+    assert.is_false(stage(rows, "placed").ok)
+  end)
+end)

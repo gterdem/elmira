@@ -271,5 +271,103 @@ function BarGlow.stats()
   return { mapped = n, providers = #providers(), built = true }
 end
 
+-- The client's name for a spell id, for the options panel to show instead of a symbolic key.
+function BarGlow.spellName(id)
+  -- pcall already covers a nil id and a client with no GetSpellInfo; a guard in front of it would
+  -- only restate what the failure path does.
+  local ok, name = pcall(function() return GetSpellInfo(id) end)
+  return ok and name or nil
+end
+
+-- A button's frame name, for the diagnostic to quote back. Never trusted to exist: a provider may
+-- hand back anything, and this is a diagnostic -- it must not be the thing that breaks.
+local function buttonName(button)
+  local ok, name = pcall(function() return button:GetName() end)
+  return ok and name or nil
+end
+
+-- The chain behind "why is nothing glowing", as ordered rows a person can read.
+--
+-- `describe()` above answers the same question for a developer, in one dense dump; this answers it
+-- for the player, and the difference that matters is SEPARATING the causes. "No glow" has half a
+-- dozen distinct ones -- the spell is not on a bar, the button is on a page or stance you cannot
+-- see, the bar glow is off, the queue glow is off, Elmira is switched off entirely, or Elmira is
+-- simply hidden right now -- and each needs a different action. Collapsing them into "not found" is
+-- what sends somebody to reinstall an addon that was never the problem.
+--
+-- Two rules this function is easy to get wrong, and did:
+--   * It must agree with what actually glows. `buttonsFor` is the authority -- it walks providers in
+--     priority order, skips any whose buttons are all hidden, and falls through to the Blizzard
+--     scan. An independent walk that stopped at the first provider returning ANY button reported
+--     "you cannot see that button" while the glow was working fine on a second bar addon.
+--   * A green chain must mean a glow. Reporting every bar question green while `enabled` is off, or
+--     while the queue is hidden out of combat, is the exact lie this panel exists to prevent.
+--
+-- Each row is { label, ok, detail }: ok true (passed), false (this is the problem) or nil (not
+-- reached, because an earlier row failed). `detail` is DATA -- a name, a count, a mode -- never a
+-- sentence: the words are Options' job and have to go through AceLocale.
+function BarGlow.check(spellKey)
+  local rows = {}
+  local function row(label, ok, detail)
+    rows[#rows + 1] = { label = label, ok = ok, detail = detail }
+    return rows
+  end
+
+  local id = spellIDFor(spellKey)
+  if not id then return row("spell", false), nil end
+
+  -- The authority: the same call the renderer makes, so this cannot disagree with the glow.
+  local visible, source = BarGlow.buttonsFor(spellKey)
+  -- Which source ANSWERED for this spell when there is one, because that is the specific fact; the
+  -- registered bar addon when nothing answered, because "blizzard" would then be reporting a
+  -- fallback that did not actually supply anything either.
+  local registered = providers()
+  row("bars", true, source or (registered[1] and registered[1].name) or "blizzard")
+
+  -- Unfiltered, and across EVERY provider plus the Blizzard scan, because "is it placed anywhere"
+  -- and "can you see it right now" are the two questions this whole function exists to separate.
+  local placed = 0
+  for _, p in ipairs(registered) do
+    if type(p.buttonsForSpell) == "function" then
+      local ok, buttons = pcall(p.buttonsForSpell, id)
+      if ok and type(buttons) == "table" then placed = placed + #buttons end
+    end
+  end
+  placed = placed + #(blizzButtons(id) or {})
+
+  if placed == 0 then
+    row("placed", false)
+    row("visible", nil)
+    row("glow", nil)
+    return rows, id
+  end
+  row("placed", true, placed)
+
+  if #visible == 0 then
+    row("visible", false)
+    row("glow", nil)
+    return rows, id
+  end
+  row("visible", true, buttonName(visible[1]))
+
+  -- Everything above can pass while no glow happens, for four different reasons. Naming the wrong
+  -- one is worse than naming none: the panel told a player to turn on a toggle that was already on.
+  local p = ns.db and ns.db.profile
+  if p and p.enabled == false then return row("glow", false, "addon"), id end
+  if not (p and p.glow and p.glow.enabled) then return row("glow", false, "queue"), id end
+  if not (p and p.glow and p.glow.barGlow) then return row("glow", false, "bars"), id end
+  row("glow", true)
+
+  -- Last, and deliberately after the glow settings: being hidden is not a misconfiguration, it is
+  -- the display doing what it was told. It still has to be said, because a green chain and a dark
+  -- bar is exactly the report this panel exists to pre-empt.
+  local shouldShow = ns.Display and ns.Display.shouldShow
+  if type(shouldShow) == "function" then
+    local shown, why = shouldShow()
+    if shown == false then row("showing", false, why) end
+  end
+  return rows, id
+end
+
 ns.BarGlow = BarGlow
 return BarGlow
