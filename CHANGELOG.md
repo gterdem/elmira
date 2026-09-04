@@ -1,5 +1,11 @@
 # Changelog
 ## Unreleased
+- **New playstyle: Protection.** The sword-and-board tank: keep Holy Shield and Righteous Fury up,
+  Seal of Martyrdom on, then Hammer of the Righteous, Shield of Righteousness, Exorcism and Avenger's
+  Shield on cooldown, Judgement as the filler. It needs its runes — Hand of Reckoning is the only taunt
+  a paladin has — and the setup window lists exactly which to engrave. Taunt and Divine Protection are
+  yours to call: Elmira cannot see threat or your health, so it will not guess for you. Sourced from
+  Wowhead's Phase 8 tank guides.
 - **New playstyle: Wrath-like.** The relaxed Retribution build — one seal, a slow two-hander, and a
   simple priority: Divine Storm at 3 Holy Power once you have the T3.5 4-set, Crusader Strike and
   Exorcism (your shoulder soul decides which comes first), Judgement as the filler. Sourced from

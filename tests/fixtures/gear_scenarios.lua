@@ -470,4 +470,371 @@ return {
       expect = { "item:13", "item:14" },
       expectLabels = { "Trinket", "Trinket" } },
   },
+
+  -- ---------------------------------------------------------------------------------------------
+  -- PALADIN_PROT (ADR-0013 sword & board tank). Gate list: docs/research/paladin-p8-gather-prot-shockadin.md
+  -- lines 90-230; mechanism: docs/research/paladin-prot-how-tanking-works.md. Per ADR-0013 §4 the
+  -- floor is "blues, the build's runes engraved" -- there is no "no runes" scenario here, and every
+  -- scenario below leaves the six runes named in the build's `requires` at FakeState's default
+  -- `usable = true` (nil usableSet) unless it deliberately silences one to test a skip path.
+  --
+  -- Entries walked top-to-bottom against Elmira/Classes/Paladin.lua's PALADIN_PROT (17 lines):
+  --    1 RIGHTEOUS_FURY "Threat on" (no_buff RIGHTEOUS_FURY)
+  --    2 SEAL_OF_MARTYRDOM "Seal up" (no_seal)
+  --    3 HOLY_SHIELD "Keep up" (no_buff HOLY_SHIELD)
+  --    4 AVENGING_WRATH "Threat burst", hold=true (in_combat)
+  --    5 AVENGERS_SHIELD "AoE" (enemies>=3)
+  --    6 CONSECRATION "AoE" (enemies>=3, resource MANA minPct=30)
+  --    7 HAMMER_OF_THE_RIGHTEOUS (baseline, unlabelled, no gate)
+  --    8 SHIELD_OF_RIGHTEOUSNESS (baseline, unlabelled, no gate)
+  --    9 EXORCISM (baseline, unlabelled, no gate)
+  --   10 AVENGERS_SHIELD (baseline, unlabelled, no gate)
+  --   11 DIVINE_STORM "chest: Divine Storm" (enemies>=2)
+  --   12 HOLY_WRATH "AoE" (enemies>=3, any(target_type Undead/Demon, rune RUNE_PURIFYING_POWER))
+  --   13 JUDGEMENT "Seal expiring" (seal + buff maxRemaining 1.5)
+  --   14 JUDGEMENT "Filler (then reseal)" (seal)
+  --   15 CONSECRATION (baseline, unlabelled; resource MANA minPct=40)
+  --   16 item 13 "Trinket" (item_ready 13)
+  --   17 item 14 "Trinket" (item_ready 14)
+  -- Ambiguous keys (more than one entry can produce them): JUDGEMENT x2 (13, 14), CONSECRATION x2
+  -- (6, 15), AVENGERS_SHIELD x2 (5, 10) -- every scenario below that touches one of those carries
+  -- `expectLabels`. No PALADIN_PROT entry gates on a `set` piece count at all (its one gear-conditional
+  -- line is the soul-only HOLY_SHIELD_UNLIMITED bonus), so "each rotation-changing set/bonus threshold"
+  -- collapses to `radiant_defender_soul` below -- there is no set-piece matrix to walk for this build.
+  --
+  -- IMPORTANT, verified empirically (not assumed) against Core/Simulation.lua and Core/Schema.lua
+  -- before any scenario below was written, because both defeat the naive reading of several entries:
+  --
+  --  (a) tests/fake_state.lua's `inCombat()` was hardcoded `true` when this block was first written;
+  --      it is now an option (`inCombat = false`), exercised by `out_of_combat_no_burst`. Scenarios that
+  --      do not want AVENGING_WRATH to win still silence it (`usable = { AVENGING_WRATH = false }`),
+  --      because it is `hold` and would otherwise take slot 1 of every in-combat scenario.
+  --
+  --  (b) AVENGING_WRATH carries no `cooldown` in Data.Spells (the live adapter reports the real one;
+  --      the headless preview falls back to one time step), so `pull_avenging_wrath` supplies an
+  --      explicit `baseCooldown`, mirroring an adapter that has observed a real GetSpellCooldown.
+  --      AVENGERS_SHIELD had the same gap when this block was first written and showed three times
+  --      in a row in `aoe_three`; it now carries `cooldown = 15` (its Wowhead page), which is why that
+  --      scenario alternates into Consecration.
+  --
+  --  (c) RIGHTEOUS_FURY (entry 1) and HOLY_SHIELD (entry 3) gate on `no_buff` of THEMSELVES. When this
+  --      block was first written the virtual state did not model a cast spell's own aura, and
+  --      Righteous Fury won all three slots. Core/Simulation.lua now records a cast spell's own aura
+  --      (`selfBuff`), so `righteous_fury_down` asserts the entry fires once and the core follows.
+  PALADIN_PROT = {
+    ---------------------------------------------------------------- baseline: single-target core, Wowhead's order
+    -- Righteous Fury and Holy Shield already up, seal up with 25s remaining, one enemy (no AoE/cleave
+    -- gate passes): entries 1-6 all fail their own gates, so the queue falls through to the
+    -- unconditional core exactly in Wowhead's stated order -- Hammer of the Righteous, Shield of
+    -- Righteousness, Exorcism. AVENGING_WRATH is silenced per finding (a) above, or it would win every
+    -- slot (in_combat is hardcoded true in FakeState).
+    -- Labels: all three slots are the unconditional baseline entries (7, 8, 9) -- none of them carry a
+    -- label.
+    { name = "runes_blues", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      usable = { AVENGING_WRATH = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS", "EXORCISM" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- entry 1: Righteous Fury down leads
+    -- Righteous Fury's buff absent (Holy Shield and seal still up): "Threat on" must be slot 1. See
+    -- finding (c) above for why slots 2-3 are ALSO RIGHTEOUS_FURY -- its own gate never falls once it
+    -- fires in the preview, because Simulation's virtual state never marks a just-cast buff present and
+    -- RIGHTEOUS_FURY carries no real cooldown to fall back on. This is asserted as the documented real
+    -- behaviour, not an endorsement of it -- reported as a finding, not silently worked around.
+    -- Slot 1 is entry 1 ("Threat on"). Casting Righteous Fury makes its own aura read as present for the
+    -- rest of the preview (Core/Simulation.lua, selfBuff), so entry 1 is ineligible from slot 2 on and
+    -- the core takes over: Hammer of the Righteous, then Shield of Righteousness. Before that change
+    -- this scenario read "Righteous Fury" three times, which is the defect it now guards against.
+    { name = "righteous_fury_down", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      usable = { AVENGING_WRATH = false },
+      buffs = { HOLY_SHIELD = { remaining = 999 }, SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "RIGHTEOUS_FURY", "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS" },
+      expectLabels = { "Threat on", false, false } },
+
+    ---------------------------------------------------------------- entry 3: Holy Shield down leads
+    -- Holy Shield's buff absent (Righteous Fury and seal up): "Keep up" is slot 1. Unlike Righteous
+    -- Fury, Holy Shield carries a real `cooldown = 10` in Data.Spells, so its own re-cast is correctly
+    -- blocked for the rest of this 3-slot preview and the queue falls through to the single-target
+    -- core exactly like runes_blues.
+    -- Labels: slot 1 is entry 3 ("Keep up"); slots 2-3 are the unconditional baseline (7, 8).
+    { name = "holy_shield_down", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      usable = { AVENGING_WRATH = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "HOLY_SHIELD", "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS" },
+      expectLabels = { "Keep up", false, false } },
+
+    ---------------------------------------------------------------- entry 2: seal down leads
+    -- No seal set at all (state:seal() is nil): "Seal up" is slot 1. Casting a seal sets Simulation's
+    -- virtual `sealOverride` (Core/Simulation.lua applyCast), so `no_seal` correctly reads false for
+    -- slots 2-3 even though nothing in `buffs` models it -- the seal condition, unlike a buff, IS
+    -- specially modelled by Simulation. Righteous Fury and Holy Shield are up so entries 1 and 3 stay
+    -- out of the way.
+    -- Labels: slot 1 is entry 2 ("Seal up"); slots 2-3 are the unconditional baseline (7, 8).
+    { name = "seal_down", sets = {},
+      usable = { AVENGING_WRATH = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 } },
+      expect = { "SEAL_OF_MARTYRDOM", "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS" },
+      expectLabels = { "Seal up", false, false } },
+
+    ---------------------------------------------------------------- entry 4: pull, Avenging Wrath ASAP
+    -- Wowhead: "better to use this ASAP on a pull ... to facilitate a better threat curve" -- no
+    -- Vengeance/Holy Power gate, just `in_combat` (hardcoded true in FakeState, finding (a) above).
+    -- AVENGING_WRATH is left at its default `usable = true` here specifically to exercise the gate;
+    -- `baseCooldown` is set to a large number to stand in for the real multi-minute cooldown the live
+    -- adapter would report (finding (b)) -- without it, AVENGING_WRATH's own synthetic ~1-GCD "cooldown"
+    -- would make it win slot 3 again, which is not what a real player would ever see (the true cooldown
+    -- is minutes, not seconds).
+    -- Labels: slot 1 is entry 4 ("Threat burst"); slots 2-3 fall through to the single-target core (7, 8).
+    { name = "pull_avenging_wrath", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      baseCooldown = { AVENGING_WRATH = 600 },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "AVENGING_WRATH", "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS" },
+      expectLabels = { "Threat burst", false, false } },
+
+    -- The other side of that gate, now that the fake state can be out of combat: Avenging Wrath is
+    -- usable and ready but must not be suggested before the pull. Labels: the plain core.
+    { name = "out_of_combat_no_burst", sets = {}, seal = "SEAL_OF_MARTYRDOM", inCombat = false,
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 }, SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS", "EXORCISM" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- entry 5's threshold: two enemies is cleave, not AoE
+    -- Wowhead's AoE list is for "3+ enemies". With two, Avenger's Shield's "AoE" copy must stay
+    -- ineligible and the plain single-target order holds (its baseline copy is fourth, outside the top
+    -- three). The audit found `min = 3` -> `min = 2` survived because every enemies = 2 scenario
+    -- silenced Avenger's Shield to isolate the Divine Storm gate; this one leaves it live.
+    { name = "cleave_two_no_aoe_avengers_shield", sets = {}, seal = "SEAL_OF_MARTYRDOM", enemies = 2,
+      usable = { AVENGING_WRATH = false, DIVINE_STORM = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 }, SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS", "EXORCISM" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- entry 5: AoE promotes Avenger's Shield
+    -- 3+ enemies: Wowhead's separate AoE list promotes Avenger's Shield ahead of the single-target
+    -- core. This is the UNISOLATED scenario -- nothing above entry 5 is silenced beyond the usual
+    -- AVENGING_WRATH -- and it reproduces finding (b) verbatim: because AVENGERS_SHIELD has no
+    -- `cooldown` in Data.Spells, it wins all 3 slots instead of alternating with Consecration's own AoE
+    -- line (entry 6), which per Wowhead should ALSO be promoted here. See `aoe_three_consecration`
+    -- below for proof that entry 6's own gate is correctly wired once entry 5 is out of the way -- this
+    -- scenario is deliberately left as the honest, unisolated reading and reported as a finding.
+    -- Labels: entry 5 ("AoE") is earlier in the list than entry 10 (unlabelled) and remains eligible
+    -- every slot, so it -- not entry 10 -- must be what produces all three.
+    -- Slot 1: entry 5 (Avenger's Shield "AoE"). Avenger's Shield carries its 15s cooldown now, so slot 2
+    -- falls to the next promoted AoE line, Consecration "AoE" (enemies 3, mana 100%); its 8s cooldown then
+    -- leaves slot 3 to the first single-target core entry, Hammer of the Righteous (unlabelled).
+    { name = "aoe_three", sets = {}, seal = "SEAL_OF_MARTYRDOM", enemies = 3,
+      usable = { AVENGING_WRATH = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "AVENGERS_SHIELD", "CONSECRATION", "HAMMER_OF_THE_RIGHTEOUS" },
+      expectLabels = { "AoE", "AoE", false } },
+
+    ---------------------------------------------------------------- entry 6: Consecration's own AoE gate, isolated
+    -- Same gear point as aoe_three, with Avenger's Shield additionally silenced so entry 6 gets a turn
+    -- -- proving Consecration's "AoE" line (enemies>=3, mana>=30%) is correctly wired even though
+    -- aoe_three above can never reach it unisolated (finding (b)). Mana defaults to 100%, well above
+    -- the 30% floor.
+    -- Labels: slot 1 is entry 6 ("AoE"); entry 6's own 8s cooldown (Data.Spells CONSECRATION.cooldown)
+    -- blocks it for slots 2-3, which fall to the unconditional core (7, 8).
+    { name = "aoe_three_consecration", sets = {}, seal = "SEAL_OF_MARTYRDOM", enemies = 3,
+      usable = { AVENGING_WRATH = false, AVENGERS_SHIELD = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "CONSECRATION", "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS" },
+      expectLabels = { "AoE", false, false } },
+
+    ---------------------------------------------------------------- entry 6's mana floor: 30%, not entry 15's 40%
+    -- Consecration's AoE line and its baseline filler (entry 15) use DIFFERENT mana floors (30% vs
+    -- 40%) -- easy to conflate if one were ever copy-edited into the other. 32% sits strictly between
+    -- them: above entry 6's 30% floor (so the AoE line still fires) but below entry 15's 40% (so this
+    -- scenario is not accidentally passing because of the OTHER Consecration entry). Avenger's Shield
+    -- silenced as in aoe_three_consecration.
+    { name = "aoe_three_consecration_mana_floor", sets = {}, seal = "SEAL_OF_MARTYRDOM", enemies = 3,
+      usable = { AVENGING_WRATH = false, AVENGERS_SHIELD = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      power = { MANA = { 320, 1000 } },
+      expect = { "CONSECRATION", "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS" },
+      expectLabels = { "AoE", false, false } },
+    -- Below entry 6's 30% floor: the AoE line must NOT fire (falls straight to the single-target core;
+    -- entry 15's own 40% floor is also failed at 20%, so nothing masks this).
+    { name = "aoe_three_consecration_below_mana_floor", sets = {}, seal = "SEAL_OF_MARTYRDOM", enemies = 3,
+      usable = { AVENGING_WRATH = false, AVENGERS_SHIELD = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      power = { MANA = { 200, 1000 } },
+      expect = { "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS", "EXORCISM" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- entry 10: the unlabelled Avenger's Shield
+    -- Single-target gear point (enemies=1, entry 5's AoE gate fails) with the rest of the core
+    -- silenced: proves entry 10 (the plain, always-eligible Avenger's Shield later in Wowhead's
+    -- single-target order) is itself reachable and correctly unlabelled.
+    -- Slot 1 is the baseline Avenger's Shield (enemies = 1, so the "AoE" copy is ineligible; unlabelled).
+    -- With the rest of the core silenced and Avenger's Shield on its 15s cooldown, slot 2 is the
+    -- Judgement filler (seal up, not expiring) and slot 3 the unlabelled Consecration filler.
+    { name = "avengers_shield_single_target", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      usable = { AVENGING_WRATH = false, HAMMER_OF_THE_RIGHTEOUS = false, SHIELD_OF_RIGHTEOUSNESS = false,
+                 EXORCISM = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "AVENGERS_SHIELD", "JUDGEMENT", "CONSECRATION" },
+      expectLabels = { false, "Filler (then reseal)", false } },
+
+    ---------------------------------------------------------------- entry 12: Holy Wrath, Undead-only, isolated
+    -- 3+ enemies against an Undead target, with everything that would otherwise outrank Holy Wrath
+    -- silenced (entries 5, 6, 7, 8, 9, 11 -- the entire single-target core has no gate of its own and
+    -- would win regardless of target type or enemy count, so Holy Wrath's own `target_type` gate can
+    -- only be observed this way). This also proves the `any(target_type, rune)` branch's target-type
+    -- half independently of RUNE_PURIFYING_POWER (not engraved here).
+    -- Labels: slot 1 is entry 12 ("AoE"); slot 2 is entry 14 ("Filler (then reseal)") -- the seal has
+    -- 25s remaining, well outside entry 13's 1.5s window.
+    { name = "aoe_three_undead", sets = {}, seal = "SEAL_OF_MARTYRDOM", enemies = 3, targetType = "Undead",
+      usable = { AVENGING_WRATH = false, AVENGERS_SHIELD = false, CONSECRATION = false,
+                 HAMMER_OF_THE_RIGHTEOUS = false, SHIELD_OF_RIGHTEOUSNESS = false, EXORCISM = false,
+                 DIVINE_STORM = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "HOLY_WRATH", "JUDGEMENT" },
+      expectLabels = { "AoE", "Filler (then reseal)" } },
+
+    ---------------------------------------------------------------- entry 11: the chest choice, Divine Storm known
+    -- 2+ enemies with Divine Storm known (the character engraved the chest rune instead of the default
+    -- Aegis): "chest: Divine Storm" is reachable. Isolated -- the single-target core (7, 8, 9) and the
+    -- unlabelled Avenger's Shield (10) silenced -- because none of those four carry a gate of their own
+    -- and would otherwise win every slot ahead of entry 11 regardless of enemy count.
+    -- Labels: slot 1 is entry 11 ("chest: Divine Storm"); slot 2 is entry 14 ("Filler (then reseal)",
+    -- seal has 25s remaining, outside entry 13's 1.5s window); slot 3's CONSECRATION is entry 15
+    -- (unlabelled) -- entry 6 needs enemies>=3, which this scenario never sets (only 2).
+    { name = "cleave_divine_storm_chest", sets = {}, seal = "SEAL_OF_MARTYRDOM", enemies = 2,
+      usable = { AVENGING_WRATH = false, HAMMER_OF_THE_RIGHTEOUS = false, SHIELD_OF_RIGHTEOUSNESS = false,
+                 EXORCISM = false, AVENGERS_SHIELD = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "DIVINE_STORM", "JUDGEMENT", "CONSECRATION" },
+      expectLabels = { "chest: Divine Storm", "Filler (then reseal)", false } },
+
+    -- Same gear point, Divine Storm NOT known (`usable = false` -- the P8 kit's default chest pick is
+    -- Aegis, a passive with no ability, so this is the common case): entry 11 is silently skipped
+    -- (ADR-0006 rule 5 / hard rule 8) and the queue falls to the Judgement/Consecration fillers with no
+    -- error.
+    -- Labels: slot 1 is entry 14 ("Filler (then reseal)"); slot 2's CONSECRATION is entry 15
+    -- (unlabelled).
+    { name = "cleave_no_divine_storm", sets = {}, seal = "SEAL_OF_MARTYRDOM", enemies = 2,
+      usable = { AVENGING_WRATH = false, HAMMER_OF_THE_RIGHTEOUS = false, SHIELD_OF_RIGHTEOUSNESS = false,
+                 EXORCISM = false, AVENGERS_SHIELD = false, DIVINE_STORM = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "JUDGEMENT", "CONSECRATION" },
+      expectLabels = { "Filler (then reseal)", false } },
+
+    ---------------------------------------------------------------- entry 13: "Seal expiring" outranks the FILLER, not the core
+    -- Seal at 1.0s remaining (inside entry 13's 1.5s window), single-target core silenced. Proves the
+    -- `maxRemaining = 1.5` gate itself is correctly wired: with the core out of the way, "Seal expiring"
+    -- (entry 13) fires ahead of the plain "Filler (then reseal)" (entry 14), which is the ordering
+    -- point of having two Judgement entries at all.
+    -- IMPORTANT: this does NOT show entry 13 outranking the single-target core -- see
+    -- `seal_expiring_core_available` immediately below for why it can't, in this build, and why that is
+    -- worth the build author's attention.
+    -- Labels: slot 1 is entry 13 ("Seal expiring"), not entry 14 -- entry 13 is earlier in the list and
+    -- its own gate passes first. Slot 2's CONSECRATION is entry 15 (unlabelled; enemies=1 fails entry 6).
+    { name = "seal_expiring", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      usable = { AVENGING_WRATH = false, HAMMER_OF_THE_RIGHTEOUS = false, SHIELD_OF_RIGHTEOUSNESS = false,
+                 EXORCISM = false, AVENGERS_SHIELD = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 1.0 } },
+      expect = { "JUDGEMENT", "CONSECRATION" },
+      expectLabels = { "Seal expiring", false } },
+
+    -- FINDING, not a scenario the task asked for by name: same 1.0s-remaining seal as above, but
+    -- nothing silenced beyond the usual AVENGING_WRATH. Unlike PALADIN_EXODIN/PALADIN_WRATHLIKE, where
+    -- the equivalent "Seal expiring" Judgement entry sits ABOVE the baseline core specifically so it
+    -- can promote ahead of it, PALADIN_PROT's entries 13-14 sit BELOW the entire single-target core (7,
+    -- 8, 9, 10) and the Holy Wrath AoE line (12). Hammer of the Righteous/Shield of Righteousness/
+    -- Exorcism carry no gate of their own, so at least one of them is essentially always eligible
+    -- whenever it isn't literally on cooldown -- "Seal expiring" can only ever win a slot in the rare
+    -- window where all four are simultaneously on cooldown. The queue here is therefore IDENTICAL in
+    -- shape to runes_blues: the imminent seal drop never surfaces. Recorded here as a candidate
+    -- authoring inconsistency (see the task report), not patched.
+    -- "Seal expiring" now sits ABOVE the core (the build was reordered after this scenario showed the
+    -- line could never fire while a core button was ready), so with the seal at 1.0s it leads even with
+    -- everything else available. Judgement then sits on its cooldown, and the core follows.
+    { name = "seal_expiring_core_available", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      usable = { AVENGING_WRATH = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 1.0 } },
+      expect = { "JUDGEMENT", "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS" },
+      expectLabels = { "Seal expiring", false, false } },
+
+    ---------------------------------------------------------------- entry 14: the plain filler, isolated
+    -- Everything that could otherwise fire is on cooldown or gated out (core forced onto cooldown,
+    -- Consecration unusable -- see the next scenario for that half) and the seal is NOT expiring (25s
+    -- remaining, outside entry 13's window): the plain "Filler (then reseal)" becomes reachable.
+    -- Mirrors PALADIN_WRATHLIKE's judgement_filler_when_idle in method.
+    -- Labels: slot 1 is entry 14 ("Filler (then reseal)"); entry 13 needs the seal inside 1.5s, which
+    -- this scenario does not set.
+    { name = "judgement_filler_when_idle", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      usable = { AVENGING_WRATH = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      cooldowns = { HAMMER_OF_THE_RIGHTEOUS = 10, SHIELD_OF_RIGHTEOUSNESS = 10, EXORCISM = 10, AVENGERS_SHIELD = 10 },
+      expect = { "JUDGEMENT", "CONSECRATION" },
+      expectLabels = { "Filler (then reseal)", false } },
+
+    ---------------------------------------------------------------- entry 15: Consecration is a Holy talent the P8 build skips
+    -- Wowhead: Consecration "does not generate enough damage or threat" for this build; when the
+    -- character has not taken the talent it is an unknown/unusable spell, silently skipped (ADR-0006
+    -- rule 5 / hard rule 8), and nothing errors. Same cooldown-forcing as judgement_filler_when_idle so
+    -- Consecration's absence is actually observable within the top-3 window instead of being buried
+    -- below the always-eligible core.
+    -- The queue truncates to 1: Judgement's own 10s cooldown (Data.Spells JUDGEMENT.cooldown) takes it
+    -- off the table too, and with Consecration unusable there is nothing left for a second slot.
+    { name = "no_consecration_talent", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      usable = { AVENGING_WRATH = false, CONSECRATION = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      cooldowns = { HAMMER_OF_THE_RIGHTEOUS = 10, SHIELD_OF_RIGHTEOUSNESS = 10, EXORCISM = 10, AVENGERS_SHIELD = 10 },
+      expect = { "JUDGEMENT" },
+      expectLabels = { "Filler (then reseal)" } },
+
+    ---------------------------------------------------------------- soul: Radiant Defender changes behaviour, not priority
+    -- Data/Souls.lua / D.Advice.PALADIN_PROT: Wowhead frames Soul of the Radiant Defender as one of
+    -- "our strongest damage dealing options, while also not editing our rotation" -- it changes how
+    -- Holy Shield BEHAVES (unlimited charges, scales with block value) via HOLY_SHIELD_UNLIMITED, not
+    -- when to press it. No PALADIN_PROT entry gates on that bonus, so the queue must be byte-for-byte
+    -- the same shape as runes_blues; bonusExpected is what actually proves the soul is granted.
+    { name = "radiant_defender_soul", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      usable = { AVENGING_WRATH = false },
+      souls = { "SOUL_OF_THE_RADIANT_DEFENDER" },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      bonusExpected = { HOLY_SHIELD_UNLIMITED = true },
+      expect = { "HAMMER_OF_THE_RIGHTEOUS", "SHIELD_OF_RIGHTEOUSNESS", "EXORCISM" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- wrong-soul advisor case
+    -- D.Advice.PALADIN.PALADIN_PROT always recommends Soul of the Radiant Defender; wearing Soul of the
+    -- Exile instead (Exodin's soul) should surface as a mismatch. No `expect`: this scenario doesn't
+    -- drive a queue.
+    { name = "advisor_wrong_soul", souls = { "SOUL_OF_THE_EXILE" }, build = "PALADIN_PROT",
+      adviseExpected = { soul = "SOUL_OF_THE_RADIANT_DEFENDER" } },
+
+    ---------------------------------------------------------------- entries 16-17: trinkets
+    -- Every rotation ability silenced so both trinket slots are reachable; both items ready. Slot 1 is
+    -- item 13 (entry 16); casting it suppresses that slot for the rest of the queue, so slot 2 is item
+    -- 14 (entry 17). Both `hold = true`, so neither advances Simulation's virtual clock, and with
+    -- everything else silenced there is nothing left for slot 3 -- the queue truncates at 2.
+    { name = "trinkets", sets = {}, seal = "SEAL_OF_MARTYRDOM",
+      usable = { AVENGING_WRATH = false, HAMMER_OF_THE_RIGHTEOUS = false, SHIELD_OF_RIGHTEOUSNESS = false,
+                 EXORCISM = false, AVENGERS_SHIELD = false, DIVINE_STORM = false, HOLY_WRATH = false,
+                 JUDGEMENT = false, CONSECRATION = false },
+      buffs = { RIGHTEOUS_FURY = { remaining = 999 }, HOLY_SHIELD = { remaining = 999 },
+                SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      items = { [13] = { cooldown = 0 }, [14] = { cooldown = 0 } },
+      expect = { "item:13", "item:14" },
+      expectLabels = { "Trinket", "Trinket" } },
+  },
 }

@@ -68,7 +68,7 @@ end
 -- `spent` accumulates resource cost. Every other member falls through to the real state, which is
 -- what keeps `not_moving` and friends reading live values (docs/02: future movement is unknowable).
 local function newVirtualState(real)
-  local v = { _real = real, cdOverride = {}, itemOverride = {}, spent = {}, elapsed = 0 }
+  local v = { _real = real, cdOverride = {}, itemOverride = {}, selfBuff = {}, spent = {}, elapsed = 0 }
 
   function v:now() return real:now() + self.elapsed end
   function v:gcd() return real:gcd() end
@@ -84,6 +84,16 @@ local function newVirtualState(real)
   function v:seal()
     if self.sealOverride ~= nil then return self.sealOverride end
     return real:seal()
+  end
+
+  -- The same honesty for a spell's OWN aura: Righteous Fury and Holy Shield are gated `no_buff` on
+  -- themselves, and without this the preview suggested them in every slot (a tank's queue reading
+  -- "Righteous Fury, Righteous Fury, Righteous Fury"). Keyed by the spell's own key and nothing else,
+  -- so it can only ever answer `buff`/`no_buff` about the spell that was just cast -- an aura with a
+  -- different key (Avenging Wrath's buff, a set proc) is still the live value, and still not modelled.
+  function v:buff(key)
+    if self.selfBuff[key] ~= nil then return 1, QUEUE_HORIZON end
+    return real:buff(key)
   end
 
   function v:cooldown(key)
@@ -189,6 +199,9 @@ local function applyCast(v, entry)
   if entry.spell and entry.data and entry.data.seal then
     v.sealOverride = entry.spell
   end
+  -- And its own aura (see v:buff). Every spell, not just ones with a known aura: the data does not
+  -- say which spells buff the caster, and a spell nothing gates on is never asked.
+  if entry.spell then v.selfBuff[entry.spell] = v.elapsed end
 
   -- docs/02: an entry may declare `hold = true` to be shown but not consume simulated time (off-GCD
   -- items, burst cooldowns). Without this, one trinket line would push every real ability a slot down.

@@ -144,6 +144,66 @@ describe("Simulation.queue", function()
   end)
 
   -- -------------------------------------------------------------- resource depletion
+  -- A cast spell's OWN aura is present for the rest of the preview. Found by the Protection build,
+  -- whose Righteous Fury and Holy Shield lines are gated `no_buff` on themselves: without this the
+  -- queue read "Righteous Fury, Righteous Fury, Righteous Fury".
+  describe("a cast spell's own aura", function()
+    it("makes a no_buff-on-itself entry fire once, not in every slot", function()
+      local build = compileBuild({
+        schema = 1, key = "SELF", name = "Self buff", class = "PALADIN", flavor = "SoD",
+        entries = {
+          { spell = "RIGHTEOUS_FURY", when = { {"no_buff","RIGHTEOUS_FURY"} } },
+          { spell = "CRUSADER_STRIKE" }, { spell = "JUDGEMENT" },
+        },
+      }, { spells = { RIGHTEOUS_FURY = { id = 25780 }, CRUSADER_STRIKE = { id = 407676, cooldown = 6 }, JUDGEMENT = { id = 20271, cooldown = 10 } } })
+      local q = Simulation.queue(build, FakeState.new{}, 3)
+      assert.same({ "RIGHTEOUS_FURY", "CRUSADER_STRIKE", "JUDGEMENT" }, { q[1].spell, q[2].spell, q[3].spell })
+    end)
+
+    -- A `hold` entry does not advance time, but it did cast: its own aura is recorded like any other.
+    -- Nothing shipped has a hold + self-gated entry yet; this pins the semantics before one does.
+    it("records the aura of a hold entry too, so a self-gated hold fires once", function()
+      local build = compileBuild({
+        schema = 1, key = "HOLD", name = "Hold self", class = "PALADIN", flavor = "SoD",
+        entries = {
+          { spell = "RIGHTEOUS_FURY", hold = true, when = { {"no_buff","RIGHTEOUS_FURY"} } },
+          { spell = "CRUSADER_STRIKE" }, { spell = "JUDGEMENT" },
+        },
+      }, { spells = { RIGHTEOUS_FURY = { id = 25780 }, CRUSADER_STRIKE = { id = 407676, cooldown = 6 }, JUDGEMENT = { id = 20271, cooldown = 10 } } })
+      local q = Simulation.queue(build, FakeState.new{}, 3)
+      assert.same({ "RIGHTEOUS_FURY", "CRUSADER_STRIKE", "JUDGEMENT" }, { q[1].spell, q[2].spell, q[3].spell })
+    end)
+
+    it("does not count as a buff on a DIFFERENT key, which stays the live value", function()
+      local build = compileBuild({
+        schema = 1, key = "OTHER", name = "Other key", class = "PALADIN", flavor = "SoD",
+        entries = {
+          { spell = "AVENGING_WRATH", hold = true },
+          { spell = "AURA_MASTERY", when = { {"buff","AVENGING_WRATH_BUFF"} } },
+          { spell = "JUDGEMENT" },
+        },
+      }, { spells = { AVENGING_WRATH = { id = 407788 }, AVENGING_WRATH_BUFF = { id = 407788 }, AURA_MASTERY = { id = 407624 }, JUDGEMENT = { id = 20271, cooldown = 10 } } })
+      -- Casting Avenging Wrath does not conjure AVENGING_WRATH_BUFF: the live state says it is absent.
+      local q = Simulation.queue(build, FakeState.new{}, 2)
+      assert.same({ "AVENGING_WRATH", "JUDGEMENT" }, { q[1].spell, q[2].spell })
+    end)
+
+    it("means a seal cast in slot 1 is not 'expiring' in slot 2", function()
+      local build = compileBuild({
+        schema = 1, key = "SEAL", name = "Fresh seal", class = "PALADIN", flavor = "SoD",
+        entries = {
+          { spell = "SEAL_OF_MARTYRDOM", when = { {"no_seal"} } },
+          { spell = "JUDGEMENT", when = { {"seal","SEAL_OF_MARTYRDOM"}, {"buff","SEAL_OF_MARTYRDOM", maxRemaining = 1.5} } },
+          { spell = "CRUSADER_STRIKE" },
+        },
+      }, { spells = { SEAL_OF_MARTYRDOM = { id = 407798, seal = true }, JUDGEMENT = { id = 20271, cooldown = 10 }, CRUSADER_STRIKE = { id = 407676, cooldown = 6 } } })
+      -- No seal, and a stale 1.0s SEAL_OF_MARTYRDOM aura on the live state: after the reseal in slot 1
+      -- the fresh seal must not read as expiring, so slot 2 is Crusader Strike, not Judgement.
+      local q = Simulation.queue(build, FakeState.new{ buffs = { SEAL_OF_MARTYRDOM = { remaining = 1.0 } } }, 2)
+      assert.same({ "SEAL_OF_MARTYRDOM", "CRUSADER_STRIKE" }, { q[1].spell, q[2].spell })
+    end)
+  end)
+
   it("lets a spell's cost deplete the virtual resource pool and gate out a later slot", function()
     local mergedSpells = {}
     for k, v in pairs(spellsCtx) do mergedSpells[k] = v end

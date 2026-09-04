@@ -128,6 +128,29 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- Equal to the REBUKE ability above, which is the expected shape. The PTR-only 425616 was the
     -- teach spell and would never have matched.
     RUNE_REBUKE         = { id = 425609, src = "https://www.wowhead.com/classic/spell=425609", rune = "legs" },
+    SHIELD_OF_RIGHTEOUSNESS = { id = 440658, src = "https://www.wowhead.com/classic/spell=440658/shield-of-righteousness", cooldown = 6 },
+    -- No `cost`: Wowhead states "26% of base mana", and a percentage is not a usable fallback.
+    AVENGERS_SHIELD         = { id = 407669, src = "https://www.wowhead.com/classic/spell=407669/avengers-shield", cooldown = 15 }, -- "Cooldown: 15 seconds" on the page
+    HAMMER_OF_THE_RIGHTEOUS = { id = 407632, src = "https://www.wowhead.com/classic/spell=407632/hammer-of-the-righteous", cooldown = 6 }, -- "6% of base mana": no cost
+    HOLY_SHIELD             = { id = 20928,  src = "https://www.wowhead.com/classic/spell=20928/holy-shield", cost = { mana = 150 }, cooldown = 10 }, -- max rank; the self-buff is gated by this key
+    RIGHTEOUS_FURY          = { id = 25780,  src = "https://www.wowhead.com/classic/spell=25780/righteous-fury" },
+    -- Protection runes (ability ids, see the rule above). Slots per Wowhead's P8 tank Talents & Runes page.
+    -- No HAND_OF_RECKONING or DIVINE_PROTECTION ability records: the queue cannot see threat or the
+    -- player's health, so no entry names them (see the Prot build's notes), and a record nothing reads
+    -- is exactly the debt the mutation gate exists to refuse. Their ids live on the rune records below
+    -- (Hand of Reckoning IS its rune's ability; Divine Protection 458371 is Malleable Protection's,
+    -- pending the owner's /dump) and in docs/staging/data/m5-prot-ids-v2.lua. Likewise Guarded by the
+    -- Light (415059): a leveling/farm rune Wowhead says never to run over Art of War in raids; it
+    -- arrives with the leveling builds that want it.
+    RUNE_HAND_OF_RECKONING       = { id = 407631, src = "https://www.wowhead.com/classic/spell=407631/hand-of-reckoning", rune = "hands" },
+    RUNE_SHIELD_OF_RIGHTEOUSNESS = { id = 440658, src = "https://www.wowhead.com/classic/spell=440658/shield-of-righteousness", rune = "back" },
+    RUNE_AVENGERS_SHIELD         = { id = 407669, src = "https://www.wowhead.com/classic/spell=407669/avengers-shield", rune = "legs" },
+    RUNE_HAMMER_OF_THE_RIGHTEOUS = { id = 407632, src = "https://www.wowhead.com/classic/spell=407632/hammer-of-the-righteous", rune = "wrist" },
+    RUNE_AEGIS                   = { id = 425589, src = "https://www.wowhead.com/classic/spell=425589/aegis", rune = "chest" },
+    -- 458318 over 426174 is the weaker of the resolutions (both are "Malleable Protection" passives;
+    -- the guide's Divine Protection text links 458318). Checklist step 4 reads the slot to settle it.
+    RUNE_MALLEABLE_PROTECTION    = { id = 458318, src = "https://www.wowhead.com/classic/spell=458318/malleable-protection", rune = "waist" },
+    RUNE_IMPROVED_SANCTUARY      = { id = 429133, src = "https://www.wowhead.com/classic/spell=429133/improved-sanctuary", rune = "head" },
   }
 
   -- ---------------------------------------------------------------------------------------------
@@ -242,6 +265,10 @@ ns.RegisterBuiltinPack("PALADIN", function()
     SOUL_OF_THE_TEMPLAR    = { itemID = 236555, grants = {},
                                src = "https://www.wowhead.com/classic/item=236555/soul-of-the-templar", short = "Templar", note = "No longer works with 2H weapons (S6)" },
     SOUL_OF_THE_VINDICATOR = { itemID = 236544, grants = {}, src = "https://www.wowhead.com/classic/item=236544/soul-of-the-vindicator", short = "Vindicator", roles = { "HOLY_HEALER" } },
+    -- Prot's soul (Wowhead tank guide: one of "our strongest damage dealing options, while also not
+    -- editing our rotation"). Its effect changes how Holy Shield behaves, not when to press it.
+    SOUL_OF_THE_RADIANT_DEFENDER = { itemID = 236532, grants = { "HOLY_SHIELD_UNLIMITED" },
+                               src = "https://www.wowhead.com/classic/item=236532/soul-of-the-radiant-defender", short = "Radiant Defender", roles = { "PROT" } },
   }
   -- Bonus keys that can come from EITHER set pieces OR a soul. This table is the resolution
   -- source: Sets.lua thresholds do NOT carry a `bonus` key, so `from` below is what state.bonus() walks.
@@ -257,6 +284,9 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- Effect text read from Wowhead 2026-09-01. Rotation-relevant: it moves Judgement's cooldown, so
     -- whether any shipped build should react to it is a build question, not a data one.
     JUDICATOR_SOUL      = { note = "Judgement cooldown -5s, Judgement damage -45%", from = { { soul = "SOUL_OF_THE_JUDICATOR" } } },
+    -- Wowhead also names the Lawbringer (T1) 6-set as a second route to this effect (bonus spell lead
+    -- 456541, unverified); it is not an enumerable set in Sets.lua yet, so soul-only for now.
+    HOLY_SHIELD_UNLIMITED = { note = "Holy Shield has no charges and scales with block value", from = { { soul = "SOUL_OF_THE_RADIANT_DEFENDER" } } },
   }
 
   -- ---------------------------------------------------------------------------------------------
@@ -299,7 +329,7 @@ ns.RegisterBuiltinPack("PALADIN", function()
   -- user a playstyle that resolves to nil. Flip an entry to available when its build lands (M5).
   -- Enforced by tests/spec/data_sourcing_spec.lua.
   D.Catalog = {
-    version = 2, flavor = "SoD", phase = "P8",  -- 2: Wrath-like shipped (2026-09-03); the wizard re-offers once
+    version = 3, flavor = "SoD", phase = "P8",  -- 3: Wrath-like and Protection shipped (2026-09-03); the wizard re-offers once
     PALADIN = {
       { build = "PALADIN_EXODIN", available = true, playstyle = "Exodin — fast 2H, single seal (Ret)", difficulty = "easy", recommended = true,
         updated = "2026-09-02", phase = "SoD P8",
@@ -315,11 +345,13 @@ ns.RegisterBuiltinPack("PALADIN", function()
         summary = "Seal of Martyrdom, then Divine Storm at 3 Holy Power (T3.5 4-set), Crusader Strike and Exorcism — the soul decides which first — Judgement as filler. The relaxed build; on par with the rest in P8.",
         requires = { weapon = "2H", minSpeed = 3.0, spells = { "SEAL_OF_MARTYRDOM" },
                      runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM" } } },
-      { build = "PALADIN_PROT", available = false, playstyle = "Protection — sword & board tank", difficulty = "easy",
-        updated = "2026-08-31", phase = "SoD P8",
-        source = "https://www.wowhead.com/classic/guide/season-of-discovery/classes/paladin/tank-talent-builds-runes",
-        summary = "Holy Shield uptime, Shield of Righteousness + Hammer of the Righteous on cooldown, Judgement, Exorcism procs.",
-        requires = { weapon = "Shield", runes = { "RUNE_HAND_OF_RECKONING" } } },
+      { build = "PALADIN_PROT", available = true, playstyle = "Protection — sword & board tank", difficulty = "easy",
+        updated = "2026-09-03", phase = "SoD P8",
+        source = "https://www.wowhead.com/classic/guide/season-of-discovery/classes/paladin/tank-rotation-cooldowns-abilities-pve",
+        summary = "Holy Shield and Righteous Fury always up, then Hammer of the Righteous, Shield of Righteousness, Exorcism and Avenger's Shield on cooldown. Needs its runes: Hand of Reckoning is the only taunt a paladin has.",
+        requires = { weapon = "1H", spells = { "SEAL_OF_MARTYRDOM" },
+                     runes = { "RUNE_HAND_OF_RECKONING", "RUNE_MALLEABLE_PROTECTION", "RUNE_HAMMER_OF_THE_RIGHTEOUS",
+                              "RUNE_SHIELD_OF_RIGHTEOUSNESS", "RUNE_AVENGERS_SHIELD", "RUNE_AEGIS" } } },
       { build = "PALADIN_SHOCKADIN", available = false, playstyle = "Shockadin — Holy caster DPS", difficulty = "medium",
         updated = "2026-08-31", phase = "SoD P8", source = "https://www.zockify.com/wowclassic/paladin/dps/",
         summary = "Seal of Righteousness, Judgement of Righteousness and Holy Shock on cooldown; JotC maintenance.",
@@ -370,9 +402,12 @@ ns.RegisterBuiltinPack("PALADIN", function()
       weapon = { type = "2H", minSpeed = 3.0 },
     },
     PALADIN_PROT = {
-      soul = {},  -- TODO M2: research tank souls
-      weapon = { type = "Shield" },
-      runes = { "RUNE_HAND_OF_RECKONING", "RUNE_MALLEABLE_PROTECTION", "RUNE_AEGIS", "RUNE_HAMMER_OF_THE_RIGHTEOUS", "RUNE_AVENGERS_SHIELD" },
+      soul = { { pick = "SOUL_OF_THE_RADIANT_DEFENDER", reason = "Holy Shield loses its charges and scales with block value" } },
+      weapon = { type = "1H", reason = "Sword and board: block value drives Shield of Righteousness" },
+      -- Wowhead's P8 kit, all ten slots (docs/research/sod-paladin-damage-model.md, Protection section).
+      runes = { "RUNE_HAND_OF_RECKONING", "RUNE_MALLEABLE_PROTECTION", "RUNE_AEGIS", "RUNE_HAMMER_OF_THE_RIGHTEOUS",
+                "RUNE_AVENGERS_SHIELD", "RUNE_SHIELD_OF_RIGHTEOUSNESS", "RUNE_IMPROVED_SANCTUARY", "RUNE_ART_OF_WAR" },
+      ringRunes = { default = { "DEFENSE_SPECIALIZATION", "HOLY_SPECIALIZATION" } },
     },
     -- Cross-build warnings
     warnings = {
@@ -565,6 +600,82 @@ ns.RegisterBuiltinPack("PALADIN", function()
 
       ---------------------------------------------------------------- BASELINE filler
       -- minPct = 40 mirrors Exodin's line and is equally unsourced there; kept identical on purpose.
+      { spell = "CONSECRATION", when = { {"resource","MANA", minPct = 40} } },
+      { item  = 13, hold = true, label = "Trinket", when = { {"item_ready", 13} } },
+      { item  = 14, hold = true, label = "Trinket", when = { {"item_ready", 14} } },
+    },
+  }
+
+  -- Paladin Protection (sword and board tank). BiS side: Wowhead SoD Paladin Tank Rotation, modified
+  -- 2025-04-18 (docs/research/wowhead/paladin-tank-rotation-cooldowns-abilities-pve.md) with the owner's
+  -- reads of its Overview and Talents & Runes pages; Default side: Icy Veins Prot rotation, 2025-04-08.
+  -- Gate list: docs/research/paladin-p8-gather-prot-shockadin.md. Mechanism: docs/research/paladin-prot-how-tanking-works.md.
+  -- Authored per ADR-0013: WRITTEN for its runes -- in SoD the runes are what make a paladin a tank at
+  -- all (Hand of Reckoning is the only taunt) -- and the engine still evaluates what is engraved: an
+  -- un-engraved rune's ability is unknown and skipped. Nothing here assumes gear.
+  D.Builds.PALADIN_PROT = {
+    schema = 1, key = "PALADIN_PROT", name = "Paladin — Protection (sword & board)", class = "PALADIN", flavor = "SoD",
+    notes = "Keep Holy Shield and Righteous Fury up, Seal of Martyrdom on, then Hammer of the Righteous, Shield of Righteousness, Exorcism and Avenger's Shield on cooldown, Judgement as filler. Taunt (Hand of Reckoning) and Divine Protection are yours to call: the queue cannot see threat or your health.",
+    -- Advisory (ADR-0013): the wizard's shopping list. Wowhead tags Hand of Reckoning MANDATORY; the
+    -- rest are the P8 kit. The shield itself cannot be expressed here (weapon checks read the main hand).
+    requires = { weapon = "1H", spells = { "SEAL_OF_MARTYRDOM" },
+                 runes = { "RUNE_HAND_OF_RECKONING", "RUNE_MALLEABLE_PROTECTION", "RUNE_HAMMER_OF_THE_RIGHTEOUS",
+                          "RUNE_SHIELD_OF_RIGHTEOUSNESS", "RUNE_AVENGERS_SHIELD", "RUNE_AEGIS" } },
+    visuals = {
+      cues = {
+        -- The one thing a tank must not let lapse; both guides open every list with it.
+        { event = "now_slot", spell = "HOLY_SHIELD", color = {1.0,0.85,0.2}, edge = "top",
+          reason = "Holy Shield is down" },
+        { event = "check", key = "SEAL_DROPPED", color = {1.0,1.0,1.0}, edge = "bottom",
+          reason = "Seal dropped", peripheral = true },
+      },
+    },
+    entries = {
+      ---------------------------------------------------------------- always up
+      -- With Hand of Reckoning known, Righteous Fury "will remain active until cancelled", so this
+      -- line is quiet in practice and loud exactly when it matters (after a death, or a forgotten stance).
+      { spell = "RIGHTEOUS_FURY", when = { {"no_buff","RIGHTEOUS_FURY"} }, label = "Threat on" },
+      { spell = "SEAL_OF_MARTYRDOM", when = { {"no_seal"} }, label = "Seal up" },
+      -- "Always have this active before you engage with an enemy and always reapply it on cooldown."
+      { spell = "HOLY_SHIELD", when = { {"no_buff","HOLY_SHIELD"} }, label = "Keep up" },
+
+      ---------------------------------------------------------------- pull: Avenging Wrath as soon as it is ready
+      -- Wowhead frames it as pull consistency ("better to use this ASAP on a pull in order to facilitate
+      -- a better threat curve"), not burst timing -- so no Vengeance/Holy Power gate as in the Ret builds.
+      { spell = "AVENGING_WRATH", hold = true, label = "Threat burst", when = { {"in_combat"} } },
+
+      ---------------------------------------------------------------- AoE (3+): Wowhead's separate AoE list promotes these two
+      -- Inert until nameplate counting lands at M5a (state:enemies() is a hardcoded 1), like every
+      -- `enemies` line in the paladin pack.
+      { spell = "AVENGERS_SHIELD", label = "AoE", when = { {"enemies", min = 3} } },
+      { spell = "CONSECRATION", label = "AoE", when = { {"enemies", min = 3}, {"resource","MANA", minPct = 30} } },
+
+      ---------------------------------------------------------------- a seal about to fall off outranks the core
+      -- Same placement as the Ret builds. Below the core it could only fire with all four core buttons
+      -- on cooldown at once, so the seal would drop before the queue ever said so (found by the
+      -- scenario that tried it). Judging it and resealing costs two globals; losing Martyrdom's
+      -- on-hit threat for a swing or two costs more.
+      { spell = "JUDGEMENT", label = "Seal expiring", when = { {"seal","SEAL_OF_MARTYRDOM"}, {"buff","SEAL_OF_MARTYRDOM", maxRemaining = 1.5} } },
+
+      ---------------------------------------------------------------- single-target core, in Wowhead's order
+      { spell = "HAMMER_OF_THE_RIGHTEOUS" },   -- wrist rune; "our strongest threat generating ability"
+      { spell = "SHIELD_OF_RIGHTEOUSNESS" },   -- back rune; block value + Holy
+      { spell = "EXORCISM" },
+      { spell = "AVENGERS_SHIELD" },           -- legs rune; "good single- and multi-target"
+      -- The chest is a choice: Aegis (passive, the default) or Divine Storm, "the swap-in for threat"
+      -- on cleave. Only reachable when the character engraved Divine Storm; skipped otherwise.
+      { spell = "DIVINE_STORM", label = "chest: Divine Storm", when = { {"enemies", min = 2} } },
+      -- Holy Wrath on AoE, Undead/Demon only unless Purifying Power (Prot's wrist is usually Hammer of
+      -- the Righteous, so in practice this is Naxxramas). Wowhead: not while being attacked, because of
+      -- pushback -- the queue cannot see that; the entry stays low and the player judges the moment.
+      { spell = "HOLY_WRATH", label = "AoE", when = { {"enemies", min = 3}, {"any", {"target_type","Undead","Demon"}, {"rune","RUNE_PURIFYING_POWER"}} } },
+
+      ---------------------------------------------------------------- Judgement as filler, then reseal (Wowhead's step 6)
+      { spell = "JUDGEMENT", label = "Filler (then reseal)", when = { {"seal","SEAL_OF_MARTYRDOM"} } },
+
+      ---------------------------------------------------------------- filler
+      -- Consecration is a Holy talent Wowhead's P8 build does not take ("does not generate enough damage
+      -- or threat"); when it is not known the entry is skipped, when it is, it is the last resort.
       { spell = "CONSECRATION", when = { {"resource","MANA", minPct = 40} } },
       { item  = 13, hold = true, label = "Trinket", when = { {"item_ready", 13} } },
       { item  = 14, hold = true, label = "Trinket", when = { {"item_ready", 14} } },

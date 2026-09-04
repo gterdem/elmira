@@ -11,7 +11,7 @@ function FakeState.new(t)
   s.powers = t.power or { MANA = {1000, 1000} }; s._targetType = t.targetType; s._moving = t.moving or false
   s.weapons = t.weapon or {}; s.sets = t.sets or {}; s.items = t.items or {}; s._seal = t.seal
   s.usableSet = t.usable  -- nil = everything usable
-  s.souls = t.souls or {}; s.bonuses = t.bonuses or {}; s._swing = t.swing; s._ttd = t.ttd; s._enemies = t.enemies or 1; s._mode = t.mode or "Single"
+  s.souls = t.souls or {}; s.bonuses = t.bonuses or {}; s._swing = t.swing; s._ttd = t.ttd; s._enemies = t.enemies or 1; s._mode = t.mode or "Single"; s._inCombat = t.inCombat  -- nil = in combat (the default); false = out of combat
   s.setDefs = t.setDefs; s.bonusDefs = t.bonusDefs  -- optional: resolve bonus() from sets/souls like the adapter does
   s.enchants = t.enchants or {}   -- was read by :enchant() but never populated here, so it always returned nil
   s.castTimes = t.castTime or {}  -- key -> seconds; absent = instant. Simulation steps max(gcd, castTime)
@@ -35,7 +35,7 @@ function FakeState:power(kind) local p = self.powers[kind] or {0,0}; return p[1]
 function FakeState:targetType() return self._targetType end
 function FakeState:targetHPPct() return 100 end
 function FakeState:targetExists() return true end
-function FakeState:inCombat() return true end
+function FakeState:inCombat() if self._inCombat == nil then return true end return self._inCombat end
 function FakeState:moving() return self._moving end
 function FakeState:weapon(slot) return self.weapons[slot] end
 function FakeState:setCount(key) return self.sets[key] or 0 end
