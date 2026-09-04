@@ -13,8 +13,9 @@
 -- exact shape of test that let the original defect through. Each is a number a human read off a
 -- `/dump` and typed here.
 --
--- Any rune can be engraved by any paladin at any time for 1c, so "the character does not play that
--- spec" is never a reason an id cannot be verified. RUNE_RIGHTEOUS_VENGEANCE and RUNE_SHEATH_OF_LIGHT
+-- Any rune can be engraved by any paladin at any time -- a rune is learned once and then known for
+-- good, so swapping one in costs nothing -- and "the character does not play that spec" is never a
+-- reason an id cannot be verified. RUNE_RIGHTEOUS_VENGEANCE and RUNE_SHEATH_OF_LIGHT
 -- were held back from this table on exactly that mistaken reasoning; the owner engraved both on
 -- Arthorion and settled them in one pass.
 local helper = require("tests.helper")
