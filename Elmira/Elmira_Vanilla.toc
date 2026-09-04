@@ -22,6 +22,8 @@ Core\API.lua
 Core\Packs.lua
 Core\DB.lua
 Core\Schema.lua
+Core\Serialize.lua
+Core\UserBuilds.lua
 Core\Engine.lua
 Core\Simulation.lua
 Core\Profiles.lua

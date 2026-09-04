@@ -81,6 +81,13 @@ function NA:OnInitialize()
   -- Display and Options read settings through this; Init is the only place that owns the handle.
   ns.db = self.db
 
+  -- The import/export codec (Core/Serialize.lua) never names LibStub itself; both libraries are
+  -- handed in here. They are OptionalDeps, and `LibStub(name, true)` is the silent lookup: shipped
+  -- without one, the codec reports itself unavailable and `/elm export` says so instead of erroring.
+  if ns.Serialize then
+    ns.Serialize.use{ serializer = LibStub("LibSerialize", true), deflate = LibStub("LibDeflate", true) }
+  end
+
   self:RegisterChatCommand("elm", "OnSlash")
   self:RegisterChatCommand("elmira", "OnSlash")
 

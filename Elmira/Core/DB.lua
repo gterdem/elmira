@@ -13,7 +13,8 @@ DB.CURRENT = 1 -- SavedVariables layout version
 -- The same reasoning is why every profile default below uses `false`, never `nil`, as its sentinel:
 -- a `nil` default is ambiguous between "unset" and "equals the default", `false` is not.
 DB.defaults = {
-  global = { dbVersion = 0 },
+  -- ADR-0010: the user's own builds, account-wide, keyed USER_<slug> (Core/UserBuilds.lua).
+  global = { dbVersion = 0, userBuilds = {} },
   profile = {
     enabled = true,
     depth = 3,

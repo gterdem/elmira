@@ -480,6 +480,11 @@ function Schema.compile(build, ctx)
   compiled.entries = {}
 
   for i, entry in ipairs(build.entries) do
+    -- A disabled entry compiles to nothing. Schema.exportable marks an entry disabled when it strips
+    -- a `custom` condition -- and removes the `when` with it -- so without this skip an imported line
+    -- whose gate was hand-written code would arrive as an UNCONDITIONAL line: the exact inverse of
+    -- "disabled". M5e's editor toggles the same flag.
+    if not entry.disabled then
     local out = {}
     for k, v in pairs(entry) do out[k] = v end
     out.index = i
@@ -509,7 +514,8 @@ function Schema.compile(build, ctx)
       out.cost = cost
     end
     out.cooldownSecs = data and data.cooldown or nil
-    compiled.entries[i] = out
+    compiled.entries[#compiled.entries + 1] = out
+    end
   end
   compiled.compiled = true
   return compiled, errors
@@ -542,7 +548,10 @@ function Schema.exportable(build)
   for i, entry in ipairs(build.entries or {}) do
     local copy = {}
     for k, v in pairs(entry) do copy[k] = v end
-    copy.test, copy.data = nil, nil -- compiled artefacts never serialize
+    -- compiled artefacts never serialize: the closures, the resolved data record, the per-condition
+    -- labels, and the fields compile derives from data (index, cdVolatile, cost, cooldownSecs)
+    copy.test, copy.data, copy.conditions = nil, nil, nil
+    copy.index, copy.cdVolatile, copy.cost, copy.cooldownSecs = nil, nil, nil, nil
     local hasCustom = containsCustom(entry.when)
     if hasCustom then
       copy.when, copy.disabled = nil, true

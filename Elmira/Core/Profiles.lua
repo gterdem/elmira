@@ -29,7 +29,10 @@ local function catalogFor(pack)
 end
 
 local function buildExists(pack, key)
-  return type(key) == "string" and type(pack.builds) == "table" and pack.builds[key] ~= nil
+  if type(key) ~= "string" then return false end -- mutants: equivalent a non-string key misses pack.builds and UserBuilds.find alike
+  if type(pack.builds) == "table" and pack.builds[key] ~= nil then return true end
+  -- A pinned key may name one of the user's forks (ADR-0010).
+  return ns.UserBuilds ~= nil and ns.UserBuilds.find(pack, key) ~= nil
 end
 
 -- Returns buildKey, reason. `reason` names which rule fired, so `/elm debug` can explain a choice

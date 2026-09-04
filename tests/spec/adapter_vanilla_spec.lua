@@ -90,6 +90,19 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
     Vanilla = helper.load("Elmira/Adapters/Vanilla.lua")
   end)
 
+  -- Provenance stamps (a fork's importedAt, ADR-0010) come from the client's `date`; Core never
+  -- reads the clock. Absent `date` means no stamp, never a made-up one.
+  describe("today()", function()
+    it("formats the client's date, and is nil when the client has no date function", function()
+      local saved = _G.date
+      _G.date = function(fmt) assert.equal("%Y-%m-%d", fmt); return "2026-09-03" end
+      assert.equal("2026-09-03", Vanilla.today())
+      _G.date = nil
+      assert.is_nil(Vanilla.today())
+      _G.date = saved
+    end)
+  end)
+
   -- ============================================================ 1. baseCooldown / GCD filtering
   -- The headline finding (docs/07 §9.1, §9.10): GetSpellBaseCooldown is a dead end (15000 ms in
   -- every gear state); the real value comes from observing GetSpellCooldown when the spell is

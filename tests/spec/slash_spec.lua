@@ -15,6 +15,88 @@ describe("Core.Slash", function()
     return false
   end
 
+  -- PRD F9 / ADR-0010: export and import through the real codec, against the shipped paladin data.
+  describe("export / import", function()
+    local pack, ns
+    local function loadCodec()
+      if not _G.CreateFrame then dofile("tests/wow_mock.lua") end
+      _G.LibStub = nil
+      for _, path in ipairs({ "Elmira/Libs/LibStub/LibStub.lua", "Elmira/Libs/LibSerialize/LibSerialize.lua",
+                              "Elmira/Libs/LibDeflate/LibDeflate.lua" }) do
+        local chunk = assert(loadfile(path), path .. " — run `make libs`"); chunk()
+      end
+      return LibStub("LibSerialize"), LibStub("LibDeflate")
+    end
+    before_each(function()
+      ns = helper.ns()
+      helper.load("Elmira/Adapters/Interface.lua")
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Serialize.lua")
+      helper.load("Elmira/Core/UserBuilds.lua")
+      local LS, LD = loadCodec()
+      ns.Serialize.use{ serializer = LS, deflate = LD }
+      pack = helper.classPack("Paladin")
+      ns.db = { profile = { activeBuild = false }, global = { userBuilds = {} } }
+      ns.Display = { currentPack = function() return pack end,
+                     activeBuild = function() return nil, "PALADIN_EXODIN", "recommended" end,
+                     refresh = function() end }
+      ns.Adapter = { today = function() return "2026-09-03" end }
+    end)
+
+    it("export with no key exports the active build as one ELM1: line", function()
+      local lines = Slash.run("export")
+      assert.equal(2, #lines)
+      assert.truthy(lines[1]:find("PALADIN_EXODIN exported", 1, true))
+      assert.equal("ELM1:", lines[2]:sub(1, 5))
+    end)
+
+    it("export names a missing key, and says so without a pack", function()
+      assert.truthy(Slash.run("export GHOST")[1]:find("GHOST", 1, true))
+      ns.Display = nil
+      assert.truthy(Slash.run("export")[1]:find("no data pack", 1, true))
+    end)
+
+    it("import stores a fork, dated, and the profile command then knows it", function()
+      local str = Slash.run("export PALADIN_WRATHLIKE")[2]
+      local lines = Slash.run("import " .. str .. " my wrath")
+      assert.truthy(lines[1]:find("Imported as USER_MY_WRATH", 1, true))
+      assert.equal("2026-09-03", ns.db.global.userBuilds.USER_MY_WRATH.importedAt)
+      assert.truthy(table.concat(Slash.run("profile"), "\n"):find("USER_MY_WRATH", 1, true))
+      assert.truthy(Slash.run("profile USER_MY_WRATH")[1]:find("Pinned to USER_MY_WRATH", 1, true))
+      assert.equal("USER_MY_WRATH", ns.db.profile.activeBuild)
+    end)
+
+    it("export says when there is no active build, and when the builds module is missing", function()
+      ns.Display.activeBuild = function() return nil, nil, "no build" end
+      assert.truthy(Slash.run("export")[1]:find("no active build", 1, true))
+      ns.UserBuilds = nil
+      assert.truthy(Slash.run("export PALADIN_EXODIN")[1]:find("builds module is not loaded", 1, true))
+      assert.truthy(Slash.run("import ELM1:x")[1]:find("builds module is not loaded", 1, true))
+    end)
+
+    it("export hands the string to the Options box, where it can actually be copied from", function()
+      local placed
+      ns.Options = { setExchangeText = function(str) placed = str end }
+      local lines = Slash.run("export PALADIN_PROT")
+      assert.equal(lines[2], placed)
+    end)
+
+    it("import says when there is no pack, and refreshes the display on success", function()
+      local refreshes = 0
+      ns.Display.refresh = function() refreshes = refreshes + 1 end
+      local str = Slash.run("export PALADIN_EXODIN")[2]
+      Slash.run("import " .. str .. " again")
+      assert.equal(1, refreshes)
+      ns.Display = nil
+      assert.truthy(Slash.run("import " .. str)[1]:find("no data pack", 1, true))
+    end)
+
+    it("import shows usage without a string, and the codec's reason on a bad one", function()
+      assert.truthy(Slash.run("import")[1]:find("Usage", 1, true))
+      assert.truthy(Slash.run("import ELM1:notreally")[1]:find("import: corrupted", 1, true))
+    end)
+  end)
+
   it("help output lists the debug command", function()
     assert.is_true(hasLineMatching(Slash.run(""), "debug"))
   end)

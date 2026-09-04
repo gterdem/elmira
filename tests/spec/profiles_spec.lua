@@ -29,6 +29,22 @@ describe("Core.Profiles", function()
     end)
   end)
 
+  describe("rule 1b: a pin naming one of the user's forks (ADR-0010)", function()
+    it("is known, so a fork can be pinned like a shipped build", function()
+      helper.load("Elmira/Core/UserBuilds.lua")
+      local ns = helper.ns()
+      ns.db = { global = { userBuilds = { USER_MINE = { class = "PALADIN", build = { key = "USER_MINE", entries = {} } } } } }
+      local p = pack{ builds = { A = {} }, catalog = { PALADIN = {} } }
+      local key, reason = Profiles.resolve(p, { activeBuild = "USER_MINE" })
+      assert.equal("USER_MINE", key)
+      assert.equal("pinned", reason)
+      -- another class's fork is not this pack's
+      ns.db.global.userBuilds.USER_MINE.class = "MAGE"
+      local key2 = Profiles.resolve(p, { activeBuild = "USER_MINE" })
+      assert.is_not_equal("USER_MINE", key2)
+    end)
+  end)
+
   describe("rule 2: dangling pin", function()
     it("a pin naming a build absent from pack.builds falls through, never nil, never errors", function()
       local p = pack{

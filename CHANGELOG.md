@@ -1,5 +1,12 @@
 # Changelog
 ## Unreleased
+- **Share a build as a string.** `/elm export` turns the active build (or `/elm export <key>`) into
+  an `ELM1:` string and places it in the new Import/Export box under `/elm options`; paste one there,
+  or `/elm import <string> [name]`, and it becomes one of your own builds — `/elm profile USER_…`
+  switches to it. Every shipped build round-trips exactly; an imported build is checked against your
+  class's data before it is accepted, and a line whose condition was hand-written code arrives
+  switched off rather than silently unconditional. Your builds live account-wide and remember which
+  shipped build they came from.
 - Fixed: the queue could suggest Avenging Wrath or Aura Mastery again a slot after suggesting them —
   in `/elm debug queue` always, and in the live queue the first time each session, before the client had
   reported their cooldown. Both now carry their cooldowns (3 and 2 minutes) so the preview knows

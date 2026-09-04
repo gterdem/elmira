@@ -116,6 +116,32 @@ describe("Display.Driver", function()
   -- Display.stats() is what `/elm debug perf` reads. lastBuildKey is only set by a RENDER, so before
   -- M4b it was nil whenever the display was hidden -- most of a session, and exactly when someone
   -- runs this to ask why the screen is empty.
+  -- ADR-0010: a pinned fork resolves and compiles exactly like a shipped build. Real Schema,
+  -- Profiles and UserBuilds; the pack is the shipped paladin data.
+  describe("activeBuild() with a fork pinned", function()
+    it("compiles the fork under its own key", function()
+      helper.load("Elmira/Adapters/Interface.lua")
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Profiles.lua")
+      helper.load("Elmira/Core/UserBuilds.lua")
+      ns.compileBuild = ns.compileBuild or function(b, ctx) return ns.Schema.compile(b, ctx) end
+      local pack = helper.classPack("Paladin")
+      ns.API = { GetProviders = function() return { PALADIN = pack } end }
+      ns.Adapter = { playerClass = function() return "PALADIN" end }
+      local fork = {}
+      for k, v in pairs(pack.builds.PALADIN_EXODIN) do fork[k] = v end
+      fork.key = "USER_MINE"
+      ns.db = { profile = { activeBuild = "USER_MINE" },
+                global = { userBuilds = { USER_MINE = { class = "PALADIN", build = fork } } } }
+      local compiled, key, reason = Display.activeBuild()
+      assert.equal("USER_MINE", key)
+      assert.equal("pinned", reason)
+      assert.is_table(compiled)
+      assert.equal("USER_MINE", compiled.key)
+      assert.is_true(#compiled.entries > 10)
+    end)
+  end)
+
   describe("stats() build resolution", function()
     it("resolves a build via activeBuild() when nothing has rendered yet, carrying the reason", function()
       -- No tick() has run: lastBuildKey is unset. ns.API is unset by default (before_each only sets

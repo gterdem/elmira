@@ -39,6 +39,69 @@ describe("Options (overlay/peripheral cues)", function()
     Options = helper.load("Elmira/Options/Options.lua")
   end)
 
+  -- PRD F9: the Import/Export box. The import itself is Core/UserBuilds' job and is tested there;
+  -- here the box must route text in and out and report the outcome under it.
+  describe("Import / Export box", function()
+    local function box() return Options.table().args.exchange.args end
+
+    it("shows what /elm export placed in it", function()
+      Options.setExchangeText("ELM1:abc")
+      assert.equal("ELM1:abc", box().text.get())
+      assert.equal("", box().note.name())
+    end)
+
+    it("starts empty, and exchangeText() reads the same value the box shows", function()
+      assert.equal("", box().text.get())
+      assert.equal("", box().note.name())
+      Options.setExchangeText("ELM1:q")
+      assert.equal(Options.exchangeText(), box().text.get())
+    end)
+
+    it("describes itself: a group of its own holding one multiline input", function()
+      local group = Options.table().args.exchange
+      assert.equal("group", group.type); assert.equal(5, group.order); assert.equal("Import / Export", group.name)
+      assert.equal("input", box().text.type); assert.equal(8, box().text.multiline)
+      assert.equal("Build string", box().text.name)
+      assert.truthy(box().text.desc:find("ELM1:", 1, true))
+    end)
+
+    it("imports on set: clears the box, names the new fork, refreshes the display, and returns the key", function()
+      local got, refreshes = nil, 0
+      ns.Display.refresh = function() refreshes = refreshes + 1 end
+      Options.setExchangeText("ELM1:xyz")
+      ns.Display.currentPack = function() return { class = "PALADIN" } end
+      ns.UserBuilds = { importString = function(str, pack, opts) got = { str = str, class = pack.class, today = opts.today }; return "USER_X" end }
+      ns.Adapter = { today = function() return "2026-09-03" end }
+      box().text.set(nil, "ELM1:xyz")
+      assert.same({ str = "ELM1:xyz", class = "PALADIN", today = "2026-09-03" }, got)
+      assert.equal("", box().text.get())
+      assert.truthy(box().note.name():find("USER_X", 1, true))
+      assert.equal(1, refreshes)
+      local ok, key = Options.importText("ELM1:again")
+      assert.is_true(ok); assert.equal("USER_X", key)
+    end)
+
+    it("a new string placed by /elm export clears an earlier failure note", function()
+      ns.Display.currentPack = function() return { class = "PALADIN" } end
+      ns.UserBuilds = { importString = function() return nil, "corrupted string" end }
+      Options.importText("ELM1:bad")
+      assert.truthy(box().note.name():find("corrupted", 1, true))
+      Options.setExchangeText("ELM1:fresh")
+      assert.equal("", box().note.name())
+    end)
+
+    it("keeps the text and shows the reason when the import fails, or when there is no pack", function()
+      ns.Display.currentPack = function() return { class = "PALADIN" } end
+      ns.UserBuilds = { importString = function() return nil, "corrupted string" end }
+      assert.is_false(Options.importText("ELM1:bad"))
+      assert.equal("ELM1:bad", box().text.get())
+      assert.truthy(box().note.name():find("corrupted string", 1, true))
+      ns.Display.currentPack = function() return nil end
+      assert.is_false(Options.importText("ELM1:bad"))
+      assert.truthy(box().note.name():find("no data pack", 1, true))
+    end)
+  end)
+
   -- Cue fixtures. `cueA` is the ordinary fireable case (event = "now_slot"); `cueB` is the
   -- event = "check" case that Overlay.availableCues() always marks unavailable until M5b
   -- (ADR-0009) — the wrong-soul-shaped case for this file, i.e. "looks like a cue, cannot fire".

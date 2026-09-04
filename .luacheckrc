@@ -17,6 +17,7 @@ globals = { "Elmira", "ElmiraDB" }
 read_globals = { "LibStub" }
 
 local WOW_API = {
+  "date", -- the client's calendar/clock global (Adapters/Vanilla.lua today())
   "GetTime", "GetSpellCooldown", "IsUsableSpell", "IsPlayerSpell", "IsSpellKnown", "GetSpellInfo",
   "UnitAura", "UnitPower", "UnitPowerMax", "UnitCreatureType", "UnitExists", "UnitHealth",
   "UnitHealthMax", "GetUnitSpeed", "GetInventoryItemID", "GetInventoryItemLink",

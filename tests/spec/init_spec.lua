@@ -147,6 +147,29 @@ describe("Core.Init", function()
   before_each(loadInit)
   after_each(function() _G.LibStub = nil end)
 
+  -- Core/Serialize.lua never names LibStub; Init hands it the two libraries at OnInitialize. Both
+  -- are OptionalDeps, so the silent lookup must leave the codec merely unavailable when absent.
+  describe("import/export codec wiring", function()
+    local function loadCodecLibs()
+      for _, path in ipairs({ "Elmira/Libs/LibSerialize/LibSerialize.lua", "Elmira/Libs/LibDeflate/LibDeflate.lua" }) do
+        local chunk = assert(loadfile(path), path .. " — run `make libs`"); chunk()
+      end
+    end
+
+    it("hands LibSerialize and LibDeflate to Core/Serialize at OnInitialize", function()
+      helper.load("Elmira/Core/Serialize.lua")
+      loadCodecLibs()
+      NA:OnInitialize()
+      assert.is_true(ns.Serialize.available())
+    end)
+
+    it("leaves the codec unavailable, without erroring, when the libraries did not ship", function()
+      helper.load("Elmira/Core/Serialize.lua")
+      NA:OnInitialize()
+      assert.is_false(ns.Serialize.available())
+    end)
+  end)
+
   describe("composition (file scope)", function()
     it("publishes the addon object and Elmira.API as the Elmira global", function()
       assert.equal(NA, _G.Elmira)

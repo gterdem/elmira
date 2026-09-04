@@ -727,6 +727,8 @@ Slash.register{
     local keys = {}
     for key in pairs(pack.builds) do keys[#keys + 1] = key end
     table.sort(keys)
+    -- The user's forks (ADR-0010) after the shipped builds, so the two never read as one list.
+    for _, key in ipairs(ns.UserBuilds and ns.UserBuilds.list(pack) or {}) do keys[#keys + 1] = key end
 
     local wanted = rest and rest:match("^(%S+)")
     if not wanted then
@@ -747,12 +749,52 @@ Slash.register{
       if ns.Display then ns.Display.refresh() end
       return { "Unpinned. Elmira will choose a build for you again." }
     end
-    if not pack.builds[wanted] then
+    local known = pack.builds[wanted] or (ns.UserBuilds and ns.UserBuilds.find(pack, wanted))
+    if not known then
       return { string.format("No build %q. Available: %s", wanted, table.concat(keys, ", ")) }
     end
     profile.activeBuild = wanted
     if ns.Display then ns.Display.refresh() end
     return { "Pinned to " .. wanted .. ". /elm profile auto to undo." }
+  end,
+}
+-- PRD F9. Chat truncates long messages, so the string is also placed in the Options window's
+-- Import/Export box, which is where a person actually copies it from; the lines returned here are
+-- what a headless caller (and the spec) sees.
+Slash.register{
+  key = "export", args = "[key]", desc = ns.L["Copy a build as a string"], order = 107,
+  run = function(rest)
+    local pack = ns.Display and ns.Display.currentPack()
+    if not pack then return { "export: no data pack for your class" } end
+    local key = rest and rest:match("^(%S+)")
+    if not key and ns.Display then
+      local _, active = ns.Display.activeBuild()
+      key = active
+    end
+    if not key then return { "export: no active build. /elm export <key>" } end
+    if not ns.UserBuilds then return { "export: builds module is not loaded" } end
+    local str, err = ns.UserBuilds.exportKey(pack, key)
+    if not str then return { "export: " .. tostring(err) } end
+    if ns.Options and ns.Options.setExchangeText then ns.Options.setExchangeText(str) end
+    return { string.format("Build %s exported (%d characters). Copy it from the Import/Export box in /elm options.", key, #str), str }
+  end,
+}
+Slash.register{
+  key = "import", args = "<string> [name]", desc = ns.L["Import a build string as one of your builds"], order = 108,
+  run = function(rest)
+    local pack = ns.Display and ns.Display.currentPack()
+    -- Only saves the parse: UserBuilds.importString says the same for a nil pack.
+    if not pack then return { "import: no data pack for your class" } end -- mutants: equivalent importString repeats it
+    local str, name = (rest or ""):match("^%s*(ELM1:%S+)%s*(.-)%s*$")
+    if not str then return { "Usage: /elm import <ELM1:...> [name]" } end
+    if not ns.UserBuilds then return { "import: builds module is not loaded" } end
+    local key, err = ns.UserBuilds.importString(str, pack, {
+      name = (name ~= "" and name) or nil,
+      today = ns.Adapter and ns.Adapter.today and ns.Adapter.today() or nil,
+    })
+    if not key then return { "import: " .. tostring(err) } end
+    if ns.Display then ns.Display.refresh() end
+    return { string.format("Imported as %s. /elm profile %s to use it.", key, key) }
   end,
 }
 Slash.register{

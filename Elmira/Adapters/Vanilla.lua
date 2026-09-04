@@ -90,6 +90,12 @@ function Vanilla.addonMemoryKB()
   return total
 end
 
+-- The calendar date, for provenance stamps (a fork's `importedAt`, ADR-0010). Core never reads the
+-- clock; `date` is the client's global.
+function Vanilla.today()
+  return date and date("%Y-%m-%d") or nil
+end
+
 function Vanilla.playerClass()
   local _, class = UnitClass("player")
   return class

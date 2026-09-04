@@ -66,7 +66,9 @@ function Display.activeBuild()
   local key, reason = ns.Profiles.resolve(pack, profile)
   if not key then return nil, nil, reason end
   local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
-  local compiled, errors = ns.compileBuild(pack.builds[key], ctx)
+  -- A pinned key may name one of the user's forks (ADR-0010); UserBuilds.find is the one lookup.
+  local build = ns.UserBuilds and ns.UserBuilds.find(pack, key) or pack.builds[key]
+  local compiled, errors = ns.compileBuild(build, ctx)
   if not compiled then
     return nil, key, "build '" .. key .. "' failed to compile (" .. #(errors or {}) .. " problem(s))"
   end

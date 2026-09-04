@@ -137,6 +137,59 @@ local function overlayGroup()
   return args
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- Import / Export (PRD F9). Chat truncates long messages, so this box is where a build string is
+-- actually copied from (`/elm export` fills it) and pasted into (an ELM1: string imports as one of
+-- the user's builds, ADR-0010). The logic lives in Core/UserBuilds.lua; this is the field.
+-- ---------------------------------------------------------------------------------------------
+local exchangeText, exchangeNote = "", ""
+
+function Options.setExchangeText(str)
+  exchangeText = tostring(str or "")
+  exchangeNote = ""
+end
+
+function Options.exchangeText()
+  return exchangeText
+end
+
+-- Options.importText(str) -> true, key | false. Keeps the text in the box on failure so the user
+-- can fix it, clears it on success, and leaves a one-line result under the box either way.
+function Options.importText(str)
+  local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
+  if not (ns.UserBuilds and pack) then
+    exchangeNote = L["Import: no data pack for your class."]
+    return false
+  end
+  local key, err = ns.UserBuilds.importString(str, pack, {
+    today = ns.Adapter and ns.Adapter.today and ns.Adapter.today() or nil,
+  })
+  if not key then
+    exchangeText = tostring(str or "")
+    exchangeNote = string.format(L["Import failed: %s"], tostring(err))
+    return false
+  end
+  exchangeText = ""
+  exchangeNote = string.format(L["Imported as %s. /elm profile %s to use it."], key, key)
+  if ns.Display and ns.Display.refresh then ns.Display.refresh() end
+  return true, key
+end
+
+local function exchangeGroup()
+  return {
+    type = "group", order = 5, name = L["Import / Export"],
+    args = {
+      text = {
+        type = "input", multiline = 8, width = "full", order = 1, name = L["Build string"],
+        desc = L["Paste an ELM1: string to import it as one of your builds. /elm export fills this box with the active build."],
+        get = function() return exchangeText end,
+        set = function(_, value) Options.importText(value) end,
+      },
+      note = { type = "description", order = 2, name = function() return exchangeNote end },
+    },
+  }
+end
+
 function Options.table()
   return {
     type = "group",
@@ -263,6 +316,7 @@ function Options.table()
           },
         },
       },
+      exchange = exchangeGroup(),
     },
   }
 end
