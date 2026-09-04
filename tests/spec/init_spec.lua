@@ -170,6 +170,29 @@ describe("Core.Init", function()
     end)
   end)
 
+  -- The fork store is created by ONE thing at runtime: `userBuilds = {}` in DB.defaults. Every
+  -- other UserBuilds spec hand-builds `ns.db = { global = { userBuilds = {} } }`, so none of them
+  -- can see that key go missing -- `store()` would return nil, and `/elm import`, `/elm profile
+  -- USER_...` and the Options box would all answer "saved variables are not loaded" in game while
+  -- the suite stayed green. This is the only spec that reaches the store through the real AceDB.
+  describe("the fork store (ADR-0010)", function()
+    it("exists on the AceDB-backed db, and a fork written into it is found again", function()
+      helper.load("Elmira/Core/UserBuilds.lua")
+      NA:OnInitialize()
+
+      assert.is_table(ns.db.global.userBuilds)
+
+      local pack = { class = "PALADIN", builds = {} }
+      ns.db.global.userBuilds["USER_PROBE"] = {
+        class = "PALADIN", name = "Probe", build = { name = "Probe", entries = {} },
+      }
+      local build, origin = ns.UserBuilds.find(pack, "USER_PROBE")
+      assert.is_table(build)
+      assert.equal("fork", origin)
+      assert.same({ "USER_PROBE" }, ns.UserBuilds.list(pack))
+    end)
+  end)
+
   describe("composition (file scope)", function()
     it("publishes the addon object and Elmira.API as the Elmira global", function()
       assert.equal(NA, _G.Elmira)
