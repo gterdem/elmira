@@ -151,6 +151,11 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- the guide's Divine Protection text links 458318). Checklist step 4 reads the slot to settle it.
     RUNE_MALLEABLE_PROTECTION    = { id = 458318, src = "https://www.wowhead.com/classic/spell=458318/malleable-protection", rune = "waist" },
     RUNE_IMPROVED_SANCTUARY      = { id = 429133, src = "https://www.wowhead.com/classic/spell=429133/improved-sanctuary", rune = "head" },
+    -- Shockadin (M5, theorycraft build -- ADR-0013 §6). Verified 2026-09-03, docs/staging/data/m5-shockadin-ids.lua.
+    SEAL_OF_RIGHTEOUSNESS   = { id = 20289,  src = "https://www.wowhead.com/classic/spell=20289/seal-of-righteousness", seal = true, cost = { mana = 90 } }, -- Shockadin's seal
+    HOLY_SHOCK              = { id = 20473,  src = "https://www.wowhead.com/classic/spell=20473/holy-shock", cost = { mana = 225 }, cooldown = 30 }, -- Holy talent, not a rune
+    -- Back slot: shares it with RUNE_RIGHTEOUS_VENGEANCE (every Ret build) and RUNE_SHIELD_OF_RIGHTEOUSNESS (Prot).
+    RUNE_SHOCK_AND_AWE      = { id = 440791, src = "https://www.wowhead.com/classic/spell=440791/shock-and-awe", rune = "back" },
     -- Execute (< 20% HP), trained. Max rank 24239 (425 mana); 24275 is a lower rank. Verified 2026-09-03
     -- (docs/staging/data/m5-ret-additions.lua). Consumed by Exodin's execute line.
     HAMMER_OF_WRATH         = { id = 24239,  src = "https://www.wowhead.com/classic/spell=24239/hammer-of-wrath", cost = { mana = 425 }, cooldown = 6 },
@@ -239,6 +244,31 @@ ns.RegisterBuiltinPack("PALADIN", function()
                 note = "Templar: +15% AP per Holy Power consumed, max 3 stacks, 10s" },
       },
     },
+    -- The HOLY T3.5 set -- a different item-set from the Ret Warplate above (1963 vs 1940), with its
+    -- own pieces and bonuses. Its 2-set only generates Holy Power "while Shock and Awe is active".
+    -- ASSUMED, not verified: that it applies the SAME Holy Power aura (1226461) as the Ret 2-set. The
+    -- text is identical ("+10% Holy damage per stack, 3 max") but 1226461 is sourced only against the
+    -- Ret set, and the Holy bonus spell (1240571) is a server-side dummy on Wowhead. If the Holy set
+    -- applies a different aura, every Shockadin "3 HP" line silently never fires -- which is why the
+    -- build ships experimental and why m5-dumps.md step 9d exists. Do not promote it before that dump.
+    -- The 4-set spell id (1226462) is the same number Wowhead attaches to the Ret 4-set: taken as
+    -- fetched from item-set=1963 and unconfirmed as a distinct effect; runtime never reads it (bonus()
+    -- counts equipped pieces against each set's own item list), so nothing depends on it.
+    -- The 6-set is weapon-dependent (+8% spell power per stack with a one-hander, +18% with a
+    -- two-hander) -- the reason the catalog no longer demands a 1H.
+    PALADIN_T35_INQUISITION_HOLY = {
+      name = "Inquisition Shockplate (T3.5 Holy, Scarlet Enclave)", src = "https://www.wowhead.com/classic/item-set=1963/inquisition-shockplate",
+      items = { 246062, 246061, 246060, 246059,
+                246058, 246057, 246056, 246055 },
+      bonuses = {
+        [2] = { spell = 1240571, src = "https://www.wowhead.com/classic/item-set=1963/inquisition-shockplate", spec = "HOLY", kind = "aura", aura = "HOLY_POWER_BUFF",
+                verify = "in-game", note = "While Shock and Awe is active, CS/Exorcism grant Holy Power (+10% Holy dmg/stack, 3 max) — aura ASSUMED shared with the Ret 2-set" },
+        [4] = { spell = 1226462, src = "https://www.wowhead.com/classic/item-set=1963/inquisition-shockplate", spec = "HOLY", kind = "passive",
+                note = "Divine Storm, Holy Shock and Holy Wrath consume Holy Power, +100%/stack" },
+        [6] = { spell = 1240573, src = "https://www.wowhead.com/classic/item-set=1963/inquisition-shockplate", spec = "HOLY", kind = "passive",
+                note = "+8% spell power per Holy Power consumed (1H) / +18% (2H), 10s" },
+      },
+    },
     -- PALADIN_T1_T2_CORE_FORGED is DEFERRED TO M5d, not lost. Core Forged is not a set: it is a P5
     -- stat/bonus trading mechanic (BWL stats + MC bonuses, from the Hydraxian vendors), so it has no
     -- Wowhead item-set page and no enumerable piece list — nothing to verify against, and the entry
@@ -291,6 +321,9 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- is what the builds gate on, never which of the two provides it (ADR-0004).
     JUDGEMENT_NO_CONSUME = { note = "+5% damaging Judgements; seals not consumed", from = { { set = "PALADIN_T2_JUDGEMENT", pieces = 2 }, { soul = "SOUL_OF_THE_JUSTICAR" } } },
     HOLY_POWER_CONSUME  = { note = "Divine Storm consumes Holy Power", from = { { set = "PALADIN_T35_INQUISITION", pieces = 4 } } },
+    -- The Holy set's twin of the line above. Kept separate on purpose: the spenders differ (Holy Shock
+    -- and Holy Wrath join Divine Storm), so a build must not confuse the two 4-sets.
+    HOLY_POWER_CONSUME_HOLY = { note = "Divine Storm/Holy Shock/Holy Wrath consume Holy Power (Holy T3.5 4-set)", from = { { set = "PALADIN_T35_INQUISITION_HOLY", pieces = 4 } } },
     HOLY_WRATH_INSTANT  = { note = "Holy Wrath instant + shorter CD", from = { { set = "PALADIN_T3_REDEMPTION", pieces = 4 } } },
     EXORCISM_DAMAGE_SOUL = { note = "Exorcism damage (soul only)", from = { { soul = "SOUL_OF_THE_EXILE" } } },
     -- Effect text read from Wowhead 2026-09-01. Rotation-relevant: it moves Judgement's cooldown, so
@@ -341,7 +374,7 @@ ns.RegisterBuiltinPack("PALADIN", function()
   -- user a playstyle that resolves to nil. Flip an entry to available when its build lands (M5).
   -- Enforced by tests/spec/data_sourcing_spec.lua.
   D.Catalog = {
-    version = 3, flavor = "SoD", phase = "P8",  -- 3: Wrath-like and Protection shipped (2026-09-03); the wizard re-offers once
+    version = 4, flavor = "SoD", phase = "P8",  -- 4: Wrath-like, Protection and Shockadin (experimental) shipped 2026-09-03; the wizard re-offers once
     PALADIN = {
       { build = "PALADIN_EXODIN", available = true, playstyle = "Exodin — fast 2H, single seal (Ret)", difficulty = "easy", recommended = true,
         updated = "2026-09-03", phase = "SoD P8",
@@ -364,10 +397,13 @@ ns.RegisterBuiltinPack("PALADIN", function()
         requires = { weapon = "1H", spells = { "SEAL_OF_MARTYRDOM" },
                      runes = { "RUNE_HAND_OF_RECKONING", "RUNE_MALLEABLE_PROTECTION", "RUNE_HAMMER_OF_THE_RIGHTEOUS",
                               "RUNE_SHIELD_OF_RIGHTEOUSNESS", "RUNE_AVENGERS_SHIELD", "RUNE_AEGIS" } } },
-      { build = "PALADIN_SHOCKADIN", available = false, playstyle = "Shockadin — Holy caster DPS", difficulty = "medium",
-        updated = "2026-08-31", phase = "SoD P8", source = "https://www.zockify.com/wowclassic/paladin/dps/",
-        summary = "Seal of Righteousness, Judgement of Righteousness and Holy Shock on cooldown; JotC maintenance.",
-        requires = { weapon = "1H" } },
+      -- THEORYCRAFT (ADR-0013 §6): the only published Shockadin guide is Phase 2 / level 40. Offered as
+      -- experimental so the wizard says so; `source` is that guide because it is what the loop came from.
+      { build = "PALADIN_SHOCKADIN", available = true, experimental = true, playstyle = "Shockadin — Holy caster DPS", difficulty = "medium",
+        updated = "2026-09-03", phase = "SoD P8",
+        source = "https://www.wowhead.com/classic/guide/shockadin-the-holy-spellslinger-phase-2-season-of-discovery-23293",
+        summary = "Theorycrafted for Phase 8 — no published endgame guide. Holy Shock and Exorcism on cooldown, Judgement of Righteousness, Crusader Strike when runed; spend 3 Holy Power with the Holy T3.5 4-set. Two-handers scale best with the 6-set.",
+        requires = { spells = { "HOLY_SHOCK" }, runes = { "RUNE_SHOCK_AND_AWE", "RUNE_CRUSADER_STRIKE", "RUNE_INFUSION_OF_LIGHT" } } },
       { build = "PALADIN_TWIST", available = false, playstyle = "Seal twisting (Ret)", difficulty = "hard", experimental = true,
         updated = "2026-08-31", phase = "SoD P8", source = "https://onlyfarms.gg/guides/season-of-discovery-paladin-dps-bis-gear-pve-guide/",
         summary = "Highest ceiling (~7-9% in SE). Swing-timer driven; experimental — watch the twist-success readout.", requires = { weapon = "2H", minSpeed = 3.0, runes = { "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM" } } },
@@ -420,6 +456,12 @@ ns.RegisterBuiltinPack("PALADIN", function()
       runes = { "RUNE_HAND_OF_RECKONING", "RUNE_MALLEABLE_PROTECTION", "RUNE_AEGIS", "RUNE_HAMMER_OF_THE_RIGHTEOUS",
                 "RUNE_AVENGERS_SHIELD", "RUNE_SHIELD_OF_RIGHTEOUSNESS", "RUNE_IMPROVED_SANCTUARY", "RUNE_ART_OF_WAR" },
       ringRunes = { default = { "DEFENSE_SPECIALIZATION", "HOLY_SPECIALIZATION" } },
+    },
+    PALADIN_SHOCKADIN = {
+      soul = {},  -- no soul is sourced for a Holy caster DPS; none is guessed
+      weapon = { type = "2H", reason = "Holy T3.5 6-set: +18% spell power per Holy Power with a 2H, +8% with a 1H" },
+      runes = { "RUNE_SHOCK_AND_AWE", "RUNE_CRUSADER_STRIKE", "RUNE_INFUSION_OF_LIGHT" },
+      ringRunes = { default = { "HOLY_SPECIALIZATION" } },  -- Holy spell hit; the P2 guide's pick, nothing newer contradicts it
     },
     -- Cross-build warnings
     warnings = {
@@ -701,6 +743,57 @@ ns.RegisterBuiltinPack("PALADIN", function()
       ---------------------------------------------------------------- filler
       -- Consecration is a Holy talent Wowhead's P8 build does not take ("does not generate enough damage
       -- or threat"); when it is not known the entry is skipped, when it is, it is the last resort.
+      { spell = "CONSECRATION", when = { {"resource","MANA", minPct = 40} } },
+      { item  = 13, hold = true, label = "Trinket", when = { {"item_ready", 13} } },
+      { item  = 14, hold = true, label = "Trinket", when = { {"item_ready", 14} } },
+    },
+  }
+
+  -- Paladin Shockadin (Holy caster DPS). THEORYCRAFT, not a guide's rotation (ADR-0013 §6): no Phase 8
+  -- Shockadin guide exists on Wowhead or Icy Veins; Wowhead's only one is Phase 2 (patch 1.15.1,
+  -- level-capped at 40, docs/research/wowhead/paladin-shockadin-holy-spellslinger-phase-2.md). This list is
+  -- derived in docs/research/paladin-p8-gather-prot-shockadin.md from that guide's still-true core loop,
+  -- the T3.5 Holy set's own bonus text, and the damage-model coefficients. Marked experimental in the
+  -- catalog until a sim or the owner's logs confirm it. Seal of Righteousness over Martyrdom is a
+  -- reasoned pick (spell-power scaling on its Judgement), recorded there with the alternative.
+  D.Builds.PALADIN_SHOCKADIN = {
+    schema = 1, key = "PALADIN_SHOCKADIN", name = "Paladin — Shockadin (Holy caster)", class = "PALADIN", flavor = "SoD",
+    notes = "Theorycrafted for Phase 8 — no published endgame guide exists. Holy Shock and Exorcism on cooldown, Judgement of Righteousness as the seal's payload, Crusader Strike when runed. With the Holy T3.5 4-set, spend 3 Holy Power on Holy Shock or Divine Storm.",
+    requires = { spells = { "HOLY_SHOCK" },
+                 runes = { "RUNE_SHOCK_AND_AWE", "RUNE_CRUSADER_STRIKE", "RUNE_INFUSION_OF_LIGHT" } },
+    visuals = {
+      cues = {
+        { event = "now_slot", spell = "HOLY_SHOCK", color = {1.0,0.9,0.4}, edge = "left",
+          reason = "Holy Shock came off cooldown" },
+        { event = "check", key = "SEAL_DROPPED", color = {1.0,1.0,1.0}, edge = "bottom",
+          reason = "Seal dropped", peripheral = true },
+      },
+    },
+    entries = {
+      ---------------------------------------------------------------- always
+      { spell = "SEAL_OF_RIGHTEOUSNESS", when = { {"no_seal"} }, label = "Seal up" },
+
+      ---------------------------------------------------------------- burst: same shape as the Ret builds, keyed to the Holy set
+      { spell = "AVENGING_WRATH", hold = true, label = "Burst",
+        when = { {"in_combat"},
+                 {"any", {"buff","HOLY_POWER_BUFF", min = 3}, {"not", {"set","PALADIN_T35_INQUISITION_HOLY", min = 2}}} } },
+
+      ---------------------------------------------------------------- UPGRADE: Holy T3.5 4-set -- spend 3 Holy Power
+      -- "Promote whichever of the three is off cooldown with 3 stacks up": Holy Shock first (the build's
+      -- own button), Divine Storm when runed, Holy Wrath where it can be cast at all.
+      { spell = "HOLY_SHOCK",   label = "3 HP", when = { {"buff","HOLY_POWER_BUFF", min = 3}, {"bonus","HOLY_POWER_CONSUME_HOLY"} } },
+      { spell = "DIVINE_STORM", label = "3 HP", when = { {"buff","HOLY_POWER_BUFF", min = 3}, {"bonus","HOLY_POWER_CONSUME_HOLY"} } },
+      { spell = "HOLY_WRATH",   label = "3 HP", when = { {"buff","HOLY_POWER_BUFF", min = 3}, {"bonus","HOLY_POWER_CONSUME_HOLY"},
+                                                        {"any", {"target_type","Undead","Demon"}, {"rune","RUNE_PURIFYING_POWER"}} } },
+
+      ---------------------------------------------------------------- BASELINE core: a 60 with Holy Shock talented and nothing else
+      { spell = "HOLY_SHOCK" },
+      { spell = "EXORCISM" },
+      { spell = "JUDGEMENT", label = "Seal expiring", when = { {"seal","SEAL_OF_RIGHTEOUSNESS"}, {"buff","SEAL_OF_RIGHTEOUSNESS", maxRemaining = 1.5} } },
+      { spell = "CRUSADER_STRIKE" },   -- rune; skipped if not engraved
+
+      ---------------------------------------------------------------- fillers
+      { spell = "JUDGEMENT", label = "Filler (then reseal)", when = { {"seal","SEAL_OF_RIGHTEOUSNESS"} } },
       { spell = "CONSECRATION", when = { {"resource","MANA", minPct = 40} } },
       { item  = 13, hold = true, label = "Trinket", when = { {"item_ready", 13} } },
       { item  = 14, hold = true, label = "Trinket", when = { {"item_ready", 14} } },

@@ -933,4 +933,288 @@ return {
       expect = { "item:13", "item:14" },
       expectLabels = { "Trinket", "Trinket" } },
   },
+
+  -- ---------------------------------------------------------------------------------------------
+  -- PALADIN_SHOCKADIN (ADR-0013 §6: THEORYCRAFT, not a guide's rotation -- no P8 Shockadin guide
+  -- exists on Wowhead or Icy Veins, catalog ships it `experimental = true`). Gate list derived in
+  -- docs/research/paladin-p8-gather-prot-shockadin.md lines 230-349, "Proposed theorycrafted Phase 8
+  -- priority -- OURS, not a guide's". Per ADR-0013 §4 the floor is "blues, the build's runes engraved"
+  -- -- Holy Shock (talent, not a rune) and Crusader Strike (rune) default to FakeState's `usable = true`
+  -- below, which is what "known" means at this gear point.
+  --
+  -- Entries walked top-to-bottom against Elmira/Classes/Paladin.lua's PALADIN_SHOCKADIN (13 lines):
+  --    1 SEAL_OF_RIGHTEOUSNESS "Seal up" (no_seal)
+  --    2 AVENGING_WRATH "Burst", hold=true (in_combat, any(HOLY_POWER_BUFF>=3, not T3.5-HOLY 2-set))
+  --    3 HOLY_SHOCK "3 HP" (buff HOLY_POWER_BUFF>=3 + bonus HOLY_POWER_CONSUME_HOLY)
+  --    4 DIVINE_STORM "3 HP" (same gate as 3)
+  --    5 HOLY_WRATH "3 HP" (same gate as 3, plus any(target_type Undead/Demon, rune RUNE_PURIFYING_POWER))
+  --    6 HOLY_SHOCK (baseline, unlabelled) -- dossier item 1
+  --    7 EXORCISM (baseline, unlabelled) -- dossier item 2
+  --    8 JUDGEMENT "Seal expiring" (seal + buff maxRemaining 1.5) -- dossier item 3
+  --    9 CRUSADER_STRIKE (baseline, unlabelled; rune) -- dossier item 4
+  --   10 JUDGEMENT "Filler (then reseal)" (seal)
+  --   11 CONSECRATION (baseline, unlabelled; resource MANA minPct=40)
+  --   12 item 13 "Trinket" (item_ready 13)
+  --   13 item 14 "Trinket" (item_ready 14)
+  -- Ambiguous keys (more than one entry can produce them): HOLY_SHOCK x2 (3, 6), JUDGEMENT x2 (8, 10).
+  -- DIVINE_STORM and HOLY_WRATH are each produced by exactly one entry here (unlike Exodin/Wrathlike,
+  -- Shockadin has no unlabelled baseline copy of either), so they need no `expectLabels` to disambiguate
+  -- on their own, but every scenario below labels every slot anyway per the shared fixture convention.
+  --
+  -- FINDING (placement of entry 8, "Seal expiring"): the dossier's own stated baseline order (lines
+  -- 310-315) is Holy Shock, Exorcism, Judgement-when-seal-expiring, Crusader Strike -- and that is
+  -- EXACTLY what entries 6-9 encode. This is the OPPOSITE of what happened to PALADIN_PROT's equivalent
+  -- line (see that build's block above): Prot's "Seal expiring" had to be moved ABOVE its four-button
+  -- core because Prot's core is wide enough that the line could otherwise never fire before the seal
+  -- dropped. Shockadin's core is two buttons with real cooldowns (Holy Shock 30s, Exorcism 15s), so the
+  -- gap the dossier's ordering leaves for it is real, not vestigial -- but nothing here VERIFIES the gap
+  -- is wide enough at typical cast cadence; `seal_expiring` below only proves the WIRING (that "Seal
+  -- expiring" is reachable once Holy Shock and Exorcism are both busy), the same way Prot's own
+  -- `seal_expiring_core_available` scenario does for its build. Recorded as a finding, not a defect:
+  -- the placement matches the source dossier verbatim, so it is authored intent, not an authoring slip.
+  --
+  -- FINDING (AVENGING_WRATH has no `cooldown`/`baseCooldown` fallback data, same gap as every other
+  -- Paladin build's copy): its own gate reads `HOLY_POWER_BUFF` and a `set` count, NEITHER of which
+  -- Simulation's virtual state decays or overrides once the entry has been cast (Core/Simulation.lua's
+  -- `v:buff` only intercepts a spell's OWN aura, and HOLY_POWER_BUFF is not AVENGING_WRATH's own aura).
+  -- Combined with the synthetic ~1-GCD cooldown fallback (finding (b) in the PALADIN_PROT header above),
+  -- any scenario that lets AVENGING_WRATH actually fire needs an explicit `baseCooldown` standing in for
+  -- the real multi-minute cooldown, or it re-appears one non-`hold` cast later and silently displaces
+  -- whatever this fixture is actually trying to isolate. `holy_t35_2p`, `burst_pull_no_set` and `bis`
+  -- below all carry `baseCooldown = { AVENGING_WRATH = 600 }` for exactly this reason; every other
+  -- scenario instead silences it (`usable = { AVENGING_WRATH = false }`), because with no Holy T3.5
+  -- 2-set worn its `any` gate's `not set ... min = 2` branch is true unconditionally (0 < 2), so it
+  -- would otherwise win slot 1 of every scenario below regardless of what that scenario is testing.
+  PALADIN_SHOCKADIN = {
+    ---------------------------------------------------------------- floor: blues, the build's runes engraved
+    -- Holy Shock (talent) and Crusader Strike (rune) both known, no sets, no souls, seal up with 25s
+    -- remaining (well outside entry 8's 1.5s window): entries 1-5 all fail their own gates, so the
+    -- queue falls through to the dossier's stated baseline order -- Holy Shock, Exorcism, Crusader
+    -- Strike, with "Seal expiring" correctly skipped over.
+    -- Labels: all three slots are the unconditional baseline entries (6, 7, 9) -- none of them carry a
+    -- label.
+    { name = "runes_blues", sets = {}, seal = "SEAL_OF_RIGHTEOUSNESS",
+      usable = { AVENGING_WRATH = false },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 } },
+      expect = { "HOLY_SHOCK", "EXORCISM", "CRUSADER_STRIKE" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- Crusader Strike not engraved
+    -- `usable = { CRUSADER_STRIKE = false }` simulates the rune not being worn: entry 9 is silently
+    -- skipped (ADR-0006 rule 5 / hard rule 8) and the queue falls through past it, with no error, to
+    -- the bottom-of-list Judgement filler (entry 10) -- exactly as the equivalent skip does for every
+    -- other Ret/Prot build's own Crusader Strike line.
+    -- Labels: slots 1-2 are the same unlabelled baseline as runes_blues (6, 7); slot 3 is entry 10
+    -- ("Filler (then reseal)") -- entry 8 still fails at 25s remaining, and entry 9 is skipped.
+    { name = "no_crusader_strike_rune", sets = {}, seal = "SEAL_OF_RIGHTEOUSNESS",
+      usable = { AVENGING_WRATH = false, CRUSADER_STRIKE = false },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 } },
+      expect = { "HOLY_SHOCK", "EXORCISM", "JUDGEMENT" },
+      expectLabels = { false, false, "Filler (then reseal)" } },
+
+    ---------------------------------------------------------------- entry 1: seal down leads
+    -- No seal at all (state:seal() is nil): "Seal up" is slot 1. Casting a seal sets Simulation's
+    -- virtual sealOverride (Core/Simulation.lua applyCast), so `no_seal` correctly reads false for the
+    -- rest of this preview -- the seal condition, unlike a buff, IS specially modelled by Simulation.
+    -- Labels: slot 1 is entry 1 ("Seal up"); slots 2-3 are the unconditional baseline (6, 7).
+    { name = "seal_down", sets = {},
+      usable = { AVENGING_WRATH = false },
+      expect = { "SEAL_OF_RIGHTEOUSNESS", "HOLY_SHOCK", "EXORCISM" },
+      expectLabels = { "Seal up", false, false } },
+
+    ---------------------------------------------------------------- entry 8: where "Seal expiring" actually lands
+    -- Seal at 1.0s remaining (inside entry 8's 1.5s window), Holy Shock and Exorcism BOTH still
+    -- available: this is the scenario the header FINDING above describes. Entry 8's own gate passes
+    -- throughout (Core/Simulation.lua never decays a real `buff()` value with virtual elapsed time, so
+    -- 1.0s stays 1.0s at every slot) but entries 6 and 7 are earlier in the list, carry no gate of
+    -- their own, and are not yet on cooldown at slots 1-2 -- so "Seal expiring" only reaches a slot
+    -- once BOTH of them have been cast. It lands in slot 3, BELOW Holy Shock and Exorcism, exactly as
+    -- entries 6-9's order says it should (see the header FINDING for why this differs from Prot).
+    -- Labels: slot 1 is entry 6 (unlabelled Holy Shock); slot 2 is entry 7 (unlabelled Exorcism); slot
+    -- 3 is entry 8 ("Seal expiring") -- not entry 9 (Crusader Strike), which sits below it in the list
+    -- and never gets a turn once entry 8's own gate passes.
+    { name = "seal_expiring", sets = {}, seal = "SEAL_OF_RIGHTEOUSNESS",
+      usable = { AVENGING_WRATH = false },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 1.0 } },
+      expect = { "HOLY_SHOCK", "EXORCISM", "JUDGEMENT" },
+      expectLabels = { false, false, "Seal expiring" } },
+
+    ---------------------------------------------------------------- Holy T3.5 2-set: grants Holy Power, consumes nothing
+    -- Inquisition Shockplate (T3.5 Holy) 2-set only, with 3 Holy Power stacks already up (as if Crusader
+    -- Strike/Exorcism had just built them under Shock and Awe): the 4-set's HOLY_POWER_CONSUME_HOLY
+    -- bonus needs 4 pieces, so entries 3-5 all stay gated out despite the stacks being present --
+    -- bonusExpected pins that down directly. Entry 2's OWN gate is different: with 2 pieces its `not
+    -- set ... min = 2` branch is now false, but the `buff HOLY_POWER_BUFF min = 3` branch is TRUE (we
+    -- already have 3 stacks), so Avenging Wrath fires anyway -- "waits for 3 HP" and HAS it, rather than
+    -- being held the way `burst_held_2p` below shows at 2 stacks. `baseCooldown` stands in for the real
+    -- multi-minute cooldown per the header FINDING, so it does not reappear in slot 3.
+    -- Labels: slot 1 is entry 2 ("Burst"); slots 2-3 are the unconditional baseline (6, 7) -- none of
+    -- the "3 HP" entries can fire at this gear point.
+    { name = "holy_t35_2p", sets = { PALADIN_T35_INQUISITION_HOLY = 2 }, seal = "SEAL_OF_RIGHTEOUSNESS",
+      baseCooldown = { AVENGING_WRATH = 600 },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      bonusExpected = { HOLY_POWER_CONSUME_HOLY = false },
+      expect = { "AVENGING_WRATH", "HOLY_SHOCK", "EXORCISM" },
+      expectLabels = { "Burst", false, false } },
+
+    ---------------------------------------------------------------- Holy T3.5 4-set: Holy Shock leads at 3 Holy Power
+    -- 4 pieces satisfies HOLY_POWER_CONSUME_HOLY; 3 Holy Power stacks satisfy entry 3's own buff check;
+    -- entry 3 is the FIRST of the three "3 HP" spenders in list order, so it wins slot 1. Divine Storm
+    -- (the build's `usable` default leaves it known, matching "with the Holy T3.5 4-set, spend 3 Holy
+    -- Power on Holy Shock or Divine Storm" from the build's own notes) is entry 4's own gate is
+    -- identical and it is next in the list, so once Holy Shock's 30s cooldown takes slot 1's line off
+    -- the table, Divine Storm's "3 HP" copy takes slot 2 -- the buff never decays in Simulation's
+    -- virtual state, so it is still >= 3 there. Holy Wrath (entry 5) stays gated out throughout: no
+    -- Undead/Demon target and no Purifying Power rune here. Avenging Wrath is silenced to isolate the
+    -- spender ordering this scenario exists to prove (its own gate would otherwise fire it first, per
+    -- the header FINDING -- see `bis` below for the scenario that deliberately lets both fire together).
+    -- Labels: slot 1 is entry 3 ("3 HP", Holy Shock); slot 2 is entry 4 ("3 HP", Divine Storm); slot 3
+    -- is entry 7 (unlabelled Exorcism) -- both spenders are now on their own cooldowns and entry 6
+    -- shares Holy Shock's cooldown with entry 3, so it cannot re-fire either.
+    { name = "holy_t35_4p_3hp", sets = { PALADIN_T35_INQUISITION_HOLY = 4 }, seal = "SEAL_OF_RIGHTEOUSNESS",
+      usable = { AVENGING_WRATH = false },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      bonusExpected = { HOLY_POWER_CONSUME_HOLY = true },
+      expect = { "HOLY_SHOCK", "DIVINE_STORM", "EXORCISM" },
+      expectLabels = { "3 HP", "3 HP", false } },
+
+    ---------------------------------------------------------------- same 4-set, Holy Shock already on cooldown
+    -- `cooldowns = { HOLY_SHOCK = 10 }` takes entry 3 (and entry 6, which shares the same spell key) off
+    -- the table from t=0: Divine Storm's "3 HP" copy (entry 4, still known) is the next eligible spender
+    -- and leads instead, exactly what the dossier's "promote whichever of the three is off cooldown"
+    -- phrasing says should happen.
+    -- Labels: slot 1 is entry 4 ("3 HP", Divine Storm); slot 2 is entry 7 (unlabelled Exorcism); slot 3
+    -- is entry 9 (unlabelled Crusader Strike) -- entry 8 fails at 25s remaining.
+    { name = "holy_t35_4p_3hp_holy_shock_on_cd", sets = { PALADIN_T35_INQUISITION_HOLY = 4 },
+      seal = "SEAL_OF_RIGHTEOUSNESS", usable = { AVENGING_WRATH = false },
+      cooldowns = { HOLY_SHOCK = 10 },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      bonusExpected = { HOLY_POWER_CONSUME_HOLY = true },
+      expect = { "DIVINE_STORM", "EXORCISM", "CRUSADER_STRIKE" },
+      expectLabels = { "3 HP", false, false } },
+
+    ---------------------------------------------------------------- Holy Shock AND Divine Storm both unavailable: Holy Wrath, Undead target
+    -- Same 4-set/cooldown gear point, Divine Storm additionally unknown (`usable = false`) and the
+    -- target is Undead: entry 5's `any(target_type, rune)` gate passes on its target-type half (no
+    -- Purifying Power rune engraved here), so Holy Wrath becomes the last-standing "3 HP" spender.
+    -- Labels: slot 1 is entry 5 ("3 HP", Holy Wrath); slots 2-3 are the unconditional baseline (7, 9).
+    { name = "holy_t35_4p_3hp_holy_wrath_undead", sets = { PALADIN_T35_INQUISITION_HOLY = 4 },
+      seal = "SEAL_OF_RIGHTEOUSNESS", targetType = "Undead",
+      usable = { AVENGING_WRATH = false, DIVINE_STORM = false },
+      cooldowns = { HOLY_SHOCK = 10 },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      bonusExpected = { HOLY_POWER_CONSUME_HOLY = true },
+      expect = { "HOLY_WRATH", "EXORCISM", "CRUSADER_STRIKE" },
+      expectLabels = { "3 HP", false, false } },
+
+    -- The `any` gate's OTHER branch: a non-Undead/Demon target (explicit "Humanoid", matching how
+    -- PALADIN_EXODIN's own naxx_t3_6p_t35_2p proves the negative case), but RUNE_PURIFYING_POWER
+    -- engraved -- Purifying Power lifts Holy Wrath's target restriction (Data/Spells.lua PURIFYING_POWER
+    -- note), so entry 5 still fires via its rune half instead of its target-type half.
+    -- Labels: same shape as the Undead scenario -- slot 1 is entry 5 ("3 HP", Holy Wrath).
+    { name = "holy_t35_4p_3hp_holy_wrath_purifying_power", sets = { PALADIN_T35_INQUISITION_HOLY = 4 },
+      seal = "SEAL_OF_RIGHTEOUSNESS", targetType = "Humanoid",
+      runes = { RUNE_PURIFYING_POWER = true },
+      usable = { AVENGING_WRATH = false, DIVINE_STORM = false },
+      cooldowns = { HOLY_SHOCK = 10 },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      bonusExpected = { HOLY_POWER_CONSUME_HOLY = true },
+      expect = { "HOLY_WRATH", "EXORCISM", "CRUSADER_STRIKE" },
+      expectLabels = { "3 HP", false, false } },
+
+    ---------------------------------------------------------------- the RET T3.5 set does not count for Shockadin
+    -- PALADIN_T35_INQUISITION (the RET Warplate, item-set 1940) is a DIFFERENT set from
+    -- PALADIN_T35_INQUISITION_HOLY (item-set 1963, Sets.lua's own comment: "a different item-set from
+    -- the Ret Warplate above ... with its own pieces and bonuses"). Wearing 4 pieces of the wrong set,
+    -- with 3 Holy Power stacks manually up, must NOT satisfy HOLY_POWER_CONSUME_HOLY -- bonusExpected
+    -- pins that down -- and none of entries 3-5 may fire; the queue must be byte-for-byte the shape of
+    -- runes_blues.
+    -- Labels: all three slots are the unlabelled baseline (6, 7, 9), same as runes_blues.
+    { name = "ret_t35_does_not_count", sets = { PALADIN_T35_INQUISITION = 4 }, seal = "SEAL_OF_RIGHTEOUSNESS",
+      usable = { AVENGING_WRATH = false },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      bonusExpected = { HOLY_POWER_CONSUME_HOLY = false },
+      expect = { "HOLY_SHOCK", "EXORCISM", "CRUSADER_STRIKE" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- entry 2's other branch: no Holy set, in combat
+    -- Zero PALADIN_T35_INQUISITION_HOLY pieces: `not set ... min = 2` is unconditionally true (0 < 2),
+    -- so Avenging Wrath's `any` passes on that branch alone regardless of Holy Power -- it fires on
+    -- pull, exactly like the no-set case for every other Ret build's Vengeance-gated copy.
+    -- `baseCooldown` again stands in for the real cooldown per the header FINDING.
+    -- Labels: slot 1 is entry 2 ("Burst"); slots 2-3 are the unconditional baseline (6, 7).
+    { name = "burst_pull_no_set", sets = {}, seal = "SEAL_OF_RIGHTEOUSNESS",
+      baseCooldown = { AVENGING_WRATH = 600 },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 } },
+      expect = { "AVENGING_WRATH", "HOLY_SHOCK", "EXORCISM" },
+      expectLabels = { "Burst", false, false } },
+
+    -- With the 2-set worn, the `not set` branch flips false, so only 3 Holy Power stacks can open the
+    -- gate. Two stacks: held. The audit found `min = 3` -> `min = 99` survived a suite with no scenario
+    -- pinning this exact boundary; this scenario needs no `usable` silencing at all, because entry 2's
+    -- own gate correctly fails on its own -- if it did not, AVENGING_WRATH would appear in slot 1 here.
+    -- Labels: no "3 HP" entry can fire either (bonus needs 4 pieces), so all three slots are the
+    -- unlabelled baseline (6, 7, 9).
+    { name = "burst_held_2p", sets = { PALADIN_T35_INQUISITION_HOLY = 2 }, seal = "SEAL_OF_RIGHTEOUSNESS",
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 2 } },
+      expect = { "HOLY_SHOCK", "EXORCISM", "CRUSADER_STRIKE" },
+      expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- full BiS: Holy T3.5 6-set, burst and spenders together
+    -- Inquisition Shockplate 6-set (clears the 4-set HOLY_POWER_CONSUME_HOLY threshold with room to
+    -- spare; the 6-set's own +8%/+18% spell-power bonus is a pure damage multiplier with no aura of its
+    -- own to gate on, same shape as every other "passive bonus" set threshold in this pack, so it adds
+    -- no new line to walk). Unlike every "*_3hp" scenario above, Avenging Wrath is left LIVE here on
+    -- purpose: at 6 pieces (>= 2) its `not set` branch is false, but 3 Holy Power stacks satisfy the
+    -- other half of its `any`, so it fires -- this is the gear point where a real character sees both
+    -- the burst line AND a Holy Power spender in the same 3-slot window, which is what distinguishes
+    -- this scenario's shape from every lower-gear scenario above. `baseCooldown` again stands in for
+    -- the real cooldown per the header FINDING.
+    -- Labels: slot 1 is entry 2 ("Burst"); slot 2 is entry 3 ("3 HP", Holy Shock -- not yet on cooldown
+    -- at the same t=0 Avenging Wrath's `hold = true` leaves behind); slot 3 is entry 4 ("3 HP", Divine
+    -- Storm) -- Holy Shock is now on its own 30s cooldown and Avenging Wrath is blocked by its own
+    -- `baseCooldown` override.
+    { name = "bis", sets = { PALADIN_T35_INQUISITION_HOLY = 6 }, seal = "SEAL_OF_RIGHTEOUSNESS",
+      baseCooldown = { AVENGING_WRATH = 600 },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      bonusExpected = { HOLY_POWER_CONSUME_HOLY = true },
+      expect = { "AVENGING_WRATH", "HOLY_SHOCK", "DIVINE_STORM" },
+      expectLabels = { "Burst", "3 HP", "3 HP" } },
+
+    ---------------------------------------------------------------- entry 11: the plain Consecration filler, isolated
+    -- Everything above entry 11 forced onto cooldown (Holy Shock, Exorcism, both Judgement entries via
+    -- JUDGEMENT's own 10s cooldown, Crusader Strike) with no set/soul bonus to unlock any "3 HP"
+    -- spender and the seal not expiring: the plain, unlabelled Consecration filler (mana >= 40%,
+    -- default 100%) becomes the only entry left standing. Mirrors PALADIN_WRATHLIKE's own
+    -- judgement_filler_when_idle in method, one level further down this build's own list.
+    -- The queue legitimately truncates to 1: Consecration's own 8s cooldown takes it off the table too,
+    -- and with everything else still on cooldown and no trinket data supplied there is nothing left for
+    -- a second slot.
+    { name = "consecration_filler_when_idle", sets = {}, seal = "SEAL_OF_RIGHTEOUSNESS",
+      usable = { AVENGING_WRATH = false },
+      cooldowns = { HOLY_SHOCK = 10, EXORCISM = 10, JUDGEMENT = 10, CRUSADER_STRIKE = 10 },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 } },
+      expect = { "CONSECRATION" },
+      expectLabels = { false } },
+
+    ---------------------------------------------------------------- entries 12-13: trinkets
+    -- No `adviseExpected`/"wrong-soul advisor" scenario in this build's block: Data/Advice/Paladin.lua's
+    -- own PALADIN_SHOCKADIN.soul is `{}` -- "no soul is sourced for a Holy caster DPS; none is guessed"
+    -- (the build file's own comment) -- so Core/Advisor.lua's firstMatch() never has a rule to return
+    -- and `rec.soul` stays nil for every soul a character could wear. gear_matrix_spec.lua's advisor
+    -- assertion (`rec.soul.pick`) indexes that field unconditionally, so an `adviseExpected` scenario
+    -- here would error, not fail cleanly -- there is no "wrong soul" for a build that recommends none.
+    --
+    -- Every rotation ability silenced so both trinket slots are reachable; both items ready. Slot 1 is
+    -- item 13 (entry 12); casting it suppresses that slot for the rest of the queue, so slot 2 is item
+    -- 14 (entry 13). Both `hold = true`, so neither advances Simulation's virtual clock, and with
+    -- everything else silenced there is nothing left for slot 3 -- the queue truncates at 2.
+    { name = "trinkets_only", sets = {}, seal = "SEAL_OF_RIGHTEOUSNESS",
+      usable = { AVENGING_WRATH = false, HOLY_SHOCK = false, EXORCISM = false, JUDGEMENT = false,
+                 CRUSADER_STRIKE = false, DIVINE_STORM = false, HOLY_WRATH = false, CONSECRATION = false },
+      buffs = { SEAL_OF_RIGHTEOUSNESS = { remaining = 25 } },
+      items = { [13] = { cooldown = 0 }, [14] = { cooldown = 0 } },
+      expect = { "item:13", "item:14" },
+      expectLabels = { "Trinket", "Trinket" } },
+  },
 }

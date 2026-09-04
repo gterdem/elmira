@@ -1,5 +1,11 @@
 # Changelog
 ## Unreleased
+- **New playstyle: Shockadin (experimental).** The Holy caster: Holy Shock and Exorcism on cooldown,
+  Judgement of Righteousness, Crusader Strike when runed, and with the Holy T3.5 4-set, three Holy
+  Power spent on Holy Shock or Divine Storm. No published Phase 8 guide exists for this build — the
+  only one is from Phase 2 — so this rotation is Elmira's own reasoning from the set bonuses and the
+  spell coefficients, and the setup window marks it experimental. Two-handers scale best with the
+  6-set, so the old one-hander requirement is gone.
 - **Exodin gains its execute.** Hammer of Wrath is now in the Exodin queue when the target is below
   20% health — it was missing entirely. With the Improved Hammer of Wrath wrist rune it becomes
   instant and self-resetting under 10%, but that rune shares the wrist with Purifying Power, so the
