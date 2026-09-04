@@ -93,25 +93,25 @@ function Glow.StopAll()
   nowFrames = {}
 end
 
--- The now-slot: the queue's first icon plus every action-bar button carrying that spell. Called on
--- every render, so it must be cheap when nothing changed — it diffs the frame set and only touches
--- what actually entered or left.
-function Glow.SetNowSlot(queueButton, slot)
+-- The now-slot: every action-bar button carrying the suggested spell. Called on every render, so it
+-- must be cheap when nothing changed — it diffs the frame set and only touches what entered or left.
+--
+-- The queue's own icon used to be in this set. ADR-0015 took it out: the strip and the bar were
+-- lighting up for the same spell at the same instant, and the strip's half is the one you cannot
+-- press. The glow is now the action bar's alone, and the strip speaks in size and motion.
+function Glow.SetNowSlot(slot)
   local p = (ns.db and ns.db.profile) or ns.DB.defaults.profile
   local wanted = {}
 
-  if p.glow and p.glow.enabled and slot then
-    if queueButton then wanted[queueButton] = true end
-    if p.glow.barGlow and slot.spell and ns.BarGlow then
-      local buttons = ns.BarGlow.buttonsFor(slot.spell)
-      for _, button in ipairs(buttons or {}) do
-        wanted[button] = true
-      end
-      -- Say so when there is nothing to glow. Silently showing only the queue icon makes the most
-      -- valuable half of the display fail in the way least likely to be noticed.
-      if #(buttons or {}) == 0 and ns.BarGlow.noteMissing then
-        ns.BarGlow.noteMissing(slot.spell)
-      end
+  if p.glow and p.glow.enabled and p.glow.barGlow and slot and slot.spell and ns.BarGlow then
+    local buttons = ns.BarGlow.buttonsFor(slot.spell)
+    for _, button in ipairs(buttons or {}) do
+      wanted[button] = true
+    end
+    -- Say so when there is nothing to glow. A suggestion the player cannot see on their bars is the
+    -- whole display failing in the way least likely to be noticed.
+    if #(buttons or {}) == 0 and ns.BarGlow.noteMissing then
+      ns.BarGlow.noteMissing(slot.spell)
     end
   end
 
@@ -123,6 +123,15 @@ function Glow.SetNowSlot(queueButton, slot)
     if not nowFrames[frame] then Glow.Start(frame, style) end
   end
   nowFrames = wanted
+end
+
+-- Renderer, registered with Display/Driver in its own right rather than being called from the
+-- strip's renderer. That is what lets a player hide the strip and keep the glow: with the two
+-- joined, turning the queue off silently turned off the half of the display they were using.
+function Glow.Render(queue, _key, visible)
+  local slot = nil
+  if visible ~= false and queue then slot = queue[1] end
+  Glow.SetNowSlot(slot)
 end
 
 -- Is this frame currently lit for the REAL suggestion? The options panel's preview needs to know

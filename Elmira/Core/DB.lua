@@ -26,6 +26,11 @@ DB.defaults = {
     -- two-state switch would have to pick which one it is not.
     visibility = "combat_or_target",
     learning = false,
+    -- Two switches, deliberately: `enabled` is the whole display, `showQueue` is the strip alone.
+    -- A player who watches only the action-bar glow turns the strip off and must keep glowing
+    -- (ADR-0015 §3), which the single switch could not express.
+    showQueue = true,
+    animate = true,
     activeBuild = false,
     anchor = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },
     glow = { enabled = true, style = "PIXEL", barGlow = true },

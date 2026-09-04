@@ -6,13 +6,33 @@
 --
 -- The frame is movable and its anchor persists, because the setup wizard is M4: without `/elm lock`
 -- M3 would ship a strip you can see and cannot move.
+--
+-- ADR-0015 §3: the strip NEVER glows. It says "this one" with size and opacity and says "something
+-- changed" with motion; the single attention signal belongs to the action bar, where the hand
+-- already is. What the sizes and the motions ARE lives in Core/Transition.lua -- this file only
+-- applies them to frames.
 local ADDON, ns = ...
 ns = ns or _G.__ELM_NS or {}
 
 local Queue = {}
-local container, buttons = nil, {}
+local container, buttons, ghosts = nil, {}, {}
 local MAX_SLOTS = 5     -- PRD F5: 1-5, default 3
-local SIZE, GAP = 40, 4
+
+-- What the strip remembers between renders.
+--
+-- `rendered` is what it last PAINTED, as {spell, item} rows -- the input to the next transition
+-- plan. A snapshot rather than the queue table itself: Simulation reuses its tables between ticks,
+-- so holding the reference would compare a queue against itself and animate nothing, forever.
+--
+-- `pendingCast` is the spell the player just cast, parked by Queue.noteCast until the next render
+-- consumes it. One render, one pop: a cast left lying around pops an unrelated icon later.
+-- `lastKey` is which build `rendered` belongs to. Display/Overlay.lua:216 carries the same guard for
+-- the same reason: switching profile, fork or build means every icon on screen belonged to another
+-- rotation, and sliding the new one's suggestions in from the old one's slots is a lie about what
+-- moved. It is also why deleting the declaration below is invisible to the suite: the three would
+-- become globals leaking between specs, but the key guard nils `rendered` on the first render of
+-- every one of them, so no test can tell the two apart. luacheck is the gate that can.
+local rendered, pendingCast, lastKey -- mutants: equivalent deletion only makes these globals
 
 local function profile()
   return (ns.db and ns.db.profile) or ns.DB.defaults.profile
@@ -104,9 +124,37 @@ local function showWhy(button)
   GameTooltip:Show()
 end
 
+-- A Translation displaces a frame from wherever it is anchored and snaps back when it finishes,
+-- which is the opposite of "arrive somewhere". So a move anchors the button at the icon's OLD home,
+-- translates the difference, and re-anchors at the new one when the animation ends -- the snap-back
+-- then lands exactly where the icon already is. Without the re-anchor every slide would rubber-band.
+local function settle(b)
+  b:ClearAllPoints()
+  b:SetPoint("LEFT", container, "LEFT", b.destX or 0, 0)
+end
+
+-- Stop() before Play() assumes Stop does NOT fire OnFinished -- if it did, the settle handler would
+-- re-anchor at the old destination and the new slide would overshoot from there. The vendored
+-- LibCustomGlow relies on the same contract (Libs/LibCustomGlow-1.0.lua:539 releases a frame AFTER
+-- Stop(), and :619 registers OnStop and OnFinished as separate scripts). Nothing headless can pin
+-- this, so it is written down rather than assumed silently.
+local function slide(b, fromX, toX, fromY)
+  b:ClearAllPoints()
+  b:SetPoint("LEFT", container, "LEFT", fromX, fromY)
+  b.slideMove:SetOffset(toX - fromX, -fromY)
+  b.slide:Stop()          -- a queue can change again mid-slide; restart from the new origin
+  b.slide:Play()
+end
+
+local function fadeIn(b, toAlpha)
+  b.fadeIn:SetToAlpha(toAlpha)
+  b.fade:Stop()
+  b.fade:Play()
+end
+
 local function makeButton(index, parent)
   local b = CreateFrame("Frame", nil, parent)   -- NOT a Button, and never a secure template
-  b:SetSize(SIZE, SIZE)
+  b:SetSize(ns.Transition.LAYOUT.base, ns.Transition.LAYOUT.base)
 
   b.icon = b:CreateTexture(nil, "ARTWORK")
   b.icon:SetAllPoints()
@@ -144,8 +192,82 @@ local function makeButton(index, parent)
   b:SetScript("OnDragStart", function() Queue.StartMoving() end)
   b:SetScript("OnDragStop", function() Queue.StopMoving() end)
 
+  -- Motion, built ONCE per button and reused. An AnimationGroup allocated per queue change would
+  -- be exactly the per-render garbage docs/01 §7 exists to forbid, ten times a second.
+  b.slide = b:CreateAnimationGroup()
+  b.slideMove = b.slide:CreateAnimation("Translation")
+  b.slideMove:SetDuration(ns.Transition.DURATION)
+  b.slideMove:SetSmoothing("OUT")      -- decelerating into place; a linear slide reads as a jump
+  b.slide:SetScript("OnFinished", function() settle(b) end)
+
+  b.fade = b:CreateAnimationGroup()
+  b.fadeIn = b.fade:CreateAnimation("Alpha")
+  b.fadeIn:SetFromAlpha(0)
+  b.fadeIn:SetDuration(ns.Transition.DURATION)
+
   b.index = index
   return b
+end
+
+-- A departing icon is drawn by a GHOST, not by the button: the button belongs to a slot and has
+-- already been repainted with whatever moved into it. One ghost per slot, so a queue that drops
+-- three icons at once shows all three leaving.
+local function makeGhost(parent)
+  local g = CreateFrame("Frame", nil, parent)
+  -- Under the slot buttons: for 150 ms the icon that left overlaps the one that slid into its
+  -- place, and the arriving suggestion is the one the player needs to be able to read.
+  g:SetFrameLevel(parent:GetFrameLevel())
+  g.icon = g:CreateTexture(nil, "ARTWORK")
+  g.icon:SetAllPoints()
+  g.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+  g:Hide()
+
+  g.anim = g:CreateAnimationGroup()
+  g.grow = g.anim:CreateAnimation("Scale")
+  g.grow:SetDuration(ns.Transition.DURATION)
+  g.dim = g.anim:CreateAnimation("Alpha")
+  g.dim:SetFromAlpha(1)
+  g.dim:SetToAlpha(0)
+  g.dim:SetDuration(ns.Transition.DURATION)
+  g.anim:SetScript("OnFinished", function() g:Hide() end)
+  return g
+end
+
+-- One icon leaving. `pop` starts oversized and settles back as it fades -- the confirmation that
+-- the addon agreed with a press; anything else shrinks away, because a correction should not
+-- claim credit for a cast that never happened.
+local function playGhost(row, slots)
+  local from, ghost = slots[row.from], ghosts[row.from]
+  -- A slot that no longer exists: the queue can shrink between renders (the depth setting, or a
+  -- rotation that ran out of suggestions), and the icon that left has nowhere to leave FROM.
+  if not (from and ghost and row.slot) then return end
+  local startScale, animScale = ns.Transition.ghostScale(row.kind)
+  local size = from.size * startScale
+  ghost:SetPoint("CENTER", container, "LEFT", from.x + from.size / 2, 0)
+  ghost:SetSize(size, size)
+  ghost.icon:SetTexture(iconFor(row.slot.spell, row.slot.item))
+  ghost.grow:SetScale(animScale, animScale)
+  ghost:SetAlpha(1)
+  ghost:Show()
+  ghost.anim:Stop()
+  ghost.anim:Play()
+end
+
+-- One icon arriving or moving. `stay` deliberately does nothing: an icon that did not move must not
+-- twitch, or the strip is in constant motion and motion stops meaning anything.
+local function playOp(b, op, slots, index)
+  local here = slots[index]
+  if op.kind == "shift" then
+    local from = slots[op.from]
+    if not from then return end     -- shifted in from a slot the strip no longer has
+    slide(b, from.x, here.x, 0)
+  elseif op.kind == "enter" then
+    -- A promotion drops in from one icon height above: far enough to read as arriving from outside
+    -- the strip, close enough to finish inside the 150 ms. A tail arrival only fades, because an
+    -- icon sliding down every GCD is motion that carries no news.
+    if op.promote then slide(b, here.x, here.x, here.size) end
+    fadeIn(b, here.alpha)
+  end
 end
 
 function Queue.frame() return container end
@@ -169,7 +291,6 @@ function Queue.Create()
   if container then return container end
   local p = profile()
   container = CreateFrame("Frame", "ElmiraQueue", UIParent)
-  container:SetSize(SIZE, SIZE)
   container:SetPoint(p.anchor.point or "CENTER", UIParent, p.anchor.relPoint or "CENTER",
                      p.anchor.x or 0, p.anchor.y or -150)
   container:SetScale(p.scale or 1.0)
@@ -190,6 +311,7 @@ function Queue.Create()
   if p.locked then container.grip:Hide() else container.grip:Show() end
 
   for i = 1, MAX_SLOTS do buttons[i] = makeButton(i, container) end
+  for i = 1, MAX_SLOTS do ghosts[i] = makeGhost(container) end
   Queue.Layout()
   return container
 end
@@ -210,17 +332,21 @@ function Queue.Layout()
   if not container then return end
   local p = profile()
   local depth = math.max(1, math.min(MAX_SLOTS, p.depth or 3))
+  local slots, width, height = ns.Transition.layout(depth)
   container:SetScale(p.scale or 1.0)
-  container:SetSize(SIZE * depth + GAP * (depth - 1), SIZE)
+  -- Height is the FIRST slot's size, not the base: sizing the container to the small icons clips
+  -- the one icon the strip exists for.
+  container:SetSize(width, height)
   for i = 1, MAX_SLOTS do
     local b = buttons[i]
     b:ClearAllPoints()
     if i <= depth then
-      b:SetPoint("LEFT", container, "LEFT", (i - 1) * (SIZE + GAP), 0)
       -- Slot 1 is the answer; the rest are context. Size and opacity carry that, so the eye lands on
-      -- the right icon without needing to read anything.
-      b:SetSize(SIZE, SIZE)
-      b:SetAlpha(i == 1 and 1.0 or 0.55)
+      -- the right icon without needing to read anything -- and without anything lighting up.
+      b.destX = slots[i].x
+      b:SetPoint("LEFT", container, "LEFT", slots[i].x, 0)
+      b:SetSize(slots[i].size, slots[i].size)
+      b:SetAlpha(slots[i].alpha)
       b:Show()
     else
       b:Hide()
@@ -239,25 +365,82 @@ end
 
 function Queue.isLocked() return profile().locked and true or false end
 
+-- Which spell key an id belongs to, cached per pack. Classic gives every RANK its own spell id and
+-- the pack ships one id per ability, so the id the client reports for a cast usually is NOT the
+-- pack's id -- the same rank mismatch that stopped the bar glow finding buttons. Names have no rank.
+local castKeys, castNames, castPack -- mutants: equivalent deletion only makes these globals
+local function keyForSpellID(id)
+  local pack = ns.Display and ns.Display.currentPack()
+  if not (pack and id) then return nil end
+  if castPack ~= pack then
+    castKeys = ns.spellKeyByID and ns.spellKeyByID(pack) or {}
+    castNames = {}
+    for key, data in pairs(pack.spells or {}) do
+      local name = type(data) == "table" and data.id and GetSpellInfo and GetSpellInfo(data.id)
+      if name and not castNames[name] then castNames[name] = key end
+    end
+    -- Only latch when the client actually answered. GetSpellInfo returns nil for a spell whose
+    -- data has not streamed in yet; caching that empty index would silently drop every rank match
+    -- for the rest of the session, which is the exact failure noteMissing exists to make audible.
+    if next(castNames) then castPack = pack end
+  end
+  if castKeys[id] then return castKeys[id] end
+  local name = GetSpellInfo and GetSpellInfo(id)
+  return name and castNames[name] or nil
+end
+
+-- The player cast something. Called from Core/Init's UNIT_SPELLCAST_SUCCEEDED handler; the only
+-- thing the strip does with it is tell a CAST apart from a PROMOTION on the next change, which is
+-- the difference between "you pressed it" and "the rotation changed its mind".
+function Queue.noteCast(spellID)
+  -- Nothing downstream of this can be seen when the strip is hidden or still, and the invalidate
+  -- below forces a recompute -- once per global cooldown, for nothing.
+  local p = profile()
+  if p.showQueue == false or p.animate == false then return false end
+  local key = keyForSpellID(spellID)
+  if not key then return false end
+  pendingCast = key
+  -- The queue itself is unchanged until the cooldown lands, and the tick that notices may be up to
+  -- a tenth of a second away. Marking dirty makes the pop land with the press, not after it.
+  if ns.Display and ns.Display.invalidate then ns.Display.invalidate() end
+  return true
+end
+
 -- Renderer. Registered with Display/Driver, so it only runs when the queue actually changed.
 -- `visible` comes from Display/Driver (Core/Visibility decides it). Passed in rather than read back
--- out of Display so this stays a function of its arguments — and so the hidden case is one line in a
+-- out of Display so this stays a function of its arguments -- and so the hidden case is one line in a
 -- spec instead of a fake combat state.
-function Queue.Render(queue, _key, visible)
+function Queue.Render(queue, key, visible)
   if not container then return end
   local p = profile()
-  if not p.enabled or visible == false then
+  -- `enabled` is the whole display; `showQueue` is this strip alone. Different questions: a player
+  -- who watches only the action-bar glow turns the strip off and must keep glowing, which is why
+  -- the bar glow is its own renderer (Display/Glow.Render) and no longer released from here.
+  if not p.enabled or p.showQueue == false or visible == false then
     container:Hide()
-    -- Releasing the glow matters more than hiding the strip: a bar button keeps glowing on its own
-    -- frame, so a hidden queue with a live glow leaves a lit button on the bars with nothing on
-    -- screen to explain it.
-    if ns.Glow then ns.Glow.SetNowSlot(nil, nil) end
+    -- Forget what was on screen. Coming back should look like arriving, not like the icons
+    -- teleported in from wherever the rotation happened to be when the strip went away.
+    rendered, pendingCast = nil, nil
     return
   end
   container:Show()
 
+  -- Only a real key counts: the hidden path passes nil, which is not a build change.
+  if key ~= nil and key ~= lastKey then
+    lastKey, rendered = key, nil
+  end
+
   local depth = math.max(1, math.min(MAX_SLOTS, p.depth or 3))
+  local slots = ns.Transition.layout(depth)
+  local plan = ns.Transition.plan(rendered, queue, pendingCast)
+  -- Nothing animates on the first paint: there is no "before" for an icon to have come from.
+  local animate = p.animate ~= false and rendered ~= nil
   local state = ns.API and ns.API.GetState()
+
+  if animate then
+    for _, row in ipairs(plan.leaving) do playGhost(row, slots) end
+  end
+
   for i = 1, depth do
     local b, slot = buttons[i], queue and queue[i]
     b.slot = slot
@@ -268,7 +451,7 @@ function Queue.Render(queue, _key, visible)
       b.cd:Clear()
       b:SetAlpha(0)
     else
-      b:SetAlpha(i == 1 and 1.0 or 0.55)
+      b:SetAlpha(slots[i].alpha)
       b.icon:SetTexture(iconFor(slot.spell, slot.item))
 
       -- Sweep. The state reports how much is LEFT and how long one LASTS; both are needed and they
@@ -286,7 +469,9 @@ function Queue.Render(queue, _key, visible)
         b.cd:Clear()
       end
 
-      local bind = slot.spell and ns.BarGlow and ns.BarGlow.keybindFor(slot.spell)
+      -- Slot 1 only (ADR-0015 §3): a key to press is a fact about the cast you are making now.
+      -- On a projected slot it is a key NOT to press yet, which is worse than no text at all.
+      local bind = i == 1 and slot.spell and ns.BarGlow and ns.BarGlow.keybindFor(slot.spell)
       b.keybind:SetText(bind or "")
 
       -- Only slot 1, and only while learning: a reason under every icon is a wall of text.
@@ -296,12 +481,19 @@ function Queue.Render(queue, _key, visible)
       else
         b.reason:Hide()
       end
+
+      if animate then playOp(b, plan.ops[i], slots, i) end
     end
   end
   for i = depth + 1, MAX_SLOTS do buttons[i].slot = nil end
 
-  -- Slot 1 only. Glowing the projected slots would make three things compete for the same eye.
-  if ns.Glow then ns.Glow.SetNowSlot(buttons[1], queue and queue[1]) end
+  rendered = {}
+  for i = 1, depth do
+    local slot = queue and queue[i]
+    if not slot then break end
+    rendered[i] = { spell = slot.spell, item = slot.item }
+  end
+  pendingCast = nil
 end
 
 ns.Queue = Queue

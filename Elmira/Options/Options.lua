@@ -483,13 +483,32 @@ function Options.table()
         type = "group", order = 1, name = L["Queue"], inline = false,
         args = {
           enabled = {
-            type = "toggle", order = 1, name = L["Show the queue"],
+            type = "toggle", order = 1, name = L["Enable Elmira"],
+            desc = L["Turns the whole display off: no queue, no bar glow, no update loop."],
             get = function() return profile().enabled end,
             set = function(_, v)
               profile().enabled = v
+              -- Disable() stops the update loop, so no later tick can reach the glow to release
+              -- it: without this the bar button lit by the last suggestion stays lit forever,
+              -- while the panel promises "no bar glow". Three lesser switches already do this.
+              if ns.Glow then ns.Glow.StopAll() end
               if v then ns.Display.Enable() else ns.Display.Disable() end
               redraw()
             end,
+          },
+          -- Separate from `enabled` on purpose (ADR-0015 §3). Hekili players routinely watch only
+          -- the glowing button; before this the only way to lose the strip was to lose the glow too.
+          showQueue = {
+            type = "toggle", order = 1.5, name = L["Show the queue strip"],
+            desc = L["Off keeps the action-bar glow and hides the icons."],
+            get = function() return profile().showQueue ~= false end,
+            set = function(_, v) profile().showQueue = v; redraw() end,
+          },
+          animate = {
+            type = "toggle", order = 1.6, name = L["Animate changes"],
+            desc = L["Icons slide when the queue moves and pop when you cast the suggestion."],
+            get = function() return profile().animate ~= false end,
+            set = function(_, v) profile().animate = v; redraw() end,
           },
           depth = {
             type = "range", order = 2, name = L["Icons"], min = 1, max = 5, step = 1,

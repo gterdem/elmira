@@ -39,6 +39,77 @@ describe("Options (overlay/peripheral cues)", function()
     Options = helper.load("Elmira/Options/Options.lua")
   end)
 
+  -- ADR-0015 §3 split one switch into three. `enabled` is the whole display; `showQueue` is the
+  -- strip alone (a player who watches only the glowing button had no way to lose the icons and keep
+  -- the glow); `animate` is the motion. All three shipped as a single toggle labelled, confusingly,
+  -- the same as the visibility dropdown below it.
+  describe("Queue section switches", function()
+    local function queueArgs() return Options.table().args.queue.args end
+
+    before_each(function()
+      ns.db.profile.enabled = true
+      ns.db.profile.showQueue = true
+      ns.db.profile.animate = true
+      ns.Display.Enable = function() end
+      ns.Display.Disable = function() end
+      ns.Queue = { Layout = function() end }
+    end)
+
+    -- Disable() stops the update loop, so no later tick can reach the glow to release it: the
+    -- button lit by the last suggestion stayed lit while the panel promised "no bar glow".
+    it("releases every glow when the master switch goes off", function()
+      local stopped = 0
+      ns.Glow = { StopAll = function() stopped = stopped + 1 end }
+      queueArgs().enabled.set(nil, false)
+      assert.equal(1, stopped)
+    end)
+
+    it("names the master switch for the addon, not for the strip", function()
+      local row = queueArgs().enabled
+      assert.equal("Enable Elmira", row.name)
+      assert.equal("Turns the whole display off: no queue, no bar glow, no update loop.", row.desc)
+    end)
+
+    it("offers the strip separately, and says the glow survives it", function()
+      local row = queueArgs().showQueue
+      assert.equal("Show the queue strip", row.name)
+      assert.equal("Off keeps the action-bar glow and hides the icons.", row.desc)
+      assert.is_true(row.get())
+      row.set(nil, false)
+      assert.is_false(ns.db.profile.showQueue)
+      assert.is_false(row.get())
+    end)
+
+    it("offers the motion separately", function()
+      local row = queueArgs().animate
+      assert.equal("Animate changes", row.name)
+      assert.equal("Icons slide when the queue moves and pop when you cast the suggestion.", row.desc)
+      assert.is_true(row.get())
+      row.set(nil, false)
+      assert.is_false(ns.db.profile.animate)
+      assert.is_false(row.get())
+    end)
+
+    -- A profile written before ADR-0015 has neither key. Reading a missing key as "off" would hide
+    -- the strip on every existing install, which is how a default of nil differs from a default.
+    it("reads a profile that predates both keys as on", function()
+      ns.db.profile.showQueue, ns.db.profile.animate = nil, nil
+      assert.is_true(queueArgs().showQueue.get())
+      assert.is_true(queueArgs().animate.get())
+    end)
+
+    -- Changing either setting changes nothing about the queue itself, so the driver would not
+    -- repaint on its own: the strip would keep animating, or stay hidden, until something else moved.
+    it("repaints on every one of the three, or the change is invisible until the queue moves", function()
+      local redraws = 0
+      ns.Display.refresh = function() redraws = redraws + 1 end
+      queueArgs().enabled.set(nil, true)
+      queueArgs().showQueue.set(nil, false)
+      queueArgs().animate.set(nil, false)
+      assert.equal(3, redraws)
+    end)
+  end)
+
   -- PRD F9: the Import/Export box. The import itself is Core/UserBuilds' job and is tested there;
   -- here the box must route text in and out and report the outcome under it.
   describe("Import / Export box", function()

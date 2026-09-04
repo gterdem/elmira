@@ -213,6 +213,10 @@ end
 -- display to look at and no way to type a command mid-fight.
 function NA:OnCastSucceeded(_, unit, _, spellID)
   if unit ~= "player" then return end
+  -- The strip needs this whether or not anything is recording: it is how a CAST is told apart from
+  -- a PROMOTION on the next queue change (ADR-0015 §3). It used to sit below the recorder guard,
+  -- so outside a recording session the event was observed and thrown away.
+  if ns.Queue and ns.Queue.noteCast then ns.Queue.noteCast(spellID) end
   if not (ns.Recorder and ns.Recorder.isRecording()) then return end
   if type(spellID) ~= "number" then return end
   local packs = ns.API.GetProviders("dataPacks")
@@ -318,6 +322,10 @@ function NA:StartDisplay()
   ns.Queue.Create()
   ns.Queue.SetLocked(self.db.profile.locked)
   ns.Display.register("queue", ns.Queue.Render)
+  -- The bar glow is its own renderer, not something the strip does on the side (ADR-0015 §3): the
+  -- two were joined, so hiding the strip took the glow with it and the player lost the half of the
+  -- display they were actually watching.
+  if ns.Glow then ns.Display.register("glow", ns.Glow.Render) end
   -- Registered even though every cue is off by default: the renderer costs one comparison per
   -- render when nothing is opted in, and wiring it conditionally would mean the first opt-in
   -- silently does nothing until a reload.

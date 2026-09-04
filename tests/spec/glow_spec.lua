@@ -155,28 +155,76 @@ describe("Display.Glow", function()
     end)
 
     it("tells BarGlow which spell it could not place", function()
-      Glow.SetNowSlot(frame("queue"), { spell = "EXORCISM" })
+      Glow.SetNowSlot({ spell = "EXORCISM" })
       assert.same({ "EXORCISM" }, missing)
     end)
 
     it("says nothing when a button WAS found", function()
       ns.BarGlow.buttonsFor = function() return { frame("bar") }, "ElvUI" end
-      Glow.SetNowSlot(frame("queue"), { spell = "EXORCISM" })
+      Glow.SetNowSlot({ spell = "EXORCISM" })
       assert.same({}, missing)
     end)
 
     it("says nothing when the user has bar glow switched off", function()
       ns.db.profile.glow.barGlow = false
-      Glow.SetNowSlot(frame("queue"), { spell = "EXORCISM" })
+      Glow.SetNowSlot({ spell = "EXORCISM" })
       assert.same({}, missing)
     end)
 
-    it("still glows the queue icon when the bar lookup finds nothing", function()
-      -- Degrading is correct; degrading SILENTLY was the problem.
-      local queue = frame("queue")
-      Glow.SetNowSlot(queue, { spell = "EXORCISM" })
-      assert.equal(1, Glow.activeCount())
+    -- ADR-0015 §3: when the bars cannot be found there is now nothing left to light. The strip is
+    -- deliberately not a fallback -- it says "this one" with size, and noteMissing above is what
+    -- makes the failure audible instead of silent.
+    it("lights nothing at all when the bar lookup finds nothing", function()
+      Glow.SetNowSlot({ spell = "EXORCISM" })
+      assert.equal(0, Glow.activeCount())
     end)
+  end)
+end)
+
+-- Its own renderer, not something the strip does on the side. Joined, hiding the icons hid the glow.
+describe("Glow.Render", function()
+  local Glow, ns, started, stopped
+
+  local function frame(name) return { name = name } end
+
+  before_each(function()
+    ns = helper.reset()
+    started, stopped = {}, {}
+    _G.LibStub = function() return {
+      PixelGlow_Start = function(f) started[#started + 1] = f end,
+      PixelGlow_Stop = function(f) stopped[#stopped + 1] = f end,
+    } end
+    helper.load("Elmira/Core/Colors.lua")
+    helper.load("Elmira/Core/DB.lua")
+    Glow = helper.load("Elmira/Display/Glow.lua")
+    ns.db = { profile = { glow = { enabled = true, style = "PIXEL", barGlow = true } } }
+    ns.BarGlow = { buttonsFor = function() return { frame("bar") }, "ElvUI" end }
+  end)
+
+  after_each(function() _G.LibStub = nil end)
+
+  it("glows the first slot of a visible queue", function()
+    Glow.Render({ { spell = "EXORCISM" } }, "K", true)
+    assert.equal(1, #started)
+    assert.equal(1, Glow.activeCount())
+  end)
+
+  it("releases everything when the driver says hidden", function()
+    Glow.Render({ { spell = "EXORCISM" } }, "K", true)
+    Glow.Render({ { spell = "EXORCISM" } }, "K", false)
+    assert.equal(1, #stopped)
+    assert.equal(0, Glow.activeCount())
+  end)
+
+  it("treats an omitted visibility as visible, like every other renderer", function()
+    Glow.Render({ { spell = "EXORCISM" } }, "K")
+    assert.equal(1, Glow.activeCount())
+  end)
+
+  it("releases everything on an empty queue", function()
+    Glow.Render({ { spell = "EXORCISM" } }, "K", true)
+    Glow.Render({}, "K", true)
+    assert.equal(0, Glow.activeCount())
   end)
 end)
 

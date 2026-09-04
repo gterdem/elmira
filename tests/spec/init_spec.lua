@@ -95,6 +95,7 @@ describe("Core.Init", function()
       SetLocked = function(v) order[#order + 1] = "Queue.SetLocked:" .. tostring(v) end,
       isLocked = function() return false end,
       Render = function() end,
+      noteCast = function(id) order[#order + 1] = "Queue.noteCast:" .. tostring(id) end,
     }
   end
 
@@ -299,6 +300,26 @@ describe("Core.Init", function()
     end)
   end)
 
+  -- The strip needs every cast, not only the ones inside a recording session: it is how a CAST is
+  -- told apart from a PROMOTION. The call used to sit below the recorder guard, where it never ran.
+  describe("the player's own casts reach the strip", function()
+    it("tells the queue about a cast with nothing recording", function()
+      NA:OnInitialize()
+      NA:OnEnable()
+      order = {}
+      NA:OnCastSucceeded(nil, "player", nil, 415073)
+      assert.same({ "Queue.noteCast:415073" }, order)
+    end)
+
+    it("ignores casts by anyone else", function()
+      NA:OnInitialize()
+      NA:OnEnable()
+      order = {}
+      NA:OnCastSucceeded(nil, "target", nil, 415073)
+      assert.same({}, order)
+    end)
+  end)
+
   describe("data-pack attach order", function()
     local function registerPack()
       ns.API.RegisterDataPack{ class = "PALADIN", flavor = "SoD", spells = {} }
@@ -318,6 +339,17 @@ describe("Core.Init", function()
       assert.is_not_nil(registerAt, "the queue renderer was never registered")
       assert.is_true(attachAt < registerAt,
         "a queue built before attach compiles against no data (Init.lua's own comment)")
+    end)
+
+    -- ADR-0015 §3. The glow used to be painted by the strip's renderer, so hiding the strip took
+    -- the bar glow with it -- and the bar is the half a player can actually press.
+    it("registers the bar glow as a renderer of its own", function()
+      ns.Glow = { Render = function() end }
+      NA:OnInitialize()
+      NA:OnEnable()
+      local seen = false
+      for _, e in ipairs(order) do if e == "register:glow" then seen = true end end
+      assert.is_true(seen, "the bar glow is not registered; hiding the strip would silence it")
     end)
 
     -- Gated on ItemRack actually being installed. This code ships inside core now, so unlike the

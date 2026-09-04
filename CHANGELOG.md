@@ -1,5 +1,18 @@
 # Changelog
 ## Unreleased
+- **The queue strip no longer glows, and it moves instead.** The suggested spell used to light up
+  twice at once — on the strip and on your action bar — for the same cast. The strip's half was the
+  one you cannot press, so it is gone: the current suggestion is simply the biggest icon, the ones
+  after it step down in size and opacity, and the strip tells you something changed by *moving*.
+  Icons slide across when the queue advances, drop in from above when a spell is promoted (an
+  execute coming into range), and the one you just cast pops as it leaves — so a glance at the edge
+  of your vision reads as movement rather than as another thing lighting up. Turn the motion off
+  with **Animate changes** if you prefer it still.
+- **New: you can hide the strip and keep the action-bar glow.** The two used to be one switch, so
+  losing the icons lost the glow with them. **Show the queue strip** now turns off only the icons.
+  The master switch is relabelled **Enable Elmira** to stop it reading as the same setting.
+- The keybind is shown on the current suggestion only. On a projected slot it was a key *not* to
+  press yet.
 - **Fixed: no bar addon was ever detected.** Elmira asked the library registry which action-bar
   libraries were loaded and misread the answer, so it always concluded there were none — ElvUI and
   Bartender4 users got the Blizzard-bar fallback, which ElvUI hides, so nothing glowed on the bars

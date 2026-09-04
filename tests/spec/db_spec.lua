@@ -22,6 +22,13 @@ describe("Core.DB", function()
     DB = helper.load("Elmira/Core/DB.lua")
   end)
 
+  -- Two switches, not one (ADR-0015 §3). `enabled` is the whole display; `showQueue` is the strip.
+  -- Defaulting either to nil would read as "off" through the `~= false` tests in Options and Queue.
+  it("ships the strip and its animations on", function()
+    assert.is_true(DB.defaults.profile.showQueue)
+    assert.is_true(DB.defaults.profile.animate)
+  end)
+
   it("defaults.profile.depth is 3", function()
     assert.equal(3, DB.defaults.profile.depth)
   end)
