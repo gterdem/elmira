@@ -112,7 +112,15 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- ability (hidden aura, Consecration crit damage). The sweep's 429248 could not be classed at all
     -- and 429249 is the engrave/teach spell — neither would have matched learnedAbilitySpellIDs.
     RUNE_WRATH          = { id = 429139, src = "https://www.wowhead.com/classic/spell=429139", rune = "head" },
-    RUNE_RIGHTEOUS_VENGEANCE = { id = 440794, src = "https://www.wowhead.com/classic/spell=440794", rune = "back" },
+    -- NOT client-verified. Wowhead-sourced 2026-09-03, and this rune has never been read from a live
+    -- client: it sits on the other test character. Changed from 440794 on the same discriminator that
+    -- proved RUNE_SHOCK_AND_AWE wrong -- 440794 is an "Apply Aura: Overrides Actionbar Spell" override
+    -- variant, 440672 is the passive ability, and only the ability appears in learnedAbilitySpellIDs.
+    -- That discriminator has been right once; it is not proof. This gate decides every Retribution
+    -- build, so settle it with `/dump C_Engraving.GetRuneForEquipmentSlot(15).learnedAbilitySpellIDs`
+    -- on a character wearing the rune, then add the result to paladin_rune_gates_spec.lua's OBSERVED
+    -- table -- which deliberately does NOT list this key, because nothing has observed it yet.
+    RUNE_RIGHTEOUS_VENGEANCE = { id = 440672, src = "https://www.wowhead.com/classic/spell=440672", rune = "back" },
     RUNE_DIVINE_STORM   = { id = 407778, src = "https://www.wowhead.com/classic/spell=407778", rune = "chest" },
     RUNE_PURIFYING_POWER = { id = 429144, src = "https://www.wowhead.com/classic/spell=429144", rune = "wrist" },
     RUNE_CRUSADER_STRIKE = { id = 407676, src = "https://www.wowhead.com/classic/spell=407676", rune = "hands" },
