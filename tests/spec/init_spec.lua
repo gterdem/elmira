@@ -67,6 +67,7 @@ describe("Core.Init", function()
   end
 
   local ns, NA, logged, order
+  local barLayoutCallback
 
   -- `order` is a single shared list several fakes below push onto, so a test can assert RELATIVE
   -- ordering (e.g. "attachPack before the queue renderer is registered") without caring about the
@@ -129,6 +130,12 @@ describe("Core.Init", function()
     ns.Queue = fakeQueue()
     ns.Overlay = fakeOverlay()
     ns.BarGlow = { Invalidate = function() order[#order + 1] = "BarGlow.Invalidate" end }
+    ns.BarProviders = {
+      Invalidate = function() order[#order + 1] = "BarProviders.Invalidate" end,
+      Register = function() order[#order + 1] = "BarProviders.Register" end,
+      Subscribe = function(cb) order[#order + 1] = "BarProviders.Subscribe"; barLayoutCallback = cb end,
+    }
+    ns.ItemRack = { Register = function() order[#order + 1] = "ItemRack.Register" end }
     ns.Options = { Register = function() order[#order + 1] = "Options.Register" end,
                    Open = function() order[#order + 1] = "Options.Open" end }
     ns.Wizard = { OfferOnLogin = function() order[#order + 1] = "Wizard.OfferOnLogin" end }
@@ -258,8 +265,26 @@ describe("Core.Init", function()
       for _, event in ipairs({ "ACTIONBAR_SLOT_CHANGED", "UPDATE_MACROS", "PLAYER_ENTERING_WORLD" }) do
         order = {}
         AceEvent.events:Fire(event)
-        assert.same({ "BarGlow.Invalidate", "Display.refresh" }, order, event)
+        assert.same({ "BarGlow.Invalidate", "BarProviders.Invalidate", "Display.refresh" }, order, event)
       end
+    end)
+
+    -- A stance, form or Shadowform swap repages the bars. The bar-provider addon watched this event
+    -- while core did not, so the provider's map was dropped and core's Blizzard map -- and its
+    -- one-shot "no button found" set -- were left stale. Invisible on a paladin, immediate on a
+    -- druid or warrior.
+    it("invalidates the bar map when the player changes stance or form", function()
+      NA:OnInitialize()
+      order = {}
+      LibStub("AceEvent-3.0").events:Fire("UPDATE_SHAPESHIFT_FORM")
+      assert.same({ "BarGlow.Invalidate", "BarProviders.Invalidate", "Display.refresh" }, order)
+    end)
+
+    it("drops every bar provider's own map, not just core's Blizzard scan", function()
+      NA:OnInitialize()
+      order = {}
+      LibStub("AceEvent-3.0").events:Fire("ACTIONBAR_PAGE_CHANGED")
+      assert.is_true(#order >= 2 and order[2] == "BarProviders.Invalidate")
     end)
 
     it("does not invalidate the display for a bar-map-only event, nor refresh bars for a state-only one", function()
@@ -267,7 +292,7 @@ describe("Core.Init", function()
       local AceEvent = LibStub("AceEvent-3.0")
       order = {}
       AceEvent.events:Fire("UPDATE_MACROS")
-      assert.same({ "BarGlow.Invalidate", "Display.refresh" }, order)
+      assert.same({ "BarGlow.Invalidate", "BarProviders.Invalidate", "Display.refresh" }, order)
       order = {}
       AceEvent.events:Fire("UNIT_AURA")
       assert.same({ "Display.invalidate" }, order)
@@ -293,6 +318,23 @@ describe("Core.Init", function()
       assert.is_not_nil(registerAt, "the queue renderer was never registered")
       assert.is_true(attachAt < registerAt,
         "a queue built before attach compiles against no data (Init.lua's own comment)")
+    end)
+
+    -- Gated on ItemRack actually being installed. This code ships inside core now, so unlike the
+    -- retired companion addon its presence says nothing about whether the user has ItemRack.
+    it("registers the ItemRack override source", function()
+      NA:OnInitialize()
+      order = {}
+      NA:OnEnable()
+      local seen = false
+      for _, e in ipairs(order) do if e == "ItemRack.Register" then seen = true end end
+      assert.is_true(seen)
+    end)
+
+    it("enables without the ItemRack integration present", function()
+      ns.ItemRack = nil
+      NA:OnInitialize()
+      assert.is_true(pcall(function() NA:OnEnable() end))
     end)
 
     it("loads the class pack before attaching it", function()
@@ -332,6 +374,32 @@ describe("Core.Init", function()
   end)
 
   describe("StartDisplay", function()
+    -- Registered here rather than at file scope: the LibActionButton libraries have finished loading
+    -- by now and their buttons exist to be attributed, which is how the provider learns whether it
+    -- is looking at ElvUI or Bartender4.
+    it("registers the bar providers before building the queue", function()
+      NA:OnInitialize()
+      NA:StartDisplay()
+      assert.equal("BarProviders.Register", order[1])
+    end)
+
+    -- docs/08's `onLayoutChanged` is the provider telling US its bars moved. It had no caller in
+    -- core at all until now: the ElvUI companion implemented it and nothing ever subscribed.
+    it("subscribes to provider layout changes, and acts on one", function()
+      NA:OnInitialize()
+      NA:StartDisplay()
+      assert.equal("function", type(barLayoutCallback))
+      order = {}
+      barLayoutCallback()
+      assert.same({ "BarGlow.Invalidate", "Display.refresh" }, order)
+    end)
+
+    it("starts the display without bar providers present", function()
+      ns.BarProviders = nil
+      NA:OnInitialize()
+      assert.is_true(pcall(function() NA:StartDisplay() end))
+    end)
+
     it("registers the queue renderer before the overlay renderer, only when both modules exist", function()
       NA:OnInitialize()
       NA:StartDisplay()

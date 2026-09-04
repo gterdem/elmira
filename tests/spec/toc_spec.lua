@@ -4,65 +4,37 @@
 -- module's file scope then read a nil `Elmira` global and registered nothing, silently. Nothing else
 -- in the suite can catch that — it is a property of the .toc files, not of any Lua module.
 
--- Discovered, not listed: a future Elmira_Bartender4 must inherit these invariants without anyone
--- remembering to edit this file. EXPECTED guards the discovery itself — a glob that silently found
--- nothing would turn every assertion below into a vacuous pass, which is the same class of silent
--- no-op this spec exists to prevent.
-local EXPECTED = 4
-
-local function modules()
+-- ADR-0014: Elmira ships as ONE addon folder. The bar providers and the ItemRack integration are
+-- inside core, gated at runtime on the target addon being present rather than by a TOC dependency.
+-- This block used to check that each companion folder declared `## Dependencies: Elmira`; the
+-- invariant it now guards is stronger and catches the failure that actually happened twice -- a
+-- retired folder left behind, still declaring itself, still registering, silently overriding core.
+local function moduleFolders()
   local pipe = assert(io.popen("ls -d Elmira_*/ 2>/dev/null"), "cannot enumerate module folders")
   local found = {}
-  for dir in pipe:lines() do
-    local name = dir:gsub("/$", "")
-    local toc = name .. "/" .. name .. "_Vanilla.toc"
-    local f = io.open(toc, "r")
-    assert(f, name .. " has no " .. name .. "_Vanilla.toc")
-    found[name] = f:read("*a")
-    f:close()
-  end
+  for dir in pipe:lines() do found[#found + 1] = (dir:gsub("/$", "")) end
   pipe:close()
-  local n = 0
-  for _ in pairs(found) do n = n + 1 end
-  assert.are.equal(EXPECTED, n) -- bump deliberately when a module is added or removed
   return found
 end
 
-describe("module TOCs", function()
-  it("declares Elmira as a hard dependency of every module", function()
-    for name, toc in pairs(modules()) do
-      local deps = toc:match("##%s*Dependencies:%s*([^\r\n]*)") or ""
-      local found = false
-      for entry in deps:gmatch("[^,]+") do
-        if entry:match("^%s*(.-)%s*$") == "Elmira" then found = true end
-      end
-      assert.is_true(found, name .. " must declare `## Dependencies: Elmira` to load after core")
-    end
+describe("one addon folder (ADR-0014)", function()
+  it("ships no companion addon folders", function()
+    assert.same({}, moduleFolders())
   end)
 
-  it("never uses LoadWith, which loads a module ahead of its own dependencies", function()
-    for name, toc in pairs(modules()) do
-      assert.is_nil(toc:match("##%s*LoadWith:"),
-        name .. " must not use `## LoadWith:` (see docs/08-MODULE-API.md)")
+  it("packages exactly one folder", function()
+    local f = assert(io.open(".pkgmeta", "r"))
+    local pkgmeta = f:read("*a")
+    f:close()
+    local moves = {}
+    for line in pkgmeta:gmatch("[^\r\n]+") do
+      local src, dst = line:match("^%s+(Elmira[%w_/]*):%s*(Elmira[%w_]*)%s*$")
+      if src and dst then moves[#moves + 1] = dst end
     end
-  end)
-
-  -- The shipped class pack is no longer one of these folders (ADR-0011): it is
-  -- Elmira/Classes/Paladin.lua inside core. What remains here are the integration modules, which
-  -- hard-depend on a FOREIGN addon and so keep their own folders. An external third-party class
-  -- pack still uses `## X-Elmira-Class` + LoadOnDemand; there just is not one in this repo.
-  it("ships no folder-level class pack, since shipped class data lives in Elmira/Classes", function()
-    for name, toc in pairs(modules()) do
-      assert.is_nil(toc:match("##%s*X%-Elmira%-Class:"),
-        name .. " declares X-Elmira-Class; shipped class data belongs in Elmira/Classes (ADR-0011)")
-    end
+    assert.same({ "Elmira" }, moves)
   end)
 end)
 
--- A Core file missing from the TOC is invisible to every other test here: busted loads modules by
--- path, so the suite stays green while the addon breaks in game. That is the same shape as the M0
--- LoadWith bug — correct code, never loaded — so it gets the same treatment: a test that reads the
--- real .toc bytes.
 describe("core TOC", function()
   local function tocBody()
     local f = assert(io.open("Elmira/Elmira_Vanilla.toc", "r"), "missing core TOC")

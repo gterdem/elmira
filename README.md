@@ -29,7 +29,7 @@ Protection; seal twisting experimental) plus a Mage build to prove the engine is
 
 ## Modules
 Elmira ships as a family — install the package and only the relevant parts load:
-`Elmira` (core, including all class data), `Elmira_ElvUI`, `Elmira_ItemRack`, `Elmira_WoWSims`, `Elmira_Insights`.
+`Elmira` — one folder, containing everything including all class data and the ElvUI/Bartender4 and ItemRack integrations.
 
 ## Install
 Via the CurseForge app (recommended) or download the release zip and extract into `Interface/AddOns`.

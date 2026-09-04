@@ -108,12 +108,17 @@ function NA:OnInitialize()
   end
 
   -- The bar map, separately: these change which BUTTON holds a spell, not whether to suggest it.
+  -- UPDATE_SHAPESHIFT_FORM is in this list because a stance, form or Shadowform swap repages the
+  -- bars. The bar-provider addon used to watch it while core did not, so a stance change dropped the
+  -- provider's map and left core's Blizzard map -- and its one-shot "no button found" set -- stale.
+  -- Nothing on a paladin ever exposed that; a druid or warrior would have hit it immediately.
   for _, event in ipairs({
     "ACTIONBAR_SLOT_CHANGED", "ACTIONBAR_PAGE_CHANGED", "UPDATE_BONUS_ACTIONBAR",
-    "UPDATE_MACROS", "PLAYER_ENTERING_WORLD",
+    "UPDATE_MACROS", "PLAYER_ENTERING_WORLD", "UPDATE_SHAPESHIFT_FORM",
   }) do
     self:RegisterEvent(event, function()
       if ns.BarGlow then ns.BarGlow.Invalidate() end
+      if ns.BarProviders then ns.BarProviders.Invalidate() end
       if ns.Display then ns.Display.refresh() end
     end)
   end
@@ -285,6 +290,11 @@ function NA:OnEnable()
     ns.Adapter.attachPack(pack)
   end
 
+  -- Gear-swap build switching, if ItemRack is installed. Registered here rather than at file scope
+  -- for the same reason the bar providers are: this code ships inside core now, so its presence says
+  -- nothing about whether the integration target is there, and only the client can answer that.
+  if ns.ItemRack then ns.ItemRack.Register() end
+
   self:StartDisplay()
 end
 
@@ -293,6 +303,18 @@ end
 -- empty strip rather than an error.
 function NA:StartDisplay()
   if not (ns.Display and ns.Queue) then return end
+  -- Bar providers first: one per LibActionButton-1.0 library the client has loaded, which is how
+  -- ElvUI and Bartender4 are both supported by the same code. Registering here rather than at file
+  -- scope means the libraries have finished loading and their buttons exist to be attributed.
+  if ns.BarProviders then
+    ns.BarProviders.Register()
+    -- A provider may know its bars changed before any client event we watch does -- that is what
+    -- `onLayoutChanged` is for (docs/08). Subscribing here is what finally gives it a caller.
+    ns.BarProviders.Subscribe(function()
+      if ns.BarGlow then ns.BarGlow.Invalidate() end
+      if ns.Display then ns.Display.refresh() end
+    end)
+  end
   ns.Queue.Create()
   ns.Queue.SetLocked(self.db.profile.locked)
   ns.Display.register("queue", ns.Queue.Render)

@@ -216,7 +216,7 @@ function CreateFrame(frameType, name, parent, template)
   local frame = {}
   local lines = {}
   -- Real RegisterEvent/SetScript bookkeeping, not the generic no-op fallback below: without this,
-  -- a frame-driven watcher (e.g. Elmira_ElvUI/Provider.lua's `watcher:SetScript("OnEvent", fn)`)
+  -- a frame-driven watcher (`watcher:SetScript("OnEvent", fn)`)
   -- cannot be proven wired at all — the call would succeed silently whether or not it did anything.
   local scripts, registered = {}, {}
   function frame:RegisterEvent(event) registered[event] = true end
@@ -254,7 +254,7 @@ function CreateFrame(frameType, name, parent, template)
   end
   setmetatable(frame, { __index = function() return function() end end })
   -- NOT a real WoW global. A file that builds its own event-watcher frame at load time (e.g.
-  -- Elmira_ElvUI/Provider.lua) gives a spec no other handle on it; this is the cheapest way to
+  -- a bar provider's own watcher frame) gives a spec no other handle on it; the cheapest way to
   -- reach "the frame that file just made" without inventing a return value CreateFrame never has.
   _G.__lastFrame = frame
   return frame

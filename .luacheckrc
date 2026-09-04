@@ -50,7 +50,7 @@ files["Elmira/Display/"] = { read_globals = { "CreateFrame", "UIParent", "GameTo
   -- Ranks: the id on a bar and the id in the data pack can be different ranks of one ability, so the
   -- bar map is keyed by the rank-free name as well. Presentation-side lookup, not state.
   "GetSpellInfo",
-  "GetInventoryItemID", "ActionButton_GetPagedID", "RANGE_INDICATOR" } }
+  "GetInventoryItemID", "RANGE_INDICATOR" } }
 files["Elmira/Setup/"] = { read_globals = { "CreateFrame", "UIParent", "UnitClass", "UnitLevel",
   "GetTalentTabInfo", "C_Engraving" } }
 files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent" } }
@@ -66,16 +66,10 @@ files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent" } }
 -- one file; the read_globals = {} half is what still holds the line that matters.
 files["Elmira/Classes/"] = { read_globals = {}, max_line_length = false }
 
-files["Elmira_ElvUI/"] = { read_globals = { "ElvUI", "GetActionInfo", "GetMacroSpell", "CreateFrame",
-  -- Classic has spell ranks, so a bar can hold a different id for the same ability than the data
-  -- pack ships. GetSpellInfo turns an id into a rank-free name, which is what the map is keyed on.
-  "GetSpellInfo",
-  -- Blizzard parks an unbound button's hotkey text at this sentinel instead of clearing it, so a
-  -- provider that does not compare against it reports the range dot as a keybind.
-  "RANGE_INDICATOR" } }
-files["Elmira_ItemRack/"] = { read_globals = { "ItemRack", "ItemRackUser", "hooksecurefunc" } }
-files["Elmira_WoWSims/"] = { read_globals = { "C_AddOns" } }
-files["Elmira_Insights/"] = { read_globals = { "Details" } }
+-- ItemRack's own globals, named only by the adapter that integrates with it. Scoped to the file
+-- rather than added to WOW_API: these are another ADDON's globals, not the client's, and every other
+-- adapter should still fail lint for touching them.
+files["Elmira/Adapters/ItemRack.lua"] = { read_globals = { "ItemRack", "ItemRackUser" } }
 
 files["tests/"] = {
   std = "lua51+busted",

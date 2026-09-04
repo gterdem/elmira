@@ -3,9 +3,10 @@ WOW_ADDONS  ?= /mnt/d/Blizzard/World of Warcraft/_classic_era_/Interface/AddOns
 BUILDS_DIR  ?= /mnt/d/Addon-Testing/Elmira/builds
 REPORTS_DIR ?= /mnt/d/Addon-Testing/Elmira/reports
 # The packager's move-folders step (.pkgmeta) collapses the checkout's Elmira/ core folder onto
-# .release/Elmira directly, as a sibling of .release/Elmira_ElvUI, .release/Elmira_ItemRack, etc —
-# confirmed empirically via a full dry run, not assumed. The release zip lands at this same
-# top level.
+# .release/Elmira directly — confirmed empirically via a full dry run, not assumed. The release zip
+# lands at this same top level. Since ADR-0014 that is the only folder shipped; ADDONS still globs
+# so the deploy prune below keeps working against whatever a user has installed.
+
 PKGDIR      := .release
 ADDONS      := $(notdir $(wildcard Elmira*))
 
@@ -45,7 +46,11 @@ lint:
 	@# ids at all -- passing green forever while guarding nothing. A gate that can silently stop
 	@# covering its target has to fail when its target is missing.
 	@test -d Elmira/Classes || (echo "ERROR: Elmira/Classes/ is missing; the UNVERIFIED gate is scanning nothing" && exit 1)
-	@! grep -rn "UNVERIFIED(" Elmira/Classes/ Elmira_*/ 2>/dev/null || (echo "ERROR: unverified IDs remain" && exit 1)
+	@# ONE path, no glob. `Elmira_*/` used to be listed here too; ADR-0014 retired every folder it
+	@# matched, and an unmatched glob makes grep exit 2 (a FILE error, not "no match") -- which `!`
+	@# then turns into success. The gate passed green while scanning nothing, exactly the failure the
+	@# comment above warns about, in the same line that warns about it.
+	@! grep -rn "UNVERIFIED(" Elmira/Classes/ || (echo "ERROR: unverified IDs remain" && exit 1)
 
 # -d skips uploading (this is always a local dry run); no -z, so a zip IS produced (that flag means
 # "skip zip creation", the opposite of what its letter suggests) — release-zip depends on it existing.

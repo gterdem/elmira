@@ -1,42 +1,77 @@
 local helper = require("tests.helper")
 
--- Elmira_ItemRack/Override.lua — the loadout label that lets a gear swap switch the build.
+-- Elmira/Adapters/ItemRack.lua — the loadout label that lets a gear swap switch the build.
 --
--- Nothing covered `overrideSources` before this: the module shipped as a stub whose `current()`
--- returned nil and whose `onChange()` did nothing, which is indistinguishable from a working module
--- on a character who never swaps gear.
+-- Nothing covered `overrideSources` before this: the integration shipped as a stub whose `current()`
+-- returned nil and whose `onChange()` did nothing, which is indistinguishable from a working one on
+-- a character who never swaps gear.
 --
 -- The rule this file must not break: **the label, and nothing else**. ItemRack's hook fires roughly
 -- half a second BEFORE the new gear is in the equipment slots, so anything read about gear from
 -- inside the callback describes what the player is taking OFF. Set counts, bonuses and weapons come
 -- from the debounced equipment path instead (docs/01 §3, docs/08).
-describe("Elmira_ItemRack.Override", function()
-  local registered, printed, hooks
+--
+-- Moved into core at ADR-0014. The two tests that used to live here for the separate-addon load
+-- guard (`_G.Elmira` absent, "before Elmira core") are gone with the folder: a core file receives
+-- `ns` from varargs and cannot load ahead of core. What replaces them is the invariant that only
+-- exists BECAUSE it now ships inside core — its presence no longer says anything about whether the
+-- user has ItemRack, so registration has to be gated on the client.
+describe("Adapters.ItemRack", function()
+  local ns, Rack, registered, logged, hooks
 
   local function load()
-    registered, printed, hooks = nil, {}, {}
-    _G.print = function(msg) printed[#printed + 1] = msg end
+    helper.reset()
+    ns = _G.__ELM_NS
+    registered, logged, hooks = nil, {}, {}
+    ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+    ns.API = { RegisterOverrideSource = function(spec) registered = spec; return true end }
     _G.hooksecurefunc = function(tbl, name, fn) hooks[#hooks + 1] = { tbl = tbl, name = name, fn = fn } end
-    _G.Elmira = { API = { version = 1, RegisterOverrideSource = function(spec) registered = spec end } }
-    local chunk = assert(loadfile("Elmira_ItemRack/Override.lua"))
-    chunk("Elmira_ItemRack")
-    return registered
+    Rack = helper.load("Elmira/Adapters/ItemRack.lua")
+    return Rack
   end
 
   before_each(function()
-    helper.reset()
     _G.ItemRack, _G.ItemRackUser = nil, nil
   end)
 
   after_each(function()
-    _G.print, _G.hooksecurefunc, _G.Elmira, _G.ItemRack, _G.ItemRackUser = nil, nil, nil, nil, nil
+    _G.hooksecurefunc, _G.ItemRack, _G.ItemRackUser = nil, nil, nil
   end)
 
-  it("registers itself with a real current() and onChange()", function()
-    local spec = load()
-    assert.equal("ItemRack", spec.name)
-    assert.equal("function", type(spec.current))
-    assert.equal("function", type(spec.onChange))
+  describe("Register()", function()
+    it("registers a real current() and onChange() when ItemRack is installed", function()
+      _G.ItemRackUser = { CurrentSet = "Shockadin" }
+      assert.is_true(load().Register())
+      assert.equal("ItemRack", registered.name)
+      assert.equal("function", type(registered.current))
+      assert.equal("function", type(registered.onChange))
+    end)
+
+    -- The whole reason registration is gated. An override source that can only ever answer nil is
+    -- not harmless: everything downstream, the options panel included, reads a registered source as
+    -- "ItemRack is set up and you are simply not wearing a loadout".
+    it("registers nothing when ItemRack is not installed", function()
+      assert.is_false(load().Register())
+      assert.is_nil(registered)
+    end)
+
+    it("registers when ItemRack is loaded but has not populated its saved variables yet", function()
+      _G.ItemRack = { UpdateCurrentSet = function() end }
+      assert.is_true(load().Register())
+      assert.equal("ItemRack", registered.name)
+    end)
+
+    it("registers nothing when the API is not available", function()
+      _G.ItemRackUser = { CurrentSet = "Shockadin" }
+      load()
+      ns.API = nil
+      assert.is_false(Rack.Register())
+    end)
+
+    it("publishes itself on the namespace", function()
+      local rack = load()
+      assert.equal(rack, ns.ItemRack)
+    end)
   end)
 
   describe("current()", function()
@@ -98,8 +133,8 @@ describe("Elmira_ItemRack.Override", function()
       local spec = load()
       assert.is_false(spec.onChange(function() end))
       assert.equal(0, #hooks)
-      assert.equal(1, #printed)
-      assert.truthy(printed[1]:find("UpdateCurrentSet", 1, true))
+      assert.equal(1, #logged)
+      assert.truthy(logged[1]:find("UpdateCurrentSet", 1, true))
     end)
 
     it("refuses a non-function callback rather than hooking for nobody", function()
@@ -107,17 +142,5 @@ describe("Elmira_ItemRack.Override", function()
       assert.is_false(load().onChange(nil))
       assert.equal(0, #hooks)
     end)
-  end)
-
-  it("complains and registers nothing when it loads before core", function()
-    printed, hooks = {}, {}
-    _G.print = function(msg) printed[#printed + 1] = msg end
-    _G.Elmira = nil
-    local sentinel = nil
-    local chunk = assert(loadfile("Elmira_ItemRack/Override.lua"))
-    chunk("Elmira_ItemRack")
-    assert.is_nil(sentinel)
-    assert.equal(1, #printed)
-    assert.truthy(printed[1]:find("before Elmira core", 1, true))
   end)
 end)

@@ -1,5 +1,24 @@
 # Changelog
 ## Unreleased
+- **One addon folder.** Elmira used to install as five: the addon plus `Elmira_ElvUI`,
+  `Elmira_ItemRack`, `Elmira_WoWSims` and `Elmira_Insights`. Everything that did something is now
+  inside Elmira itself, so there is one box to tick in the AddOns list, one thing to update, and one
+  version number. The WoWSims and Insights folders are gone entirely — they were placeholders that
+  did nothing, and they will come back when they do something. If you have any of the old folders in
+  your AddOns directory you can delete them. Third-party class packs are unaffected.
+- **Bartender4 bars now glow, and so do Dominos'.** Elmira only knew how to find buttons on ElvUI's
+  bars. It turns out ElvUI and Bartender4 build their buttons the same way, so supporting one was
+  most of the way to supporting all of them. Whichever you use, Elmira now finds the button holding
+  your next suggested spell — and if you use a bar addon it has never heard of, it will still find
+  the buttons and simply call it "action bars".
+- **Fixed: spells on your last three action bars never glowed.** The scan of Blizzard's default bars
+  covered five of the eight bars that exist, missing MultiBar5, 6 and 7 entirely. If your suggested
+  spell lived on one of those, nothing lit up and nothing said why.
+- **Fixed: a spell placed on certain ElvUI buttons could never glow.** Buttons holding a spell
+  directly, rather than an action-bar slot, were skipped when Elmira built its map.
+- Fixed: changing stance, form or Shadowform left Elmira looking at the old bar layout, so the glow
+  could land on the wrong button or nowhere at all until something else changed. It only affected
+  classes that change bars this way, so no paladin ever saw it.
 - **Fixed: your cloak and ring runes were never being read.** Elmira looked at seven of the ten
   slots Season of Discovery lets you engrave — helm, chest, belt, legs, boots, wrist and gloves —
   and never at your two rings or your cloak. Any line waiting on a rune in one of those three slots

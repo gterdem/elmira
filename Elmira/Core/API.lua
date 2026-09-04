@@ -62,6 +62,18 @@ function API.RegisterBarProvider(a, b)
   if type(spec) ~= "table" or type(spec.name) ~= "string" then
     return fail("bar provider", "name is required")
   end
+  -- One name, one provider. Two providers claiming the same bars is not a merge, it is a coin toss:
+  -- the sort below is stable only on (priority, name), so which of the two answers `buttonsForSpell`
+  -- depends on registration order, and the loser's map is built and maintained for nothing. This
+  -- happens for real when a retired companion addon is left installed alongside the core that
+  -- absorbed it -- exactly how a stale Elmira_Paladin silently served pre-migration rotations. Refuse
+  -- the second one and SAY SO, rather than letting the addon look fine and behave at random.
+  for _, existing in ipairs(registry.barProviders) do
+    if existing.name == spec.name then
+      return fail(spec.name, "a bar provider with this name is already registered; "
+                          .. "an old Elmira bar addon may still be installed")
+    end
+  end
   spec.priority = spec.priority or 0
   table.insert(registry.barProviders, spec)
   table.sort(registry.barProviders, providerLess)

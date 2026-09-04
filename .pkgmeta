@@ -1,12 +1,9 @@
 package-as: Elmira
 enable-nolib-creation: no
-# Multi-addon repo: the packager copies every top-level addon folder; libraries are fetched into the core.
+# One shipped addon folder (ADR-0014). Bar providers and the ItemRack integration live inside it;
+# third-party packs are still separate addons registering through Elmira.API.
 move-folders:
   Elmira/Elmira: Elmira
-  Elmira/Elmira_ElvUI: Elmira_ElvUI
-  Elmira/Elmira_ItemRack: Elmira_ItemRack
-  Elmira/Elmira_WoWSims: Elmira_WoWSims
-  Elmira/Elmira_Insights: Elmira_Insights
 externals:
   Elmira/Libs/LibStub: https://repos.wowace.com/wow/libstub/trunk
   Elmira/Libs/CallbackHandler-1.0: https://repos.wowace.com/wow/callbackhandler/trunk/CallbackHandler-1.0

@@ -363,7 +363,8 @@ Slash.register{
         end
       end
       if #d.providers == 0 then
-        lines[#lines + 1] = "  none — is Elmira_ElvUI enabled in the AddOns list?"
+        lines[#lines + 1] = "  none — no LibActionButton bar addon (ElvUI, Bartender4) is loaded; "
+                            .. "the Blizzard bar scan below is what is in use"
       end
       lines[#lines + 1] = string.format("blizzard fallback: %d spell(s) mapped", d.blizzard or 0)
 

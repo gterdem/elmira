@@ -1,8 +1,0 @@
-## Interface: 11509
-## Title: Elmira |cff00ff00[ItemRack]|r
-## Notes: Switches the active Elmira build when an ItemRack set is equipped.
-## Author: Valermus
-## Dependencies: Elmira, ItemRack
-## Version: @project-version@
-
-Override.lua

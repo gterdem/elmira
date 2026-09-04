@@ -16,6 +16,7 @@ Adapters\Interface.lua
 Adapters\Swing.lua
 Adapters\Vanilla.lua
 Adapters\Collector.lua
+Adapters\ItemRack.lua
 
 # Core — pure Lua, no WoW API (hard rule 3)
 Core\Colors.lua
@@ -38,6 +39,7 @@ Core\Slash.lua
 Display\Driver.lua
 Display\Glow.lua
 Display\BarGlow.lua
+Display\BarProviders.lua
 Display\Queue.lua
 Display\Overlay.lua
 

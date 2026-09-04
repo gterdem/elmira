@@ -1,9 +1,0 @@
-## Interface: 11509
-## Title: Elmira |cff00ff00[Insights]|r
-## Notes: Post-encounter suggestions, execution score vs your WoWSims ceiling, history and peer context.
-## Author: Valermus
-## Dependencies: Elmira
-## OptionalDeps: Details, Recount, Skada
-## Version: @project-version@
-
-Insights.lua

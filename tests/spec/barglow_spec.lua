@@ -360,3 +360,105 @@ describe("Display.BarGlow", function()
     end)
   end)
 end)
+
+-- The Blizzard fallback scan, corrected 2026-09-04. Two defects lived here: the bar list was missing
+-- MultiBar5/6/7 (which DO exist on Classic Era 1.15), and the slot lookup's fallback named
+-- `ActionButton_GetPagedID`, a function that does not exist on this client at all -- a safety net
+-- made of nothing, guarded so it never errored and never helped.
+describe("BarGlow Blizzard scan", function()
+  local helper2 = require("tests.helper")
+  local mock2 = require("tests.wow_mock")
+  local BarGlow2
+
+  local function load2()
+    helper2.reset()
+    mock2.reset()
+    local ns2 = _G.__ELM_NS
+    BarGlow2 = helper2.load("Elmira/Display/BarGlow.lua")
+    ns2.Display = { currentPack = function() return { spells = { EXORCISM = { id = 415073 } } } end }
+    return BarGlow2
+  end
+
+  local function frame(fields)
+    local f = { IsVisible = function() return true end }
+    for k, v in pairs(fields or {}) do f[k] = v end
+    return f
+  end
+
+  before_each(function()
+    load2()
+    for _, name in ipairs({ "MultiBar5Button1", "MultiBar6Button1", "MultiBar7Button1",
+                            "ActionButton1" }) do
+      _G[name] = nil
+    end
+    _G.ActionButtonUtil = nil
+  end)
+
+  after_each(function()
+    for _, name in ipairs({ "MultiBar5Button1", "MultiBar6Button1", "MultiBar7Button1",
+                            "ActionButton1" }) do
+      _G[name] = nil
+    end
+    _G.ActionButtonUtil = nil
+  end)
+
+  it("scans MultiBar5, 6 and 7, which exist on Classic Era", function()
+    for i, name in ipairs({ "MultiBar5Button1", "MultiBar6Button1", "MultiBar7Button1" }) do
+      mock2.actionInfo[40 + i] = { "spell", 415073 }
+      _G[name] = frame({ action = 40 + i })
+    end
+    BarGlow2.Invalidate()
+    local buttons = BarGlow2.buttonsFor("EXORCISM")
+    assert.equal(3, #buttons)
+  end)
+
+  describe("slot resolution", function()
+    it("reads the paged slot off the secure `action` attribute first", function()
+      mock2.actionInfo[61] = { "spell", 415073 }
+      _G.ActionButton1 = frame({
+        action = 1,                                      -- the unpaged field, deliberately wrong
+        GetAttribute = function(_, name) return name == "action" and 61 or nil end,
+      })
+      BarGlow2.Invalidate()
+      assert.equal(1, #BarGlow2.buttonsFor("EXORCISM"))
+    end)
+
+    it("falls back to the plain field when there is no attribute", function()
+      mock2.actionInfo[5] = { "spell", 415073 }
+      _G.ActionButton1 = frame({ action = 5 })
+      BarGlow2.Invalidate()
+      assert.equal(1, #BarGlow2.buttonsFor("EXORCISM"))
+    end)
+
+    it("falls back to CalculateAction, which is what the secure template itself uses", function()
+      mock2.actionInfo[8] = { "spell", 415073 }
+      _G.ActionButton1 = frame({ CalculateAction = function() return 8 end })
+      BarGlow2.Invalidate()
+      assert.equal(1, #BarGlow2.buttonsFor("EXORCISM"))
+    end)
+
+    it("contributes nothing for a global that is not a frame at all", function()
+      mock2.actionInfo[5] = { "spell", 415073 }
+      _G.ActionButton1 = 5
+      BarGlow2.Invalidate()
+      assert.same({}, BarGlow2.buttonsFor("EXORCISM"))
+    end)
+
+    it("contributes nothing for a button that answers none of the three", function()
+      mock2.actionInfo[5] = { "spell", 415073 }
+      _G.ActionButton1 = frame({})
+      BarGlow2.Invalidate()
+      assert.same({}, BarGlow2.buttonsFor("EXORCISM"))
+    end)
+
+    it("survives a button whose attribute reads throw", function()
+      mock2.actionInfo[5] = { "spell", 415073 }
+      _G.ActionButton1 = frame({
+        GetAttribute = function() error("secure frame") end,
+        CalculateAction = function() error("secure frame") end,
+      })
+      BarGlow2.Invalidate()
+      assert.same({}, BarGlow2.buttonsFor("EXORCISM"))
+    end)
+  end)
+end)

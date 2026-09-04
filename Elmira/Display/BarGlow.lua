@@ -1,8 +1,10 @@
 -- Elmira/Display/BarGlow.lua — which on-screen buttons carry a given spell.
 --
 -- Two sources, in priority order:
---   1. Registered bar providers (docs/08 `API.RegisterBarProvider`). Elmira_ElvUI supplies one; a
---      provider knows its own bar addon's internals far better than any generic scan could.
+--   1. Registered bar providers (docs/08 `API.RegisterBarProvider`). Display/BarProviders.lua
+--      supplies one per LibActionButton-1.0 library on the client, which is how ElvUI and
+--      Bartender4 are both covered; a provider knows its bar addon's internals far better than any
+--      generic scan could. Third-party addons may register their own through the same API.
 --   2. A Blizzard default-bar scan, as the fallback when no provider claims the spell.
 --
 -- Providers speak spell IDs (that is the registered contract), while the engine speaks symbolic keys
@@ -22,9 +24,20 @@ local blizzByName = nil     -- spell NAME -> { buttons }; Classic has ranks, see
 -- condition labels come back empty an hour ago.
 local announced = {}
 
+-- PREFIXES, to which 1..12 is appended below. This shipped without MultiBar5/6/7, which DO exist on
+-- Classic Era 1.15 -- a spell on one of those bars was invisible to the fallback scan and simply
+-- never glowed for anyone not running a LibActionButton bar addon.
+--
+-- The client also publishes `ActionButtonUtil.ActionBarButtonNames`, and preferring it would keep
+-- this list current for free. It is NOT used, deliberately: nobody here has read that table on a
+-- live 1.15 client, and if it holds full button NAMES rather than prefixes then appending an index
+-- yields `ActionButton11`..`ActionButton112` and the scan silently maps nothing -- trading a list
+-- that is merely out of date for one that is confidently wrong. Read it in game first (docs/07),
+-- then switch if the shape is right.
 local BLIZZ_BARS = {
   "ActionButton", "MultiBarBottomLeftButton", "MultiBarBottomRightButton",
   "MultiBarRightButton", "MultiBarLeftButton",
+  "MultiBar5Button", "MultiBar6Button", "MultiBar7Button",
 }
 
 local function spellIDFor(key)
@@ -36,12 +49,32 @@ end
 
 -- Resolves whatever sits in an action slot to a spell ID. Macros are the interesting case: a
 -- `#showtooltip` macro reports as kind "macro" and only GetMacroSpell knows what it will cast.
-local function spellInSlot(slot)
+function BarGlow.spellInSlot(slot)
   if not (slot and GetActionInfo) then return nil end
   local kind, id = GetActionInfo(slot)
   if kind == "spell" then return id end
   if kind == "macro" and GetMacroSpell then return (GetMacroSpell(id)) end
   return nil
+end
+
+-- Which action slot a button is showing. `ActionButton_GetPagedID` used to be the fallback here and
+-- DOES NOT EXIST on Classic Era 1.15 (nor does ActionButton_CalculateAction) -- verified against the
+-- whole client UI source, zero hits. It was guarded, so it never errored; it was simply a safety net
+-- made of nothing. These three are the real chain: secure templates keep the paged slot on the
+-- `action` attribute, plain frames keep it in the field, and `CalculateAction` is the method the
+-- secure template itself uses.
+local function slotOf(button)
+  if type(button) ~= "table" then return nil end
+  if type(button.GetAttribute) == "function" then
+    local ok, slot = pcall(button.GetAttribute, button, "action")
+    if ok and type(slot) == "number" then return slot end
+  end
+  if type(button.action) == "number" then return button.action end
+  if type(button.CalculateAction) == "function" then
+    local ok, slot = pcall(button.CalculateAction, button)
+    if ok and type(slot) == "number" then return slot end
+  end
+  return nil -- mutants: equivalent falling off the end of a Lua function already answers nil
 end
 
 -- A button that is not on screen cannot glow visibly, and a glow nobody can see is indistinguishable
@@ -80,9 +113,7 @@ local function buildBlizzMap()
     for i = 1, 12 do
       local button = _G[prefix .. i]
       if button then
-        local slot = button.action
-        if not slot and ActionButton_GetPagedID then slot = ActionButton_GetPagedID(button) end
-        local id = spellInSlot(slot)
+        local id = BarGlow.spellInSlot(slotOf(button))
         if id then
           map[id] = map[id] or {}
           map[id][#map[id] + 1] = button

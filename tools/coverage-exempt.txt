@@ -5,9 +5,9 @@
 # NOT exempt, deliberately, though they are currently uncovered:
 #   Elmira/Core/Init.lua        332 lines of wiring -- the registrations, the load order, the pack
 #                               attach. Precisely where a "looks right, does nothing" defect hides.
-#   Elmira_ElvUI/Provider.lua   has already shipped two silent bar-glow bugs.
-#   Elmira_Paladin/Register.lua 19 lines, trivially loadable.
-
-Elmira_Insights/Insights.lua   stub until M7 (docs/12); 10 lines, registers a provider and returns.
-Elmira_WoWSims/Exporter.lua    stub until M5c (docs/09); real export format not written yet.
-Elmira_WoWSims/APLImport.lua   stub until M8 (docs/09); real APL translation not written yet.
+#   Elmira/Display/BarProviders.lua  its predecessor shipped three silent bar-glow bugs.
+#
+# Emptied at ADR-0014: the three entries here were all in Elmira_WoWSims/ and Elmira_Insights/,
+# folders that are no longer shipped. An exemption for a file that does not exist is not harmless --
+# it is a silence with nothing behind it, and it would have quietly covered a real gap if a file of
+# that name ever came back.

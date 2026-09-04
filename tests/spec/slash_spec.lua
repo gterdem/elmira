@@ -219,6 +219,19 @@ describe("Core.Slash", function()
     assert.is_true(hasLineMatching(lines, "bar providers: 0"))
   end)
 
+  -- The branch above is the degraded one, reached without Display. This is the real one, and its
+  -- message used to name Elmira_ElvUI -- an addon that no longer exists (ADR-0014). What replaces
+  -- it has to say what IS in use, or a reader with no bar addon concludes the glow is broken when
+  -- it is working exactly as designed against the default Blizzard bars.
+  it("'debug bars' names the bar addons it looks for, and says the Blizzard scan is in use", function()
+    _G.__ELM_NS.BarGlow = { describe = function() return { providers = {}, blizzard = 4, rows = {} } end }
+    local lines = Slash.run("debug bars")
+    assert.is_true(hasLineMatching(lines, "bar providers: 0"))
+    assert.is_true(hasLineMatching(lines, "ElvUI, Bartender4"))
+    assert.is_true(hasLineMatching(lines, "Blizzard bar scan below is what is in use"))
+    assert.is_false(hasLineMatching(lines, "Elmira_ElvUI"))
+  end)
+
   it("verb matching is case-insensitive", function()
     local lower = table.concat(Slash.run("debug state"), "\n")
     local upper = table.concat(Slash.run("DEBUG state"), "\n")

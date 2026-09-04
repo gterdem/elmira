@@ -1,8 +1,0 @@
-## Interface: 11509
-## Title: Elmira |cff00ff00[ElvUI bars]|r
-## Notes: Glows the ElvUI action-bar button for the suggested spell.
-## Author: Valermus
-## Dependencies: Elmira, ElvUI
-## Version: @project-version@
-
-Provider.lua
