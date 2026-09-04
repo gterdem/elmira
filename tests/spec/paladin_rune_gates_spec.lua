@@ -8,11 +8,15 @@
 -- scan list. Both shipped at once: RUNE_SHOCK_AND_AWE held 440791 (an older passive override spell)
 -- and the cloak slot was not scanned at all.
 --
--- The ids below are hardcoded from the owner's client sweep on Arthorion, 2026-09-03, NOT read back
+-- The ids below are hardcoded from the owner's client sweeps on Arthorion, 2026-09-03, NOT read back
 -- out of the pack — reading them from the pack would make every assertion tautological, which is the
 -- exact shape of test that let the original defect through. Each is a number a human read off a
--- `/dump` and typed here. RUNE_RIGHTEOUS_VENGEANCE is deliberately absent: it lives on the other
--- test character and has never been observed in a client, so there is nothing honest to pin it to.
+-- `/dump` and typed here.
+--
+-- Any rune can be engraved by any paladin at any time for 1c, so "the character does not play that
+-- spec" is never a reason an id cannot be verified. RUNE_RIGHTEOUS_VENGEANCE and RUNE_SHEATH_OF_LIGHT
+-- were held back from this table on exactly that mistaken reasoning; the owner engraved both on
+-- Arthorion and settled them in one pass.
 local helper = require("tests.helper")
 local mock = require("tests.wow_mock")
 
@@ -33,6 +37,10 @@ describe("Paladin rune gates against a live client sweep (Arthorion, 2026-09-03)
     { slot = 10, key = "RUNE_HAND_OF_RECKONING",       id = 407631 },
     { slot = 15, key = "RUNE_SHIELD_OF_RIGHTEOUSNESS", id = 440658 },
     { slot = 15, key = "RUNE_SHOCK_AND_AWE",           id = 462834 },
+    -- Engraved on Arthorion 2026-09-03 specifically to settle these two. 440672 corrected an
+    -- actionbar-override id; 426158 chose Wowhead over wowsims' 426159.
+    { slot = 15, key = "RUNE_RIGHTEOUS_VENGEANCE",     id = 440672 },
+    { slot = 6,  key = "RUNE_SHEATH_OF_LIGHT",         id = 426158 },
   }
 
   before_each(function()

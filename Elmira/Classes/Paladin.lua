@@ -112,18 +112,19 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- ability (hidden aura, Consecration crit damage). The sweep's 429248 could not be classed at all
     -- and 429249 is the engrave/teach spell — neither would have matched learnedAbilitySpellIDs.
     RUNE_WRATH          = { id = 429139, src = "https://www.wowhead.com/classic/spell=429139", rune = "head" },
-    -- NOT client-verified. Wowhead-sourced 2026-09-03, and this rune has never been read from a live
-    -- client: it sits on the other test character. Changed from 440794 on the same discriminator that
-    -- proved RUNE_SHOCK_AND_AWE wrong -- 440794 is an "Apply Aura: Overrides Actionbar Spell" override
-    -- variant, 440672 is the passive ability, and only the ability appears in learnedAbilitySpellIDs.
-    -- That discriminator has been right once; it is not proof. This gate decides every Retribution
-    -- build, so settle it with `/dump C_Engraving.GetRuneForEquipmentSlot(15).learnedAbilitySpellIDs`
-    -- on a character wearing the rune, then add the result to paladin_rune_gates_spec.lua's OBSERVED
-    -- table -- which deliberately does NOT list this key, because nothing has observed it yet.
+    -- Client-verified 2026-09-03: GetRuneForEquipmentSlot(15).learnedAbilitySpellIDs = { 440672 }.
+    -- The 440794 that shipped is an "Apply Aura: Overrides Actionbar Spell" override variant and
+    -- would never have matched, so this gate could not fire for any Retribution build. Second time
+    -- the override-vs-ability split has been the defect (see RUNE_SHOCK_AND_AWE); treat any rune id
+    -- with an override sibling on Wowhead as wrong until a client says otherwise.
     RUNE_RIGHTEOUS_VENGEANCE = { id = 440672, src = "https://www.wowhead.com/classic/spell=440672", rune = "back" },
     RUNE_DIVINE_STORM   = { id = 407778, src = "https://www.wowhead.com/classic/spell=407778", rune = "chest" },
     RUNE_PURIFYING_POWER = { id = 429144, src = "https://www.wowhead.com/classic/spell=429144", rune = "wrist" },
     RUNE_CRUSADER_STRIKE = { id = 407676, src = "https://www.wowhead.com/classic/spell=407676", rune = "hands" },
+    -- Client-verified 2026-09-03: GetRuneForEquipmentSlot(6).learnedAbilitySpellIDs = { 426158 }.
+    -- Settles a Wowhead/wowsims disagreement in Wowhead's favour: wowsims/sod registers 426159 for
+    -- this rune, and the two are indistinguishable as pages (identical passive buffs). The client is
+    -- the tiebreak; 426159 would never have matched.
     RUNE_SHEATH_OF_LIGHT = { id = 426158, src = "https://www.wowhead.com/classic/spell=426158", rune = "waist" },
     RUNE_AURA_MASTERY   = { id = 407624, src = "https://www.wowhead.com/classic/spell=407624", rune = "legs" },
     RUNE_ART_OF_WAR     = { id = 426157, src = "https://www.wowhead.com/classic/spell=426157", rune = "feet" },

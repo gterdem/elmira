@@ -10,10 +10,9 @@
 - **Fixed: the Shock and Awe rune was stored under the wrong spell.** It held an older version of
   the rune that the game never reports, so the Shockadin lines depending on it could not fire even
   once the cloak was being read. Both halves of that one are now confirmed against a live client.
-  Righteous Vengeance, which the Retribution builds depend on, was stored under the same kind of
-  wrong spell and has been changed too — but on documentation rather than on a live client, so it is
-  the one to watch. Sheath of Light is unresolved: two candidate spells exist and nothing yet
-  distinguishes them.
+  Righteous Vengeance, which every Retribution build depends on, was stored under the same kind of
+  wrong spell and is fixed too. Both are now confirmed against a live client, along with Sheath of
+  Light, where two candidate spells existed and only one turned out to be real.
 - **Share a build as a string.** `/elm export` turns the active build (or `/elm export <key>`) into
   an `ELM1:` string and places it in the new Import/Export box under `/elm options`; paste one there,
   or `/elm import <string> [name]`, and it becomes one of your own builds — `/elm profile USER_…`
