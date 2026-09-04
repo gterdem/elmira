@@ -1,8 +1,9 @@
 ## Interface: 11509
-## Title: Elmira
+## Title: |cffC08CF0Elmira|r
 ## Notes: Your next cast, in order. Rotation queue with glow effects, gear-aware builds, setup wizard. Displays suggestions only — never automates casting.
 ## Author: Valermus
 ## Version: @project-version@
+## IconTexture: Interface\AddOns\Elmira\media\icon
 ## SavedVariables: ElmiraDB
 ## OptionalDeps: ElvUI, ItemRack, Details, LibStub, CallbackHandler-1.0, Ace3, LibSharedMedia-3.0, LibDBIcon-1.0, LibCustomGlow-1.0, LibSerialize, LibDeflate, LibClassicSwingTimerAPI
 ## X-License: MIT
