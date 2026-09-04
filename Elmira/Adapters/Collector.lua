@@ -18,9 +18,10 @@ local Collector = {}
 
 -- INVSLOT ids that can host a rune, verified in game (docs/07 §9.5). Shoulder (3) returns nothing:
 -- shoulders take souls, not runes. Ordered, never pairs(), so a dump diffs cleanly against the last.
-Collector.RUNE_SLOTS = { 1, 5, 6, 7, 8, 9, 10 }
+Collector.RUNE_SLOTS = { 1, 5, 6, 7, 8, 9, 10, 11, 12, 15 }
 Collector.SLOT_NAMES = {
   [1] = "head", [5] = "chest", [6] = "waist", [7] = "legs", [8] = "feet", [9] = "wrist", [10] = "hands",
+  [11] = "finger1", [12] = "finger2", [15] = "back",
 }
 
 local function contains(list, value)

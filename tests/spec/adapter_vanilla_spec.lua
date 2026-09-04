@@ -197,6 +197,29 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.is_false(state:rune("RUNE_HALLOWED_GROUND"))
       assert.is_false(state:rune("RUNE_REBUKE"))
     end)
+
+    -- Season of Discovery engraves TEN slots; RUNE_SLOTS shipped with seven. Cloak and ring runes
+    -- were therefore invisible, so `rune` gates on RUNE_RIGHTEOUS_VENGEANCE (all Ret builds),
+    -- RUNE_SHIELD_OF_RIGHTEOUSNESS (Prot) and RUNE_SHOCK_AND_AWE (Shockadin) could never be true.
+    -- Owner-confirmed slot list, client-swept 2026-09-03. Table-driven so that dropping any one slot
+    -- from RUNE_SLOTS fails here and names the slot, rather than passing on the nine that remain.
+    it("scans every slot Season of Discovery can engrave, cloak and rings included", function()
+      for _, slot in ipairs({ 1, 5, 6, 7, 8, 9, 10, 11, 12, 15 }) do
+        for engraved in pairs(mock.runes) do mock.runes[engraved] = nil end
+        mock.runes[slot] = { name = "Rebuke", learnedAbilitySpellIDs = { 425609 } }
+        local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+        assert.is_true(state:rune("RUNE_REBUKE"), "slot " .. slot .. " can hold a rune but is not scanned")
+      end
+    end)
+
+    -- The client does not set `equipmentSlot` to the slot you asked about: live on 2026-09-03,
+    -- querying 12 answered equipmentSlot=11 and querying 15 answered equipmentSlot=16. Reading it
+    -- back would put a cloak rune in a slot that cannot hold one. The queried slot is the truth.
+    it("trusts the slot it queried, not the equipmentSlot the client reports back", function()
+      mock.runes[15] = { name = "Rebuke", equipmentSlot = 16, learnedAbilitySpellIDs = { 425609 } }
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_true(state:rune("RUNE_REBUKE"))
+    end)
   end)
 
   -- ============================================================ Capability flags

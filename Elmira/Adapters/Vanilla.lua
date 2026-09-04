@@ -20,7 +20,17 @@ local Vanilla = {}
 local GCD_CEILING = 1.6
 
 local INVSLOT_SHOULDER = 3
-local RUNE_SLOTS = { 1, 5, 6, 7, 8, 9, 10 }
+-- The TEN slots Season of Discovery lets you engrave: helm, chest, belt, legs, boots, wrist, gloves,
+-- both rings, cloak. Owner-confirmed and client-swept 2026-09-03. This list shipped as
+-- { 1, 5, 6, 7, 8, 9, 10 }, which made every ring and CLOAK rune invisible: `rune` gates on
+-- RUNE_RIGHTEOUS_VENGEANCE (all Ret), RUNE_SHIELD_OF_RIGHTEOUSNESS (Prot) and RUNE_SHOCK_AND_AWE
+-- (Shockadin) could never be true, and the wizard told you to engrave runes you were wearing.
+-- M2's in-game pass reported "all 7 runes match" -- seven, the exact number it was able to see.
+--
+-- Do NOT read `rune.equipmentSlot` back to learn which slot answered: the client does not set it to
+-- the slot you queried. Observed live, querying 12 returned equipmentSlot=11 and querying 15
+-- returned equipmentSlot=16. The queried slot is the truth.
+local RUNE_SLOTS = { 1, 5, 6, 7, 8, 9, 10, 11, 12, 15 }
 
 -- docs/07 §9.5: IsEngravingEnabled() is a real, independent call. Deriving both flags from
 -- `C_Engraving ~= nil` made them incapable of ever disagreeing, which is what the M0 stub did.

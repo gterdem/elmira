@@ -158,7 +158,10 @@ ns.RegisterBuiltinPack("PALADIN", function()
     SEAL_OF_RIGHTEOUSNESS   = { id = 20289,  src = "https://www.wowhead.com/classic/spell=20289/seal-of-righteousness", seal = true, cost = { mana = 90 } }, -- Shockadin's seal
     HOLY_SHOCK              = { id = 20473,  src = "https://www.wowhead.com/classic/spell=20473/holy-shock", cost = { mana = 225 }, cooldown = 30 }, -- Holy talent, not a rune
     -- Back slot: shares it with RUNE_RIGHTEOUS_VENGEANCE (every Ret build) and RUNE_SHIELD_OF_RIGHTEOUSNESS (Prot).
-    RUNE_SHOCK_AND_AWE      = { id = 440791, src = "https://www.wowhead.com/classic/spell=440791/shock-and-awe", rune = "back" },
+    -- Client-verified 2026-09-03: GetRuneForEquipmentSlot(15).learnedAbilitySpellIDs = { 462834 }.
+    -- Equal to the Shock and Awe ability, which is the expected shape. The 440791 that shipped was
+    -- an older passive override spell and would never have matched learnedAbilitySpellIDs.
+    RUNE_SHOCK_AND_AWE      = { id = 462834, src = "https://www.wowhead.com/classic/spell=462834/shock-and-awe", rune = "back" },
     -- Execute (< 20% HP), trained. Max rank 24239 (425 mana); 24275 is a lower rank. Verified 2026-09-03
     -- (docs/staging/data/m5-ret-additions.lua). Consumed by Exodin's execute line.
     HAMMER_OF_WRATH         = { id = 24239,  src = "https://www.wowhead.com/classic/spell=24239/hammer-of-wrath", cost = { mana = 425 }, cooldown = 6 },

@@ -1,5 +1,18 @@
 # Changelog
 ## Unreleased
+- **Fixed: your cloak and ring runes were never being read.** Elmira looked at seven of the ten
+  slots Season of Discovery lets you engrave — helm, chest, belt, legs, boots, wrist and gloves —
+  and never at your two rings or your cloak. Any line waiting on a rune in one of those three slots
+  stayed silent forever, and the setup window told you to engrave runes you were already wearing.
+  All ten slots are read now. Cloak runes are the ones this affected in practice: Righteous
+  Vengeance on the Retribution builds, Shield of Righteousness on Protection, and Shock and Awe on
+  Shockadin.
+- **Fixed: the Shock and Awe rune was stored under the wrong spell.** It held an older version of
+  the rune that the game never reports, so the Shockadin lines depending on it could not fire even
+  once the cloak was being read. Both halves of that one are now confirmed against a live client.
+  The other cloak runes have had only the slot half fixed — their spell ids have not yet been
+  checked against a client, so if one of them is stored wrong the same way, its lines will still
+  not fire. Righteous Vengeance is the one to watch.
 - **Share a build as a string.** `/elm export` turns the active build (or `/elm export <key>`) into
   an `ELM1:` string and places it in the new Import/Export box under `/elm options`; paste one there,
   or `/elm import <string> [name]`, and it becomes one of your own builds — `/elm profile USER_…`

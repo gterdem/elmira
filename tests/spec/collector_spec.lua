@@ -75,6 +75,22 @@ describe("Adapters.Collector (docs/01 §4a)", function()
       assert.same({ 458287 }, readings[1].ids)
     end)
 
+    -- A scanned slot with no name prints a nil where the slot should be in `/elm debug` output.
+    -- Fails the moment a slot joins RUNE_SLOTS without being named -- which is how the ten-slot
+    -- sweep (rings + cloak, 2026-09-03) would otherwise have shipped half-done.
+    it("names every slot it scans", function()
+      for _, slot in ipairs(Collector.RUNE_SLOTS) do
+        assert.is_string(Collector.SLOT_NAMES[slot], "slot " .. slot .. " is scanned but unnamed")
+      end
+    end)
+
+    it("labels a cloak rune with its slot name", function()
+      mock.runes[15] = { name = "Shock and Awe", learnedAbilitySpellIDs = { 462834 } }
+      local rows = Collector.compareRunes(Collector.readRunes(), {})
+      assert.equal(15, rows[1].slot)
+      assert.equal("back", rows[1].slotName)
+    end)
+
     -- End to end: client mock -> readRunes -> compareRunes, the verbatim shipped bug.
     it("feeds compareRunes so a teach id is reported as NO MATCH", function()
       mock.runes[5] = { name = "Hallowed Ground", learnedAbilitySpellIDs = { 458287 } }
