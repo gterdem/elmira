@@ -44,10 +44,23 @@ describe("Display.BarProviders", function()
     helper.reset()
     ns = _G.__ELM_NS
     mock.reset()
-    libs = {}
-    _G.LibStub = setmetatable({
-      IterateLibraries = function() return libs end,
-    }, { __call = function(_, major) return libs[major] end })
+    -- The REAL vendored LibStub, not a fake. A hand-written stand-in is what let the blocker
+    -- through: `IterateLibraries` returns `pairs(self.libs)` -- an iterator triple -- and a fake that
+    -- returned a table proved only that the code agreed with the test's guess about the library.
+    -- Registering through the real one means the shape cannot be assumed wrongly twice.
+    _G.LibStub = nil
+    assert(loadfile("Elmira/Libs/LibStub/LibStub.lua"), "run `make libs`")()
+    libs = setmetatable({}, { __newindex = function(t, major, lib)
+      rawset(t, major, lib)
+      LibStub:NewLibrary(major, 1)
+      -- A major may be registered as something that is not a table at all; LibStub does not care,
+      -- and neither may we.
+      if type(lib) == "table" then
+        for k, v in pairs(lib) do LibStub.libs[major][k] = v end
+      else
+        LibStub.libs[major] = lib
+      end
+    end })
     API = helper.load("Elmira/Core/API.lua")
     ns.API = API
     helper.load("Elmira/Display/BarGlow.lua")

@@ -1,5 +1,13 @@
 # Changelog
 ## Unreleased
+- **Fixed: no bar addon was ever detected.** Elmira asked the library registry which action-bar
+  libraries were loaded and misread the answer, so it always concluded there were none — ElvUI and
+  Bartender4 users got the Blizzard-bar fallback, which ElvUI hides, so nothing glowed on the bars
+  at all. Reported the same day the bar support shipped; it never worked in a live client.
+- The Action Bars panel's status markers are plain text now. The symbols it used are not in the
+  game's font and drew as identical empty boxes, so every row looked the same.
+- "Test with" now lists only the spells your playstyle actually uses, each once. It was offering
+  passive runes, which can never be on an action bar, and repeating abilities that share a name.
 - **New: an Action Bars settings page that tells you why nothing is glowing.** `/elm options` has a
   new section listing every bar addon Elmira can use — ElvUI, Bartender4, Dominos and the default
   Blizzard bars — and saying which one it is actually using, in words. If you have two installed it

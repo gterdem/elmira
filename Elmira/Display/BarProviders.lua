@@ -154,11 +154,20 @@ end
 function BarProviders.libraries()
   local out = {}
   if not (LibStub and type(LibStub.IterateLibraries) == "function") then return out end
-  local ok, iter = pcall(LibStub.IterateLibraries, LibStub)
-  if not ok or type(iter) ~= "table" then return out end
-  for major, lib in pairs(iter) do
-    if type(major) == "string" and major:match(LAB_PATTERN) then
-      out[#out + 1] = { major = major, lib = lib }
+  -- `LibStub:IterateLibraries()` is `return pairs(self.libs)`: it hands back the ITERATOR TRIPLE
+  -- (next, table, nil), not a table. Treating the first return as a table -- and bailing when it was
+  -- not one -- meant this function answered `{}` on every client, so no bar addon was ever detected
+  -- and nothing anywhere said so. The spec faked the library as returning a table and therefore
+  -- proved only that the code agreed with itself.
+  local ok, iterate = pcall(function()
+    local found = {}
+    for major, lib in LibStub:IterateLibraries() do found[#found + 1] = { major = major, lib = lib } end
+    return found
+  end)
+  if not ok or type(iterate) ~= "table" then return out end
+  for _, entry in ipairs(iterate) do
+    if type(entry.major) == "string" and entry.major:match(LAB_PATTERN) then
+      out[#out + 1] = entry
     end
   end
   table.sort(out, byMajor)

@@ -77,8 +77,10 @@ local function barRows()
     local state = r.state == "inactive"
       and string.format(L[BAR_STATE.inactive], tostring(r.activeName))
       or L[BAR_STATE[r.state]]
-    -- Glyph AND words: colour alone is not a signal, and this list is read at a glance.
-    local mark = (r.state == "active") and "|cff40c057●|r" or "|cff9AA0A6○|r"
+    -- ASCII, not glyphs. The client's font has no U+25CF/U+25CB and renders both as an empty box, so
+    -- the first in-game run showed a column of identical squares -- exactly the "every state looks
+    -- the same" failure this list was designed to avoid, reintroduced by the decoration.
+    local mark = (r.state == "active") and "|cff40c057>>|r" or "|cff9AA0A6--|r"
     local grey = (r.state == "absent") and "|cff9AA0A6" or "|cffFFFFFF"
     args["row" .. order] = {
       type = "description", order = order, width = "full",
@@ -173,12 +175,29 @@ local function spellLabel(key)
   return name or tostring(key)
 end
 
+-- The spells the ACTIVE BUILD actually suggests, not everything in the class data.
+--
+-- Offering the whole pack listed passive runes ("The Art of War") which can never be on a bar, and
+-- listed the same ability twice whenever two records resolved to one spell name -- Seal of
+-- Martyrdom appeared under both its own key and its rune's. Neither is a question the player can
+-- usefully ask: "is my spell showing" is about things the rotation tells you to press.
 local function spellChoices()
-  local out = {}
-  local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
-  for key in pairs((pack and pack.spells) or {}) do out[key] = spellLabel(key) end
+  local out, seen = {}, {}
+  local build = ns.Display and ns.Display.activeBuild and select(1, ns.Display.activeBuild())
+  for _, entry in ipairs((build and build.entries) or {}) do
+    local key = entry.spell
+    if key and not out[key] then
+      local label = spellLabel(key)
+      -- Two keys resolving to one spell name is a duplicate to the reader even though the keys
+      -- differ, so the LABEL is what has to be unique.
+      if not seen[label] then
+        seen[label] = true
+        out[key] = label
+      end
+    end
+  end
   local current = Options.checkSpell()
-  if current then out[current] = spellLabel(current) end
+  if current and not out[current] then out[current] = spellLabel(current) end
   return out
 end
 
@@ -233,9 +252,12 @@ local function checkDetail(r)
 end
 
 -- Keyed by the row's `ok`: true, false, and nil for "not reached".
+-- ASCII for the same reason as the bar list: the client's font renders U+2714/U+2718 as empty
+-- boxes, so a pass and a failure looked identical apart from colour -- and colour alone is not a
+-- signal. `--` for a stage that was never reached: visibly not a verdict either way.
 local CHECK_MARKS = setmetatable(
-  { [true] = { "✔", "|cff40c057" }, [false] = { "✘", "|cffe03131" } },
-  { __index = function() return { "—", "|cff9AA0A6" } end })
+  { [true] = { "OK  ", "|cff40c057" }, [false] = { "FAIL", "|cffe03131" } },
+  { __index = function() return { "--  ", "|cff9AA0A6" } end })
 
 local function checkRows()
   local key = Options.checkSpell()

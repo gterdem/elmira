@@ -53,6 +53,27 @@ describe("Options (action bars)", function()
     assert.equal("Test with", args.check.args.pick.name)
   end)
 
+  -- The client's font has no U+25CF/U+2714/U+2718: the first in-game run rendered every marker as
+  -- an identical empty box, so all four bar states and every check verdict looked the same. A
+  -- decoration that does not decode is worse than none, because it reads as a control.
+  it("marks every state in characters the client can actually draw", function()
+    ns.BarProviders = { status = function() return {
+      { name = "ElvUI", state = "active", activeName = "ElvUI" },
+      { name = "Dominos", state = "absent" },
+    } end }
+    ns.BarGlow = { check = function() return {
+      { label = "placed", ok = true, detail = 1 },
+      { label = "visible", ok = false },
+      { label = "glow", ok = nil },
+    } end }
+    local text = rowText(group().bars.args) .. rowText(group().check.args.rows.args)
+    for _, codepoint in ipairs({ "\226\151\143", "\226\151\139", "\226\156\148", "\226\156\152" }) do
+      assert.is_nil(text:find(codepoint, 1, true), "an unrenderable glyph reached the panel")
+    end
+    assert.truthy(text:find("OK", 1, true))
+    assert.truthy(text:find("FAIL", 1, true))
+  end)
+
   describe("the bar addon list", function()
     local function statusOf(rows)
       ns.BarProviders = { status = function() return rows end }
@@ -377,7 +398,7 @@ describe("Options (action bars)", function()
       })
       assert.truthy(text:find("Bar addon detected", 1, true))
       assert.truthy(text:find("ElvUI_Bar1Button3", 1, true))
-      assert.is_nil(text:find("✘", 1, true))
+      assert.is_nil(text:find("FAIL", 1, true))
     end)
 
     -- The four failure sentences are the highest-value strings in the panel: each has to say what
@@ -391,8 +412,8 @@ describe("Options (action bars)", function()
       })
       assert.truthy(text:find("Spell is on a bar", 1, true))
       assert.truthy(text:find("drag it onto a bar", 1, true))
-      assert.truthy(text:find("✘", 1, true))
-      assert.truthy(text:find("—", 1, true))
+      assert.truthy(text:find("FAIL", 1, true))
+      assert.truthy(text:find("--", 1, true))
     end)
 
     it("blames the stance, not the bar addon, when the button is merely hidden", function()
@@ -455,11 +476,44 @@ describe("Options (action bars)", function()
       assert.truthy(rowText(group().check.args.rows.args):find("Checking EXORCISM", 1, true))
     end)
 
-    it("offers the playstyle's spells to choose from", function()
-      ns.Display.currentPack = function() return { spells = { EXORCISM = {}, JUDGEMENT = {} } } end
+    -- Offering the whole class data listed passive runes that can never be on a bar, and listed one
+    -- ability twice when two records resolved to the same spell name. The question is only ever
+    -- about things the rotation tells you to press.
+    it("offers the spells the build actually suggests, not the whole class data", function()
+      ns.Display.currentPack = function()
+        return { spells = { EXORCISM = {}, JUDGEMENT = {}, RUNE_ART_OF_WAR = {} } }
+      end
+      ns.Display.activeBuild = function()
+        return { entries = { { spell = "EXORCISM" }, { spell = "JUDGEMENT" } } }
+      end
       local values = group().check.args.pick.values()
       assert.equal("EXORCISM", values.EXORCISM)
       assert.equal("JUDGEMENT", values.JUDGEMENT)
+      assert.is_nil(values.RUNE_ART_OF_WAR)
+    end)
+
+    it("lists an ability once even when two keys resolve to the same spell", function()
+      ns.Display.activeBuild = function()
+        return { entries = { { spell = "SEAL_OF_MARTYRDOM" }, { spell = "RUNE_SEAL_OF_MARTYRDOM" } } }
+      end
+      ns.Display.currentPack = function()
+        return { spells = { SEAL_OF_MARTYRDOM = { id = 1 }, RUNE_SEAL_OF_MARTYRDOM = { id = 2 } } }
+      end
+      ns.BarGlow = { check = function() return {} end, spellName = function() return "Seal of Martyrdom" end }
+      ns.Display.computeQueue = function() return { { spell = "SEAL_OF_MARTYRDOM" } } end
+      local n = 0
+      for _ in pairs(group().check.args.pick.values()) do n = n + 1 end
+      assert.equal(1, n)
+    end)
+
+    it("repeats a spell in the list only once even if the build names it on several lines", function()
+      ns.Display.activeBuild = function()
+        return { entries = { { spell = "JUDGEMENT" }, { spell = "JUDGEMENT" }, { spell = "JUDGEMENT" } } }
+      end
+      ns.Display.computeQueue = function() return { { spell = "JUDGEMENT" } } end
+      local n = 0
+      for _ in pairs(group().check.args.pick.values()) do n = n + 1 end
+      assert.equal(1, n)
     end)
 
     -- A dropdown whose current value is not one of its options renders blank in AceConfig, which
