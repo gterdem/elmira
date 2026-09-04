@@ -16,6 +16,7 @@ function FakeState.new(t)
   s.enchants = t.enchants or {}   -- was read by :enchant() but never populated here, so it always returned nil
   s.castTimes = t.castTime or {}  -- key -> seconds; absent = instant. Simulation steps max(gcd, castTime)
   s._level = t.level or 60
+  s._targetHp = t.targetHp        -- nil = 100% (no execute range); a number = that percentage
   s.runes = t.runes or {}         -- engraved rune keys, as a set: { RUNE_ART_OF_WAR = true }
   s._sealLinger = t.sealLinger    -- seal key still inside its linger window, or nil
   s.baseCooldowns = t.baseCooldown or {}  -- key -> full cooldown seconds (what GetSpellBaseCooldown gives)
@@ -33,7 +34,7 @@ function FakeState:buff(key) local b = self.buffs[key]; if b then return b.stack
 function FakeState:debuff(key, mine) local d = self.debuffs[key]; if d and (not mine or d.mine) then return d.stacks or 1, d.remaining or 10 end end
 function FakeState:power(kind) local p = self.powers[kind] or {0,0}; return p[1], p[2] end
 function FakeState:targetType() return self._targetType end
-function FakeState:targetHPPct() return 100 end
+function FakeState:targetHPPct() return self._targetHp or 100 end  -- `targetHp = 15` puts the target in execute range
 function FakeState:targetExists() return true end
 function FakeState:inCombat() if self._inCombat == nil then return true end return self._inCombat end
 function FakeState:moving() return self._moving end

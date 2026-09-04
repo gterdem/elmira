@@ -162,6 +162,34 @@ describe("Data sourcing policy (docs/03)", function()
     assert.same({}, dangling)
   end)
 
+  -- Bonus sources name their set or soul by STRING and nothing dereferences the record at evaluation
+  -- time (`state.bonus()` compares keys), so a mistyped `soul = "SOUL_OF_THE_JUSTICAR"` would grant
+  -- nothing, forever, with every spec green -- and the soul record itself is reachable only through
+  -- the adapter's tooltip scan. Found when deleting the Justicar record left 1008 tests passing.
+  it("resolves every bonus source, and every soul's grants, to a record that exists", function()
+    for _, entry in ipairs(shippedPacks()) do
+      local data = entry.data
+      for bonusKey, bonus in pairs(data.bonuses or {}) do
+        assert.truthy(type(bonus.from) == "table" and #bonus.from > 0, bonusKey .. ": no `from` sources")
+        for _, src in ipairs(bonus.from) do
+          if src.soul then assert.is_table(data.souls[src.soul], bonusKey .. " names unknown soul " .. tostring(src.soul)) end
+          if src.set then
+            assert.is_table(data.sets[src.set], bonusKey .. " names unknown set " .. tostring(src.set))
+            assert.is_number(src.pieces, bonusKey .. ": set source needs `pieces`")
+          end
+          assert.truthy(src.soul or src.set, bonusKey .. ": a source must name a soul or a set")
+        end
+      end
+      for soulKey, soul in pairs(data.souls or {}) do
+        for _, granted in ipairs(soul.grants or {}) do
+          assert.is_table(data.bonuses[granted], soulKey .. " grants unknown bonus " .. tostring(granted))
+        end
+        assert.is_string(soul.short, soulKey .. ": no `short` tooltip name -- the adapter cannot detect it")
+        assert.is_number(soul.itemID, soulKey .. ": no itemID")
+      end
+    end
+  end)
+
   -- Rule 7 says every catalog entry carries `updated`, `phase`, `source` and `difficulty`,
   -- and the wizard shows `summary` and the Advisor reads `weapon`/`runes`/`ringRunes` -- but nothing
   -- enforced any of it, so a new entry could ship with a missing summary or an undated source and

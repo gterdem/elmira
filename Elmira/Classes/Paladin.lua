@@ -151,6 +151,9 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- the guide's Divine Protection text links 458318). Checklist step 4 reads the slot to settle it.
     RUNE_MALLEABLE_PROTECTION    = { id = 458318, src = "https://www.wowhead.com/classic/spell=458318/malleable-protection", rune = "waist" },
     RUNE_IMPROVED_SANCTUARY      = { id = 429133, src = "https://www.wowhead.com/classic/spell=429133/improved-sanctuary", rune = "head" },
+    -- Execute (< 20% HP), trained. Max rank 24239 (425 mana); 24275 is a lower rank. Verified 2026-09-03
+    -- (docs/staging/data/m5-ret-additions.lua). Consumed by Exodin's execute line.
+    HAMMER_OF_WRATH         = { id = 24239,  src = "https://www.wowhead.com/classic/spell=24239/hammer-of-wrath", cost = { mana = 425 }, cooldown = 6 },
   }
 
   -- ---------------------------------------------------------------------------------------------
@@ -258,6 +261,13 @@ ns.RegisterBuiltinPack("PALADIN", function()
                                src = "https://www.wowhead.com/classic/item=236554/soul-of-the-exile", short = "Exile", roles = { "RET_EXODIN", "RET_WRATHLIKE" } },
     SOUL_OF_THE_RETRIBUTOR = { itemID = 236551, grants = { "CRUSADER_STRIKE_150" },
                                src = "https://www.wowhead.com/classic/item=236551/soul-of-the-retributor", short = "Retributor", roles = { "RET_WRATHLIKE", "RET_TWIST" } },
+    -- Distinct from the Judicator (236549): Wowhead names them separately throughout the twisting
+    -- section -- Justicar = the Draconic 2-set effect, Judicator = the 4-set effect. `short` is NOT yet
+    -- read from a shoulder tooltip (id verification inferred it from the naming pattern); souls are
+    -- detected by that tooltip line, so until the owner confirms it (m5-dumps.md) this soul may
+    -- silently fail to detect. verify = "in-game" marks exactly that.
+    SOUL_OF_THE_JUSTICAR   = { itemID = 236548, grants = { "JUDGEMENT_NO_CONSUME" },
+                               src = "https://www.wowhead.com/classic/item=236548/soul-of-the-justicar", short = "Justicar", verify = "in-game", roles = { "RET_TWIST", "RET_STACK" } },
     SOUL_OF_THE_JUDICATOR  = { itemID = 236549, grants = { "JUDICATOR_SOUL" },
                                src = "https://www.wowhead.com/classic/item=236549/soul-of-the-judicator", short = "Judicator", roles = { "RET_TWIST" } },
     SOUL_OF_THE_SEALBEARER = { itemID = 236547, grants = { "SEAL_LINGER_6S" },
@@ -277,7 +287,9 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- Core Forged also grants this at 6 pieces, but it is not an enumerable set (see Sets.lua) and its
     -- only consumer is the M5d Stack build, so the set source is deferred with it. Soul-only for now.
     SEAL_LINGER_6S      = { note = "Both seals linger 6s after casting a second seal", from = { { soul = "SOUL_OF_THE_SEALBEARER" } } },
-    JUDGEMENT_NO_CONSUME = { note = "+5% damaging Judgements; seals not consumed", from = { { set = "PALADIN_T2_JUDGEMENT", pieces = 2 } } },
+    -- Two sources, as Wowhead states it ("Draconic 2-set bonus, or Soul of the Justicar"): the effect
+    -- is what the builds gate on, never which of the two provides it (ADR-0004).
+    JUDGEMENT_NO_CONSUME = { note = "+5% damaging Judgements; seals not consumed", from = { { set = "PALADIN_T2_JUDGEMENT", pieces = 2 }, { soul = "SOUL_OF_THE_JUSTICAR" } } },
     HOLY_POWER_CONSUME  = { note = "Divine Storm consumes Holy Power", from = { { set = "PALADIN_T35_INQUISITION", pieces = 4 } } },
     HOLY_WRATH_INSTANT  = { note = "Holy Wrath instant + shorter CD", from = { { set = "PALADIN_T3_REDEMPTION", pieces = 4 } } },
     EXORCISM_DAMAGE_SOUL = { note = "Exorcism damage (soul only)", from = { { soul = "SOUL_OF_THE_EXILE" } } },
@@ -332,7 +344,7 @@ ns.RegisterBuiltinPack("PALADIN", function()
     version = 3, flavor = "SoD", phase = "P8",  -- 3: Wrath-like and Protection shipped (2026-09-03); the wizard re-offers once
     PALADIN = {
       { build = "PALADIN_EXODIN", available = true, playstyle = "Exodin — fast 2H, single seal (Ret)", difficulty = "easy", recommended = true,
-        updated = "2026-09-02", phase = "SoD P8",
+        updated = "2026-09-03", phase = "SoD P8",
         source = "https://www.wowhead.com/classic/guide/season-of-discovery/classes/paladin/dps-rotation-cooldowns-abilities-pve",
         summary = "Seal of Martyrdom, Exorcism never held, Crusader Strike; DS at 3 Holy Power with T3.5 4-set. ~20-33% ahead in Naxx; viable in SE.",
         -- `spells` mirrors the build file: Seal of Martyrdom is a level-10 book purchase, not a rune
@@ -489,10 +501,23 @@ ns.RegisterBuiltinPack("PALADIN", function()
       { spell = "EXORCISM" },          -- baseline ability in P8; never held
       { spell = "CRUSADER_STRIKE" },   -- rune; skipped if not engraved
 
+      -- Naxxramas (T3.5 2-set + T3 Redemption 6-set, no Holy Power consumed): Wowhead wants Divine Storm
+      -- below Exorcism. That is already this list's shape -- the "3 HP" line above needs the 4-set,
+      -- so with the 2-set only the baseline Divine Storm below Crusader Strike is what fires. No extra
+      -- line; recorded here so the gather's G5 is not re-reported as missing.
       ---------------------------------------------------------------- UPGRADE: Naxx — T3 Redemption 4-set makes Holy Wrath instant/short CD
       { spell = "HOLY_WRATH", label = "Naxx", when = { {"bonus","HOLY_WRATH_INSTANT"}, {"any", {"target_type","Undead","Demon"}, {"rune","RUNE_PURIFYING_POWER"}} } },
 
       { spell = "DIVINE_STORM" },      -- rune; below CS by default (fast weapon)
+
+      ---------------------------------------------------------------- execute (Default side; Wowhead's per-build tables omit it)
+      -- Icy Veins lists Hammer of Wrath twice at the bottom of its priority (below 20% health); Wowhead
+      -- names it only in the ability reference. A residual per ADR-0013 §1: kept, placed under the core
+      -- so it never displaces a Holy Power generator, above the fillers it beats. With the Improved
+      -- Hammer of Wrath wrist rune (429152, docs/staging/data/m5-ret-additions.lua) it is instant and
+      -- self-resetting under 10% -- but that rune shares the wrist with Purifying Power, so it is the
+      -- player's choice, not the build's, and it ships as data only once advice can name an alternative.
+      { spell = "HAMMER_OF_WRATH", label = "Execute", when = { {"target_hp", maxPct = 20} } },
 
       ---------------------------------------------------------------- AoE helper only when Holy Power exists
       { spell = "CONSECRATION", label = "AoE, 3 HP", when = { {"buff","HOLY_POWER_BUFF", min = 3}, {"cooldown_gt","DIVINE_STORM", 1} } },

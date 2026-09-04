@@ -1,5 +1,10 @@
 # Changelog
 ## Unreleased
+- **Exodin gains its execute.** Hammer of Wrath is now in the Exodin queue when the target is below
+  20% health — it was missing entirely. With the Improved Hammer of Wrath wrist rune it becomes
+  instant and self-resetting under 10%, but that rune shares the wrist with Purifying Power, so the
+  choice stays yours. Soul of the Justicar is now recognised as granting the same Judgement effect as
+  the Draconic 2-set, so Judgement goes on cooldown for its wearers too.
 - **New playstyle: Protection.** The sword-and-board tank: keep Holy Shield and Righteous Fury up,
   Seal of Martyrdom on, then Hammer of the Righteous, Shield of Righteousness, Exorcism and Avenger's
   Shield on cooldown, Judgement as the filler. It needs its runes — Hand of Reckoning is the only taunt

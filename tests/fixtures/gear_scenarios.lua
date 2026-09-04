@@ -14,8 +14,10 @@
 -- `expectLabels`, where present, is parallel to `expect` and names the compiled entry's `label` that
 -- must have produced each slot — gear_matrix_spec.lua's ambiguity guard requires it on every scenario
 -- whose `expect` touches a spell key more than one PALADIN_EXODIN entry can produce (as of
--- 2026-09-02: JUDGEMENT x3, CONSECRATION x3, DIVINE_STORM x2), since a spell-only comparison can't
--- tell those entries apart. Every entry in the array is filled in, not just the ambiguous slots —
+-- 2026-09-03: JUDGEMENT x3, CONSECRATION x3, DIVINE_STORM x2; EXORCISM and the new HAMMER_OF_WRATH
+-- execute line are both x1 and so unambiguous on their own, but carry labels below anyway per the next
+-- sentence), since a spell-only comparison can't tell those entries apart. Every entry in the array is
+-- filled in, not just the ambiguous slots —
 -- once a scenario needs the array at all, labelling every slot is free and closes the same class of
 -- gap for the unambiguous ones too. A slot produced by an entry with NO `label` field (the unlabelled
 -- baseline entries) is written as `false`: entry.label is Lua `nil` in that case, and a plain array
@@ -27,27 +29,20 @@
 -- whatever the engine happened to output, which would just re-encode current behaviour as "correct".
 return {
   PALADIN_EXODIN = {
-    -- Hard rule 8 / ADR-0006 rule 1: fresh level-60 in dungeon blues, nothing engraved. Crusader
-    -- Strike and Divine Storm are rune-taught abilities the character does not know yet.
-    { name = "blues_no_runes", sets = {},
-      usable = { CRUSADER_STRIKE = false, DIVINE_STORM = false, AVENGING_WRATH = false, AURA_MASTERY = false },
-      seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
-      -- Only Exorcism (15s CD) and the baseline Consecration filler are known abilities here.
-      -- This scenario used to expect a 2-slot queue and called the truncation legitimate. It was
-      -- not: a fresh 60 in blues has ~28 idle GCDs a minute and the build had nothing to offer for
-      -- them, which is exactly the hole the bottom-of-list Judgement filler was added to close
-      -- (docs/research/exodin-filler-policy.md Q1). Judgement now fills slot 2. If this ever
-      -- truncates to 2 again, the filler has stopped reaching the character who needs it most.
-      -- Labels: EXORCISM/CRUSADER_STRIKE-shaped slot 1 has no label (baseline core ability). Slot 2
-      -- is JUDGEMENT: neither gated Judgement entry can fire (no Draconic 2p bonus, seal has 25s
-      -- remaining so "Seal expiring"'s 1.5s window doesn't apply), so it must be the bottom-of-list
-      -- filler — exactly the entry this scenario exists to exercise. Slot 3's CONSECRATION is the
-      -- unlabelled mana-gated baseline (the two gated Consecration entries both require Holy
-      -- Power/3+ enemies, neither present here).
-      expect = { "EXORCISM", "JUDGEMENT", "CONSECRATION" },
-      expectLabels = { false, "Filler (nothing else ready)", false } },
-
-    -- All four gated runes engraved, no set bonuses yet.
+    -- ADR-0013 §4: the "blues, no runes" floor is retired. Exodin is authored for its named runes
+    -- (requires.runes: Art of War, Crusader Strike, Divine Storm, Purifying Power), so the new floor is
+    -- "dungeon blues WITH the build's runes engraved" — no sets, no souls, but Crusader Strike and
+    -- Divine Storm are known abilities, not silenced. This scenario already WAS exactly that gear point
+    -- before today (nothing in it ever set `usable`, so every rune-taught ability defaults to
+    -- FakeState's `usable = true`) — it is kept, not duplicated, and this comment now says so plainly
+    -- instead of citing the retired "nothing engraved" framing it carried under the old rule.
+    -- Where the retired `blues_no_runes` scenario's own reasoning still applies: the Judgement filler
+    -- exists to fill the idle GCDs a thin rotation leaves (docs/research/exodin-filler-policy.md Q1);
+    -- at THIS gear point, with the core fully known, there are no idle GCDs left in the top-3 for it to
+    -- fill (Exorcism/Crusader Strike/Divine Storm already occupy all three slots) — the filler reaching
+    -- a real top-3 slot is proven instead by `fully_geared_judgement_slot1_when_idle` and
+    -- `low_mana_judgement_still_offered` below, once the ability that would otherwise win a slot is
+    -- put on cooldown.
     -- Labels: no set bonuses at all, so DIVINE_STORM in slot 3 cannot be the "3 HP" entry (it needs
     -- bonus HOLY_POWER_CONSUME, which only the T3.5 4-set grants) — it is the unlabelled baseline.
     { name = "runes_only", sets = {}, seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
@@ -85,6 +80,20 @@ return {
     -- 2p" (not "Seal expiring": the seal has 25s remaining, well outside its 1.5s window).
     { name = "t2_2p", sets = { PALADIN_T2_JUDGEMENT = 2 }, seal = "SEAL_OF_MARTYRDOM",
       buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "JUDGEMENT", "EXORCISM", "CRUSADER_STRIKE" },
+      expectLabels = { "Draconic 2p", false, false } },
+
+    -- Same bonus, the OTHER source: D.Bonuses.JUDGEMENT_NO_CONSUME's `from` list names two routes —
+    -- the T2 Radiant Judgement 2-set (t2_2p above) and Soul of the Justicar (added today) — and ADR-0004
+    -- says a build gates on the effect, never on which source granted it, so wearing the soul alone with
+    -- ZERO set pieces must resolve to the byte-for-byte same queue as t2_2p. bonusExpected is what
+    -- actually proves the soul path fired, since the queue shape alone can't tell "soul granted it" from
+    -- "nothing granted it and Judgement just happened to look the same".
+    -- Labels: same reasoning as t2_2p — the bonus is what unlocks "Draconic 2p", so slot 1 must be that
+    -- entry regardless of which of the two sources supplied it.
+    { name = "justicar_soul", sets = {}, souls = { "SOUL_OF_THE_JUSTICAR" }, seal = "SEAL_OF_MARTYRDOM",
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      bonusExpected = { JUDGEMENT_NO_CONSUME = true },
       expect = { "JUDGEMENT", "EXORCISM", "CRUSADER_STRIKE" },
       expectLabels = { "Draconic 2p", false, false } },
 
@@ -189,6 +198,93 @@ return {
       seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
       bonusExpected = { CRUSADER_STRIKE_150 = true }, expect = { "EXORCISM", "CRUSADER_STRIKE", "DIVINE_STORM" },
       expectLabels = { false, false, false } },
+
+    ---------------------------------------------------------------- execute: HAMMER_OF_WRATH's slot (new line, 2026-09-03)
+    -- The new entry sits below the baseline core (entry 11, after Exorcism/Crusader Strike/Divine
+    -- Storm), so being inside its <=20% execute window does not make it preempt anything ranked above
+    -- it. With the core fully available this scenario's top-3 is identical in shape to runes_only — the
+    -- only difference is targetHp = 15 — proving the new line does not jump the queue.
+    -- Labels: same reasoning as runes_only; nothing gated fires, so all three slots are the unlabelled
+    -- baseline entries (7, 8, 10). HAMMER_OF_WRATH (11) never gets a turn here — see `execute_core_busy`
+    -- immediately below for the scenario that actually reaches it.
+    { name = "execute", sets = {}, seal = "SEAL_OF_MARTYRDOM", targetHp = 15,
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "EXORCISM", "CRUSADER_STRIKE", "DIVINE_STORM" },
+      expectLabels = { false, false, false } },
+
+    -- The core exhausted (Exorcism/Crusader Strike/Divine Storm all on cooldown; no T3 4-set means Holy
+    -- Wrath's own bonus gate stays false regardless): HAMMER_OF_WRATH is now the first entry left
+    -- standing at 15% target HP, one slot above the bottom-of-list Judgement filler — exactly "the
+    -- position that follows from the list" once everything ranked above it is unavailable.
+    -- Labels: slot 1 is entry 11 ("Execute"); slot 2 is entry 14 ("Filler (nothing else ready)") — the
+    -- seal has 25s remaining, outside entry 5's 1.5s window, and no T2/soul bonus makes entry 4
+    -- eligible. Slot 3's CONSECRATION is the unlabelled baseline filler (entry 12 needs Holy Power
+    -- stacks this scenario never sets; entry 13 needs 3+ enemies).
+    { name = "execute_core_busy", sets = {}, seal = "SEAL_OF_MARTYRDOM", targetHp = 15,
+      cooldowns = { EXORCISM = 10, CRUSADER_STRIKE = 10, DIVINE_STORM = 10 },
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "HAMMER_OF_WRATH", "JUDGEMENT", "CONSECRATION" },
+      expectLabels = { "Execute", "Filler (nothing else ready)", false } },
+
+    -- Same exhausted core, target at 25% — outside HAMMER_OF_WRATH's <=20% window. The mutation this
+    -- guards against: if the `{"target_hp", maxPct = 20}` clause were ever dropped from the entry, this
+    -- scenario would start returning HAMMER_OF_WRATH in slot 1 too, indistinguishable from
+    -- execute_core_busy above — the pair only proves the gate because execute_core_busy first shows the
+    -- line IS reachable at this exact gear point.
+    -- Labels: slot 1 is entry 14 ("Filler (nothing else ready)") — entry 11 fails its own gate at 25%
+    -- HP, so it never gets a turn. Slot 2's CONSECRATION is the unlabelled baseline filler.
+    { name = "execute_above_20", sets = {}, seal = "SEAL_OF_MARTYRDOM", targetHp = 25,
+      cooldowns = { EXORCISM = 10, CRUSADER_STRIKE = 10, DIVINE_STORM = 10 },
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "JUDGEMENT", "CONSECRATION" },
+      expectLabels = { "Filler (nothing else ready)", false } },
+
+    -- The boundary itself. Schema's `target_hp maxPct` is inclusive (Core/Schema.lua inRange: v > max
+    -- fails, v == max passes), so 20% is in execute range and 21% is not. The audit found
+    -- `maxPct = 20` -> `19` survived with only the 15%/25% scenarios above; these two pin the edge.
+        { name = "execute_at_20_inclusive", sets = {}, seal = "SEAL_OF_MARTYRDOM", targetHp = 20,
+      cooldowns = { EXORCISM = 10, CRUSADER_STRIKE = 10, DIVINE_STORM = 10 },
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "HAMMER_OF_WRATH", "JUDGEMENT", "CONSECRATION" },
+      expectLabels = { "Execute", "Filler (nothing else ready)", false } },
+        { name = "execute_at_21_absent", sets = {}, seal = "SEAL_OF_MARTYRDOM", targetHp = 21,
+      cooldowns = { EXORCISM = 10, CRUSADER_STRIKE = 10, DIVINE_STORM = 10 },
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      expect = { "JUDGEMENT", "CONSECRATION" },
+      expectLabels = { "Filler (nothing else ready)", false } },
+
+    ---------------------------------------------------------------- survivor: CONSECRATION "AoE, 3 HP" (entry 12), isolated
+    -- Previously unexercised by any scenario in this fixture — reported as a mutation survivor. T3.5
+    -- 2-set only (grants the Holy Power aura but not HOLY_POWER_CONSUME, so Divine Storm's own "3 HP"
+    -- entry stays gated out — same combination t35_2p above uses), Divine Storm and the single-target
+    -- core forced onto cooldown so entry 12 is the first eligible line: HOLY_POWER_BUFF >= 3 AND
+    -- cooldown_gt(DIVINE_STORM, 1) both pass.
+    -- Labels: slot 1 is entry 12 ("AoE, 3 HP"), not entry 13 (needs enemies >= 3, unset here) or entry
+    -- 15 (shares CONSECRATION's cooldown the instant entry 12 casts). Slot 2 is entry 14 ("Filler
+    -- (nothing else ready)"; seal has 25s remaining, outside entry 5's window). The queue legitimately
+    -- truncates to 2: Consecration and Judgement are both then on their own cooldowns and nothing else
+    -- is eligible (no `items` entry here, so item_ready fails for both trinket slots).
+    { name = "consecration_aoe_3hp", sets = { PALADIN_T35_INQUISITION = 2 }, seal = "SEAL_OF_MARTYRDOM",
+      cooldowns = { EXORCISM = 10, CRUSADER_STRIKE = 10, DIVINE_STORM = 10 },
+      buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 }, HOLY_POWER_BUFF = { stacks = 3 } },
+      expect = { "CONSECRATION", "JUDGEMENT" },
+      expectLabels = { "AoE, 3 HP", "Filler (nothing else ready)" } },
+
+    ---------------------------------------------------------------- survivor: item 14 "Trinket" (entry 17), isolated
+    -- Previously unexercised — also reported as a mutation survivor, alongside item 13. Same method as
+    -- PALADIN_WRATHLIKE's `trinkets_only`: every rotation ability silenced so both trinket slots are the
+    -- only candidates left (HOLY_WRATH and HAMMER_OF_WRATH need no separate silencing — their own bonus
+    -- and target_hp gates already fail at this gear point's defaults). Item 13 (entry 16, earlier in the
+    -- list) takes slot 1 and suppresses itself for the rest of the queue, leaving item 14 (entry 17) for
+    -- slot 2. Both are `hold = true`, so neither advances Simulation's virtual clock, and with
+    -- everything else silenced there is nothing left for slot 3 — the queue truncates at 2.
+    { name = "trinkets_only", sets = {},
+      usable = { AVENGING_WRATH = false, AURA_MASTERY = false, JUDGEMENT = false, CRUSADER_STRIKE = false,
+                 EXORCISM = false, DIVINE_STORM = false, CONSECRATION = false },
+      seal = "SEAL_OF_MARTYRDOM", buffs = { SEAL_OF_MARTYRDOM = { remaining = 25 } },
+      items = { [13] = { cooldown = 0 }, [14] = { cooldown = 0 } },
+      expect = { "item:13", "item:14" },
+      expectLabels = { "Trinket", "Trinket" } },
 
     -- Wrong-soul advisor case: Data/Advice/Paladin.lua always recommends Soul of the Exile for
     -- Exodin; wearing Sealbearer instead (nerfed, and meant for the Stack build) should surface as a
