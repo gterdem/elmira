@@ -156,6 +156,41 @@ describe("Core.Init", function()
   before_each(loadInit)
   after_each(function() _G.LibStub = nil end)
 
+  -- The second half of the library-ownership probe (Adapters/LibOwner.lua) is sealed by ONE line at
+  -- this file's file scope. Delete it and every LibOwner unit test stays green while `/elm debug
+  -- libs` reports "never sealed" for the rest of time, and the memory report loses the only line
+  -- that explains where the number comes from: a covered function with an uncovered call site,
+  -- which is this project's characteristic defect. So the real sequence is exercised in TOC order.
+  it("seals the library snapshot at load, so /elm debug libs has something to compare", function()
+    mock.reset()
+    ns = helper.reset()
+    order, logged = {}, {}
+    _G.ElmiraDB, _G.LibStub = nil, nil
+
+    -- LibOwner is listed BEFORE embeds.xml, so it runs on a client with no LibStub loaded at all.
+    local LibOwner = helper.load("Elmira/Adapters/LibOwner.lua")
+    assert.same({}, LibOwner.before, "nothing is loaded before our own embeds in this fixture")
+    assert.is_nil(LibOwner.after, "nothing has sealed it yet")
+
+    loadRealAce3()                    -- stands in for embeds.xml
+    helper.load("Elmira/Core/Colors.lua")
+    helper.load("Elmira/Core/API.lua")
+    helper.load("Elmira/Core/DB.lua")
+    ns.Adapter, ns.Display = fakeAdapter(), fakeDisplay()
+    ns.Queue, ns.Overlay = fakeQueue(), fakeOverlay()
+    ns.Slash = { run = function() return {} end }
+    helper.load("Elmira/Core/Init.lua")
+
+    assert.is_table(LibOwner.after, "Core/Init.lua must seal the after-embeds snapshot")
+    local rows, why = LibOwner.report()
+    assert.is_table(rows, "a sealed probe reports rows, not a reason: " .. tostring(why))
+    local ours = {}
+    for _, row in ipairs(rows) do ours[row.name] = row.ours end
+    assert.is_true(ours["AceAddon-3.0"],
+      "the libraries that appeared between the two snapshots are ours — that IS the measurement")
+    assert.is_true((LibOwner.ownedCount() or 0) > 0)
+  end)
+
   -- Core/Serialize.lua never names LibStub; Init hands it the two libraries at OnInitialize. Both
   -- are OptionalDeps, so the silent lookup must leave the codec merely unavailable when absent.
   describe("import/export codec wiring", function()
@@ -269,6 +304,22 @@ describe("Core.Init", function()
         AceEvent.events:Fire(event)
         assert.same({ "BarGlow.Invalidate", "BarProviders.Invalidate", "Display.refresh" }, order, event)
       end
+    end)
+
+    -- Entering the world is also when the adapter's held answers -- spell costs, runes, the soul on
+    -- the shoulders -- may have been read before the client could give them. The event is already
+    -- registered by the bar-map handler, and AceEvent keeps ONE handler per event, so the forget
+    -- has to ride on that handler rather than be registered a second time.
+    it("drops the adapter's held answers on PLAYER_ENTERING_WORLD, and only on that bar event", function()
+      local forgotten = 0
+      ns.Adapter = ns.Adapter or {}
+      ns.Adapter.forgetSpellbook = function() forgotten = forgotten + 1; return true end
+      NA:OnInitialize()
+      local AceEvent = LibStub("AceEvent-3.0")
+      AceEvent.events:Fire("ACTIONBAR_SLOT_CHANGED")
+      assert.equal(0, forgotten, "a bar change is not a character change")
+      AceEvent.events:Fire("PLAYER_ENTERING_WORLD")
+      assert.equal(1, forgotten)
     end)
 
     -- A stance, form or Shadowform swap repages the bars. The bar-provider addon watched this event
@@ -446,6 +497,20 @@ describe("Core.Init", function()
       NA.CancelTimer = function() end
       NA:OnInitialize()
       NA:OnGearOrCharacterChanged()
+      assert.equal(1, forgotten)
+    end)
+
+    -- A respec that learns nothing new fires only CHARACTER_POINTS_CHANGED, and a talent can move a
+    -- spell's mana cost, which the adapter holds until told the character changed.
+    it("drops the adapter's held answers when talent points change", function()
+      withAnnounce()
+      local forgotten = 0
+      ns.Adapter = ns.Adapter or {}
+      ns.Adapter.forgetSpellbook = function() forgotten = forgotten + 1; return true end
+      NA.ScheduleTimer = function(_, fn) return "t" end
+      NA.CancelTimer = function() end
+      NA:OnInitialize()
+      LibStub("AceEvent-3.0").events:Fire("CHARACTER_POINTS_CHANGED")
       assert.equal(1, forgotten)
     end)
 

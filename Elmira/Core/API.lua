@@ -149,6 +149,14 @@ function API.Advise()
   return { soul = nil, runes = {}, weapon = nil, notes = {} } -- fresh table every call
 end
 
+-- One provider by key, uncopied. The render loop resolves the player's pack on every recompute --
+-- four times a second, standing still -- and copying the whole registry to read one entry was an
+-- allocation on every one of them. The spec table is a shared reference, as with GetProviders.
+function API.GetProvider(kind, key)
+  local list = registry[kind]
+  return list and key ~= nil and list[key] or nil
+end
+
 -- Shallow copy: the container is safe to mutate, but the registered spec tables themselves are
 -- shared references (modules must not mutate core's registry, but they may read spec fields freely).
 function API.GetProviders(kind)

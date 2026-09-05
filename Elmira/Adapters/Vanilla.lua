@@ -260,11 +260,19 @@ local function futureSpell(index)
   return ok and kind == "FUTURESPELL"
 end
 
+-- What the last scan found, for `/elm debug alloc`: a book the client would not read whole is
+-- re-scanned for every unknown spell on every frame, and nothing else in the diagnostics can see
+-- that happening.
+local lastScan = { stoppedAt = 0, partial = false, count = 0 }
+
 local function spellbookNames()
   if spellbookCache ~= nil then return spellbookCache end
   -- No guard on GetSpellBookItemName existing: the pcall below answers for a missing function by
   -- failing on the first index, which is the same "read nothing" case as an unreadable book.
-  local names, i, partial = {}, 1, false
+  -- `names` is allocated on the first name the client gives, not before: a client that answers
+  -- nothing is asked again on every call (see the end of this function), and on the render loop
+  -- that must not cost a table per ask.
+  local names, i, partial = nil, 1, false
   while true do
     local ok, name = pcall(GetSpellBookItemName, i, BOOKTYPE)
     -- A THROW is not the end of the book, and neither is a blank name. Telling the two apart is
@@ -272,18 +280,40 @@ local function spellbookNames()
     -- past 40 would then read "not learned" until the next SPELLS_CHANGED or a /reload.
     if not ok then partial = true break end
     if not name or name == "" then break end
+    names = names or {}
     if not futureSpell(i) then names[name] = true end
     i = i + 1
     -- A spellbook cannot be this long. Without a bound, a client that answers a name for every
     -- index would hang the login rather than degrade.
     if i > 1024 then partial = true break end
   end
+  lastScan.stoppedAt, lastScan.partial, lastScan.count = i, partial, i - 1
   -- Nothing read at all is "the client would not answer", not "an empty spellbook".
   if i == 1 then return nil end
   -- Usable right now, but never latched: the next call tries again for the part that was missed.
   if partial then return names end
   spellbookCache = names
   return names
+end
+
+-- How many times the held answers have been dropped this session. Every character-change event
+-- costs a spellbook re-scan (a table of every name you know) on the next ask, so a client firing
+-- one of those events every frame would look, from `/elm debug memory`, exactly like a cache that
+-- does not work.
+local forgets = 0
+
+-- One line for `/elm debug alloc`.
+function Vanilla.spellbookStatus()
+  local status = "spellbook: not read yet"
+  if spellbookCache ~= nil then
+    status = string.format("spellbook: cached, %d entries read", lastScan.count)
+  elseif lastScan.partial then
+    status = string.format("spellbook: NOT cached -- the client stopped answering at index %d, so every"
+      .. " unknown spell re-scans %d entries per frame", lastScan.stoppedAt, lastScan.count)
+  elseif lastScan.stoppedAt > 0 then
+    status = "spellbook: NOT cached -- the client answered nothing"
+  end
+  return string.format("%s; character-change forgets this session: %d", status, forgets)
 end
 
 -- "Do you know this spell", rank-free, for ANY caller that has an id.
@@ -294,14 +324,52 @@ end
 -- tag and the dump the player sends you would both still be wrong.
 --
 -- Returns true / false / nil, and nil means "neither source answered" -- never "no".
+-- `known` per id, held for exactly as long as the spellbook scan behind it: both are cleared by
+-- `forgetSpellbook`, which Core/Init calls on SPELLS_CHANGED, PLAYER_LEVEL_UP and RUNE_UPDATED --
+-- every event that can change the answer. Nothing else can.
+--
+-- Worth caching rather than merely deduplicating per frame: measured on the live client, the queue
+-- asked this 270 times per recompute for about thirty distinct spells, and the answer had not
+-- changed since login. `false` and `nil` are DIFFERENT answers here ("not known" vs "the client
+-- would not say"), so a plain table cannot hold both -- NOT_ANSWERED is what keeps the second one
+-- cacheable instead of re-asking a client that is not answering, forty times a second.
+local NOT_ANSWERED = {}
+local knownCache = {} -- mutants: equivalent deletion only makes it a global
+
+-- Answers that hold until the CHARACTER changes -- a rune, a rank, a level, a piece of gear -- and
+-- that cost a client-built table or a tooltip scan to produce. Keyed by id or by slot, never by a
+-- pack's symbolic key, so one copy serves every state. Emptied by `forgetSpellbook`, which
+-- Core/Init calls on every event that can move one of them, and by `newState`, because a new pack
+-- may give the same shoulders a different soul name.
+local costAmount, costKind = {}, {}   -- [spellID] = amount; [spellID] = power kind, or false
+local runeAt = {}                     -- [abilitySpellID] = true / false
+local enchantAt = {}                  -- [slot] = soul key, or false
+local weaponAt = {}                   -- [slot] = { type=, itemID=, speed=, hastedSpeed= }, or false
+
+local function clear(t)
+  for k in pairs(t) do t[k] = nil end
+end
+
+local function forgetCharacter()
+  clear(costAmount); clear(costKind); clear(runeAt); clear(enchantAt); clear(weaponAt)
+end
+
 function Vanilla.knownById(id)
   if type(id) ~= "number" then return nil end
+
+  local held = knownCache[id]
+  if held ~= nil then
+    if held == NOT_ANSWERED then return nil end
+    return held
+  end
 
   local answered = false
   if IsPlayerSpell then
     local ok, known = pcall(IsPlayerSpell, id)
     if ok then
-      if known == true then return true end
+      -- Cached unconditionally: a plain yes from IsPlayerSpell owes nothing to the spellbook scan,
+      -- so a truncated book cannot make it wrong.
+      if known == true then knownCache[id] = true; return true end
       answered = true
     end
   end
@@ -314,21 +382,47 @@ function Vanilla.knownById(id)
     local ok, resolved = pcall(GetSpellInfo, id)
     if ok then name = resolved end
   end
-  if name then return names[name] == true end
 
-  if answered then return false end
-  return nil -- mutants: equivalent Lua returns nil implicitly at the end of a function
+  -- Everything below this line is derived from the spellbook, so it may only be cached when the
+  -- book was read WHOLE. `spellbookNames` deliberately refuses to cache a scan that died partway
+  -- (a client that gave up at index 40 is not a player who knows nothing past 40), and caching the
+  -- derived answer would reintroduce that defect one level up: every spell past the failure would
+  -- read "not known" until the next SPELLS_CHANGED or a /reload, silently. `spellbookCache` being
+  -- non-nil IS the "the book was complete" flag -- see spellbookNames.
+  --
+  -- "The client would not say" is a real answer and a different one from "no", so it is cached too
+  -- -- but only under the same whole-book rule, or a client still starting up would have its
+  -- silence frozen in for the rest of the session. Plain branches rather than a `remember` closure:
+  -- an uncacheable miss is re-asked on every render-loop tick, and a closure per ask was measurable.
+  local answer = NOT_ANSWERED
+  if name then answer = names[name] == true
+  elseif answered then answer = false end
+  if spellbookCache ~= nil then knownCache[id] = answer end
+  if answer == NOT_ANSWERED then return nil end
+  return answer
 end
 
 -- Called from Core/Init when spells change. The upvalue starts nil, so a fresh session has no
 -- book to forget and nothing calls this at load.
 function Vanilla.forgetSpellbook()
+  forgets = forgets + 1
   spellbookCache = nil
+  -- Both, always. `knownCache` is derived from the book; clearing one without the other leaves the
+  -- derived answer outliving the source it came from, which is a rune engraved and a rotation that
+  -- goes on ignoring it until /reload.
+  knownCache = {}
+  -- And everything else held until the character changes: the events that reach here (a spell
+  -- learned, a level, a rune, a piece of gear) are the same ones that move a cost, a rune, a soul or
+  -- a weapon, so one forget covers all of them.
+  forgetCharacter()
   return true
 end
 
 function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   spells, sets, souls = spells or {}, sets or {}, souls or {}
+  -- A new pack is a new set of soul names for the same shoulders; nothing held about the previous
+  -- one may answer for it.
+  forgetCharacter()
 
   local S = {}
   -- Observed cooldown durations, keyed by spell key. Never seeded from a shipped value and never
@@ -338,45 +432,119 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
 
   local function resolve(key) return idOf(spells, key) end
 
+  -- ONE READ PER FRAME, shared by every question asked in it.
+  --
+  -- Generalised from the aura scan below to every read the client cannot change between two frames.
+  -- Measured on the live client 2026-09-05: one queue recompute made 764 client calls -- 315
+  -- GetSpellCooldown, 270 IsPlayerSpell, 114 GetInventoryItemID -- to answer questions about
+  -- roughly thirty distinct spells and one set of equipped gear, because the queue looks five casts
+  -- ahead across every entry and nothing remembered the previous answer. That was 80-91% of the
+  -- addon's entire memory footprint (`/elm debug memory`: `simulate`, ~25 KB per recompute).
+  --
+  -- The memo is STAMPED, not rebuilt. The first version of this cache allocated fresh tables on
+  -- every new frame and let the old ones go to the collector, and at four recomputes a second that
+  -- was most of what the render loop allocated: measured headlessly with a moving clock, the loop
+  -- cost ~21 KB per recompute, and the client agreed (32 KB, `/elm debug memory` round 3). These
+  -- tables live for the life of the state; each entry remembers the frame it was read in, and a
+  -- stale stamp means "read it again". After the first frame, a steady rotation writes into slots
+  -- that already exist and allocates nothing.
+  --
+  -- `GetTime()` is stamped once per frame by the client, which makes it exactly the right key:
+  -- none of these answers can change without a frame boundary.
+  local function frame() return GetTime and GetTime() or 0 end
+
+  -- The client's cooldown reading for an id, once per frame. Both `cooldown` (how much is LEFT) and
+  -- `baseCooldown` (how long one LASTS) come from this single call: they used to make one
+  -- GetSpellCooldown each, so every spell was asked twice per evaluation and five times over by the
+  -- lookahead. nil is normalised to 0 because every caller already treats the two the same way.
+  local cdStart, cdDuration, cdStamp = {}, {}, {}
+  local function cooldownRead(id)
+    local stamp = frame()
+    if cdStamp[id] ~= stamp then
+      local s, d = GetSpellCooldown(id)
+      cdStart[id], cdDuration[id], cdStamp[id] = s or 0, d or 0, stamp
+    end
+    return cdStart[id], cdDuration[id]
+  end
+
+  -- Range and mana move within a fight but not within a frame, and the lookahead asks about the
+  -- same spell once per simulated slot.
+  local usableAt, usableStamp = {}, {}
+  local function usableRead(id)
+    local stamp = frame()
+    if usableStamp[id] ~= stamp then
+      usableAt[id], usableStamp[id] = IsUsableSpell(id) == true, stamp
+    end
+    return usableAt[id]
+  end
+
+  -- Gear cannot change mid-frame either, and `setCount` walked all nineteen slots once PER SET --
+  -- six sets, 114 reads, for nineteen answers.
+  local equippedAt, equippedStamp = {}, {}
+  local function equippedRead(slot)
+    local stamp = frame()
+    if equippedStamp[slot] ~= stamp then
+      equippedAt[slot], equippedStamp[slot] = GetInventoryItemID("player", slot) or false, stamp
+    end
+    return equippedAt[slot] or nil
+  end
+
+
   function S:now() return GetTime() end
+
+  -- THE hot path, and not the one anyone would guess. Both of these walk the WHOLE spell table
+  -- looking for something showing a GCD-length cooldown, and out of combat nothing is, so both run
+  -- to completion every time. Core/Simulation asks for them once per simulated slot, so a
+  -- five-deep lookahead ran the scan ten times: measured on the shipped pack, 264 of the queue's
+  -- 764 client calls per recompute were these two, not the rotation's own conditions.
+  --
+  -- Three things fix that, and all three are needed. The scan reads through `cooldownRead` and
+  -- `knownById` so the calls it does make are the cached ones; the ANSWER is then memoised for the
+  -- frame, because the global cooldown is one fact about the character rather than a per-spell one;
+  -- and the two share a single pass, since they were walking the same table looking at the same
+  -- reading and disagreeing only about which half of it to return.
+  local gcdStamp, gcdRemaining, gcdLength = nil, 0, nil
+  local function gcdScan()
+    local stamp = frame()
+    if gcdStamp == stamp then return gcdRemaining, gcdLength end
+    gcdStamp, gcdRemaining, gcdLength = stamp, 0, nil
+    for key in pairs(spells) do
+      local id = resolve(key)
+      if id and Vanilla.knownById(id) == true then
+        local start, duration = cooldownRead(id)
+        if duration > 0 and duration <= GCD_CEILING then
+          local remaining = (start + duration) - GetTime()
+          gcdRemaining = remaining > 0 and remaining or 0
+          gcdLength = duration
+          break
+        end
+      end
+    end
+    return gcdRemaining, gcdLength
+  end
 
   -- The GCD is whatever GetSpellCooldown reports for a spell that has no cooldown of its own —
   -- which is the same behaviour that makes baseCooldown dangerous, used deliberately here.
   function S:gcd()
-    for key in pairs(spells) do
-      local id = resolve(key)
-      if id and IsPlayerSpell and IsPlayerSpell(id) then
-        local start, duration = GetSpellCooldown(id)
-        if duration and duration > 0 and duration <= GCD_CEILING then
-          local remaining = (start + duration) - GetTime()
-          return remaining > 0 and remaining or 0
-        end
-      end
-    end
-    return 0
+    local remaining = gcdScan()
+    return remaining
   end
 
   -- How long a global cooldown LASTS, as opposed to how much of one is left. Read from whatever
   -- spell is currently showing a GCD-length cooldown; falls back to the 1.5s base when nothing is,
   -- which is the common case out of combat. Melee GCDs are not haste-reduced on this client.
   function S:gcdDuration()
-    for key in pairs(spells) do
-      local id = resolve(key)
-      if id and IsPlayerSpell and IsPlayerSpell(id) then
-        local _, duration = GetSpellCooldown(id)
-        if duration and duration > 0 and duration <= GCD_CEILING then return duration end
-      end
-    end
-    return 1.5
+    local _, duration = gcdScan()
+    return duration or 1.5
   end
 
   function S:cooldown(key)
     local id = resolve(key)
     if not id then return 0 end
-    local start, duration = GetSpellCooldown(id)
-    if not duration or duration <= 0 then return 0 end
+    local start, duration = cooldownRead(id)
     -- A GCD reading is not this spell's cooldown. Reporting it would make every spell look
-    -- unavailable for 1.5 s after any cast.
+    -- unavailable for 1.5 s after any cast. `cooldownRead` normalises "no cooldown" to 0, which
+    -- this same test answers for -- there is no separate zero case to check.
     if duration <= GCD_CEILING then return 0 end
     observed[key] = duration
     local remaining = (start + duration) - GetTime()
@@ -387,16 +555,15 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   function S:baseCooldown(key)
     local id = resolve(key)
     if not id then return 0 end
-    local _, duration = GetSpellCooldown(id)
-    if duration and duration > GCD_CEILING then observed[key] = duration end
+    local _, duration = cooldownRead(id)
+    if duration > GCD_CEILING then observed[key] = duration end
     return observed[key] or 0
   end
 
   function S:usable(key)
     local id = resolve(key)
     if not id then return false end
-    local usable = IsUsableSpell(id)
-    return usable == true
+    return usableRead(id)
   end
 
   function S:castTime(key)
@@ -408,13 +575,23 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   end
 
   -- Reflects runes on the live client (345 -> 69 measured, docs/07 §9.3), which is why no static
-  -- cost table is consulted here. Returns a LIST of cost tables, not a number.
+  -- cost table is consulted here. Returns a LIST of cost tables, not a number -- a fresh one on
+  -- every call, allocated by the client and charged to us. Held until the character changes
+  -- (`forgetCharacter`): a rune, a rank, a level, a set bonus or a talent (Benediction halves a
+  -- seal's cost) can move a spell's cost, and each of those arrives as an event Core/Init forwards
+  -- here -- the talent one is CHARACTER_POINTS_CHANGED. Nothing that happens between two of them can.
   function S:powerCost(key)
     local id = resolve(key)
     if not id or not GetSpellPowerCost then return 0, nil end
-    local costs = GetSpellPowerCost(id)
-    if type(costs) ~= "table" or not costs[1] then return 0, nil end
-    return costs[1].cost or 0, costs[1].name or "MANA"
+    local amount = costAmount[id]
+    if amount == nil then
+      local costs = GetSpellPowerCost(id)
+      local first = type(costs) == "table" and costs[1] or nil
+      amount = first and first.cost or 0
+      costAmount[id] = amount
+      costKind[id] = first and (first.name or "MANA") or false
+    end
+    return amount, costKind[id] or nil
   end
 
   -- One scan of a unit's auras per FRAME, shared by every lookup on it.
@@ -431,36 +608,54 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   -- key: auras cannot change without a frame boundary, and the whole of one queue recompute
   -- therefore shares one scan. The simulation's virtual clock never reaches here -- it delegates
   -- `buff` to the real state, which is about NOW by definition.
-  local auraFrame, auraByUnit = nil, {}
+  --
+  -- One record per aura id, kept for the life of the state and stamped with the frame it was last
+  -- seen in: an aura that has dropped simply carries an old stamp. The first version of this scan
+  -- allocated a table per aura per frame, which with fifteen buffs up in a city was 4 KB per
+  -- recompute -- a fifth of everything the loop allocated.
+  local auraCache = {}   -- [unit][filter] = { stamp = <frame>, byID = { [spellID] = record } }
 
   local function auraScan(unit, filter)
-    local stamp = GetTime and GetTime() or 0
-    if auraFrame ~= stamp then
-      auraFrame, auraByUnit = stamp, {}
+    local stamp = frame()
+    local byUnit = auraCache[unit]
+    if not byUnit then
+      byUnit = {}
+      auraCache[unit] = byUnit
     end
-    local slot = unit .. "\0" .. filter
-    local found = auraByUnit[slot]
-    if found then return found end
+    local held = byUnit[filter]
+    if not held then
+      held = { stamp = nil, byID = {} }
+      byUnit[filter] = held
+    end
+    local byID = held.byID
+    if held.stamp == stamp then return byID, stamp end
 
-    found = {}
     for i = 1, 40 do
       local name, _, count, _, duration, expires, source, _, _, spellID = UnitAura(unit, i, filter)
       -- The first empty index is the end of the list: the client packs them.
       if not name then break end
-      -- First writer wins, so a longer-lived duplicate cannot be masked by a later stack.
-      if spellID and found[spellID] == nil then
-        found[spellID] = { count = count, duration = duration, expires = expires, source = source }
+      if spellID then
+        local rec = byID[spellID]
+        if not rec then
+          rec = {}
+          byID[spellID] = rec
+        end
+        -- First writer wins, so a longer-lived duplicate cannot be masked by a later stack.
+        if rec.stamp ~= stamp then
+          rec.stamp, rec.count, rec.duration, rec.expires, rec.source = stamp, count, duration, expires, source
+        end
       end
     end
-    auraByUnit[slot] = found
-    return found
+    held.stamp = stamp
+    return byID, stamp
   end
 
   local function findAura(unit, key, filter, mineOnly)
     local id = resolve(key)
     if not id then return nil end
-    local aura = auraScan(unit, filter)[id]
-    if not aura then return nil end
+    local byID, stamp = auraScan(unit, filter)
+    local aura = byID[id]
+    if not (aura and aura.stamp == stamp) then return nil end
     if mineOnly and aura.source ~= "player" then return nil end
     local remaining = aura.expires and (aura.expires - GetTime()) or 0
     local count = aura.count
@@ -510,29 +705,57 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   -- so UnitAttackSpeed reads ~1.6 while the proc is up. A build gating on a speed range would flip
   -- its answer mid-fight on a proc. UnitAttackSpeed is kept as `hastedSpeed` for callers that
   -- genuinely want it (M3b's swing timer), so the two can never be confused for one another.
+  --
+  -- Held per slot until the character changes: the item, its type and its base speed cannot move
+  -- without a PLAYER_EQUIPMENT_CHANGED, and reading them meant a tooltip scan per question, per
+  -- simulated slot. `hastedSpeed` is the one live number and is refreshed on every read.
   function S:weapon(slot)
     slot = slot or 16
-    local id = GetInventoryItemID("player", slot)
-    if not id then return nil end
-    local _, _, _, _, _, _, _, _, equipLoc = GetItemInfo(id)
-    local kind
-    if equipLoc == "INVTYPE_2HWEAPON" then kind = "2H"
-    elseif equipLoc == "INVTYPE_SHIELD" then kind = "Shield"
-    elseif equipLoc then kind = "1H" end
-    if not kind then return nil end
+    local held = weaponAt[slot]
+    if held == nil then
+      held = false
+      local id = GetInventoryItemID("player", slot)
+      if id then
+        local _, _, _, _, _, _, _, _, equipLoc = GetItemInfo(id)
+        local kind
+        if equipLoc == "INVTYPE_2HWEAPON" then kind = "2H"
+        elseif equipLoc == "INVTYPE_SHIELD" then kind = "Shield"
+        elseif equipLoc then kind = "1H" end
+        if kind then held = { type = kind, itemID = id, speed = baseWeaponSpeed(slot) } end
+      end
+      weaponAt[slot] = held
+    end
+    if not held then return nil end
     local main, off = UnitAttackSpeed("player")
     local hasted = (slot == 17 and off) or main
-    return { type = kind, itemID = id, speed = baseWeaponSpeed(slot) or hasted, hastedSpeed = hasted }
+    held.hastedSpeed = hasted
+    if not held.speed then held.speed = hasted end
+    return held
+  end
+
+  -- Built once per set, not once per call: `sets` is fixed for the life of this state, so the
+  -- lookup table was being thrown away and rebuilt several times a second for a list that never
+  -- changed.
+  local wantedItems = {}
+  local function itemsIn(setKey, set)
+    local wanted = wantedItems[setKey]
+    if not wanted then
+      wanted = {}
+      for _, itemID in ipairs(set.items) do wanted[itemID] = true end
+      -- Sets are immutable, so deleting the store below only rebuilds an identical table: the
+      -- allocation differs and no behaviour can see it.
+      wantedItems[setKey] = wanted
+    end
+    return wanted
   end
 
   function S:setCount(setKey)
     local set = sets[setKey]
     if not set or not set.items then return 0 end
-    local wanted = {}
-    for _, itemID in ipairs(set.items) do wanted[itemID] = true end
+    local wanted = itemsIn(setKey, set)
     local count = 0
     for slot = 1, 19 do
-      local equipped = GetInventoryItemID("player", slot)
+      local equipped = equippedRead(slot)
       if equipped and wanted[equipped] then count = count + 1 end
     end
     return count
@@ -541,15 +764,27 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   -- Souls come from the shoulder TOOLTIP, not the item link — the link's enchant field is empty even
   -- when a soul is equipped (docs/07 §9.10, confirmed again by the first dump). Matching is on the
   -- short localized name, which makes this enUS-only in v1: a known, recorded limitation.
-  function S:enchant(slot)
-    if slot ~= INVSLOT_SHOULDER then return nil end
-    local lines = tooltipLines(slot)
-    for _, line in ipairs(lines) do
+  --
+  -- Held until the character changes, like the weapon: a soul is on the shoulders, and the
+  -- shoulders cannot change without an equipment event. Before this every `bonus` with a soul
+  -- source rebuilt the tooltip once per evaluation, per simulated slot.
+  local function soulOn(slot)
+    for _, line in ipairs(tooltipLines(slot)) do
       for key, soul in pairs(souls) do
         if type(soul) == "table" and soul.short and line == soul.short then return key end
       end
     end
     return nil
+  end
+
+  function S:enchant(slot)
+    if slot ~= INVSLOT_SHOULDER then return nil end
+    local held = enchantAt[slot]
+    if held == nil then
+      held = soulOn(slot) or false
+      enchantAt[slot] = held
+    end
+    return held or nil
   end
 
   local function wearingSoul(soulKey)
@@ -570,15 +805,23 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
       end
     end
 
+    -- No `or {}` fallbacks in these loops: each one allocated an empty table per set (or soul)
+    -- without the field, on every evaluation, in the render loop.
     for setKey, set in pairs(sets) do
-      for threshold, bonus in pairs(set.bonuses or {}) do
-        if bonus.bonus == bonusKey and S:setCount(setKey) >= threshold then return true end
+      local bonuses = set.bonuses
+      if bonuses then
+        for threshold, bonus in pairs(bonuses) do
+          if bonus.bonus == bonusKey and S:setCount(setKey) >= threshold then return true end
+        end
       end
     end
 
     for soulKey, soul in pairs(souls) do
-      for _, granted in ipairs((type(soul) == "table" and soul.grants) or {}) do
-        if granted == bonusKey and wearingSoul(soulKey) then return true end
+      local grants = type(soul) == "table" and soul.grants
+      if grants then
+        for _, granted in ipairs(grants) do
+          if granted == bonusKey and wearingSoul(soulKey) then return true end
+        end
       end
     end
 
@@ -653,17 +896,33 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   -- Matches the ABILITY ids the client reports in learnedAbilitySpellIDs. Storing a teach-spell id
   -- here compares false against every slot and reports "not engraved" for a rune the player is
   -- wearing, with no error anywhere — the bug that shipped (docs/07 §9.12).
+  --
+  -- Held until the character changes. GetRuneForEquipmentSlot builds a fresh table per call, ten
+  -- calls per question, and a `rune` gate is asked once per simulated slot -- for an answer that
+  -- moves only on RUNE_UPDATED or an equipment swap, both of which Core/Init forwards here.
+  local function engraved(id)
+    for _, slot in ipairs(RUNE_SLOTS) do
+      local rune = C_Engraving.GetRuneForEquipmentSlot(slot)
+      local learned = rune and rune.learnedAbilitySpellIDs
+      if learned then
+        for _, ability in ipairs(learned) do
+          if ability == id then return true end
+        end
+      end
+    end
+    return false
+  end
+
   function S:rune(runeKey)
     if not (C_Engraving and C_Engraving.GetRuneForEquipmentSlot) then return false end
     local id = resolve(runeKey)
     if not id then return false end
-    for _, slot in ipairs(RUNE_SLOTS) do
-      local rune = C_Engraving.GetRuneForEquipmentSlot(slot)
-      for _, learned in ipairs((rune and rune.learnedAbilitySpellIDs) or {}) do
-        if learned == id then return true end
-      end
+    local held = runeAt[id]
+    if held == nil then
+      held = engraved(id)
+      runeAt[id] = held
     end
-    return false
+    return held
   end
 
   -- Seconds to the next main-hand swing, latency-compensated, or nil when unknown. All the judgement

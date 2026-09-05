@@ -82,9 +82,13 @@ end
 -- `ctx` is optional and additive: { override = <loadout label>, fits = <function(entry)> }. A caller
 -- that passes nothing gets exactly the M3 behaviour, which is why every M3-era call site and spec is
 -- unaffected by M4's rules landing.
+-- Read-only stand-in for an absent ctx. Allocating `{}` here put a table on every render-loop tick,
+-- which resolves the build with no ctx at all.
+local NO_CTX = {}
+
 function Profiles.resolve(pack, profile, ctx)
   if type(pack) ~= "table" or type(pack.builds) ~= "table" then return nil, "no data pack" end
-  ctx = ctx or {}
+  ctx = ctx or NO_CTX
 
   -- 1. Explicit user choice. `false` is the DB's "unset" sentinel, not a key.
   local pinned = profile and profile.activeBuild

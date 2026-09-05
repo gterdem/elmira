@@ -22,6 +22,7 @@ local renderers = {}      -- ordered list of { name, render }
 local ticker
 local frame
 local lastQueue           -- the queue as rendered, for the change test
+local buffers = { {}, {} } -- the two queue tables the tick alternates between (see Display.tick)
 local lastBuildKey
 local lastError = {}      -- renderer name -> the last error text reported, so it is said once
 local lastVisible         -- nil until the first tick decides; then true/false
@@ -36,7 +37,7 @@ function Display.register(name, render)
   for _, r in ipairs(renderers) do
     if r.name == name then r.render = render; return true end   -- re-register replaces, no duplicates
   end
-  renderers[#renderers + 1] = { name = name, render = render }
+  renderers[#renderers + 1] = { name = name, render = render, phase = "render:" .. name }
   return true
 end
 
@@ -54,10 +55,25 @@ end
 -- The pack for the player's class, or nil. Guarded because a class with no shipped pack is a normal
 -- state (only Paladin ships at M2), not an error.
 function Display.currentPack()
-  if not (ns.API and ns.Adapter and ns.Adapter.playerClass) then return nil end
-  local packs = ns.API.GetProviders("dataPacks")
+  if not (ns.API and ns.API.GetProvider and ns.Adapter and ns.Adapter.playerClass) then return nil end
   local class = ns.Adapter.playerClass()
-  return class and packs and packs[class] or nil
+  return class and ns.API.GetProvider("dataPacks", class) or nil
+end
+
+-- The compile context for a pack, built once per pack rather than once per tick. Core/Slash's
+-- compile cache compares the ctx's four tables by identity to decide whether a hit is still good,
+-- so the ctx must carry the pack's CURRENT tables: a pack whose tables were swapped underneath it
+-- gets a fresh ctx, and with it a fresh compile. Weak keys let a replaced pack go.
+local ctxByPack = setmetatable({}, { __mode = "k" })
+local function packContext(pack)
+  local held = ctxByPack[pack]
+  if held and held.spells == pack.spells and held.sets == pack.sets
+     and held.souls == pack.souls and held.bonuses == pack.bonuses then
+    return held
+  end
+  local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
+  ctxByPack[pack] = ctx
+  return ctx
 end
 
 -- Compiled build + key + why it was chosen. The reason is carried so `/elm debug` can answer "why
@@ -68,7 +84,7 @@ function Display.activeBuild()
   local profile = ns.db and ns.db.profile
   local key, reason = ns.Profiles.resolve(pack, profile)
   if not key then return nil, nil, reason end
-  local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
+  local ctx = packContext(pack)
   -- A pinned key may name one of the user's forks (ADR-0010); UserBuilds.find is the one lookup.
   local build = ns.UserBuilds and ns.UserBuilds.find(pack, key) or pack.builds[key]
   local compiled, errors = ns.compileBuild(build, ctx)
@@ -180,24 +196,47 @@ end
 -- Reads the live state, hands Core/Visibility booleans, returns show/hide plus the reason. The
 -- reason is carried so `/elm debug perf` can say why the screen is empty — "the addon is broken" and
 -- "you are standing in Ironforge with no target" look identical otherwise.
+--
+-- One context table for the life of the module, refilled per tick, and a named reader rather than
+-- a closure: this runs on every tick the display is not hidden, and a closure plus a table per
+-- call was the visibility phase's entire cost in `/elm debug memory`.
+local showCtx = {}
+local function readShowCtx(state)
+  showCtx.inCombat = state:inCombat() == true
+  showCtx.hasTarget = state:targetExists() == true
+  return showCtx
+end
+
 function Display.shouldShow()
   local profile = ns.db and ns.db.profile
   if profile and profile.enabled == false then return false, "display disabled" end
   local mode = (profile and profile.visibility) or ns.Visibility.DEFAULT
   local state = ns.API and ns.API.GetState()
   if not state then return true, "no state yet" end
-  local ok, ctx = pcall(function()
-    return { inCombat = state:inCombat() == true, hasTarget = state:targetExists() == true }
-  end)
+  local ok, ctx = pcall(readShowCtx, state)
   if not ok then return true, "state unreadable" end
   return ns.Visibility.shouldShow(mode, ctx)
 end
 
-function Display.computeQueue(depth)
+-- The two halves are measured separately (Core/MemProbe) because they fail for different reasons:
+-- resolving the build is a cache lookup that should cost nothing, while simulating the queue is
+-- hundreds of client calls. A single "computeQueue" number cannot tell those apart, and which one
+-- holds the memory decides what gets rewritten. `M.enter()` answers nil unless `/elm debug memory`
+-- is running, so an ordinary tick pays one comparison.
+--
+-- `into` is the buffer to refill (see Simulation.queue). Only the tick passes one; a slash command
+-- or the recorder asking for a queue gets fresh tables it may keep.
+function Display.computeQueue(depth, into)
+  local M = ns.MemProbe
+  local mark = M and M.enter()
   local compiled, key = Display.activeBuild()
+  if mark then M.leave("build", mark) end
   if not compiled then return nil, key end
   local state = ns.API.GetState()
-  return ns.Simulation.queue(compiled, state, depth or 5), key
+  mark = M and M.enter()
+  local queue = ns.Simulation.queue(compiled, state, depth or 5, into)
+  if mark then M.leave("simulate", mark) end
+  return queue, key
 end
 
 -- Renders to every subscriber. `visible` is the third argument rather than a module flag the
@@ -207,7 +246,12 @@ local function renderAll(queue, key, visible)
     -- One renderer erroring must not take the others down with it, and must not kill the OnUpdate
     -- handler — a dead OnUpdate is a display that silently stops updating, which is this codebase's
     -- characteristic failure shape.
+    local M = ns.MemProbe
+    local mark = M and M.enter()
     local ok, err = pcall(r.render, queue, key, visible)
+    -- `r.phase` is built once at registration, not concatenated here: a string built inside the
+    -- measured span would be charging the renderer for the diagnostic watching it.
+    if mark then M.leave(r.phase, mark) end
     if not ok then
       -- Once per distinct message. A renderer that errors does so on every queue change, which in
       -- combat is several times a second: the first report is a bug, the next two hundred are noise
@@ -237,7 +281,10 @@ function Display.tick(now)
   -- Hidden costs one boolean read and no queue computation at all — which is the point, since for
   -- most of a session the answer is "hidden". The transition is painted once so the strip actually
   -- disappears and any bar glow is released; after that a hidden tick does nothing.
+  local M = ns.MemProbe
+  local mark = M and M.enter()
   local visible = Display.shouldShow()
+  if mark then M.leave("visibility", mark) end
   if not visible then
     if lastVisible ~= false then
       lastVisible = false
@@ -250,7 +297,12 @@ function Display.tick(now)
 
   local profile = ns.db and ns.db.profile
   local depth = (profile and profile.depth) or 3
-  local queue, key = Display.computeQueue(depth)
+  -- Two buffers: the queue on screen and the one being computed. Most recomputes come back
+  -- "unchanged", and the one on screen must survive them untouched, so the fresh queue always lands
+  -- in whichever buffer is NOT being shown. A recompute that changes nothing therefore allocates
+  -- nothing; one that does swaps the two.
+  local spare = (lastQueue == buffers[1]) and buffers[2] or buffers[1]
+  local queue, key = Display.computeQueue(depth, spare)
 
   -- A build change must repaint even if the queue happens to look the same: the icons may be
   -- identical while the reasons behind them are not.

@@ -321,13 +321,19 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.equal("MANA", kind)
     end)
 
-    it("tracks a rune-driven cost change (345 -> 69), so no static table is consulted", function()
+    -- The cost is HELD between character changes (it costs a client-built table per ask, on the
+    -- render loop), so the rune arriving is modelled the way it reaches the adapter in game: as the
+    -- RUNE_UPDATED event Core/Init forwards to forgetSpellbook. Without that forward the old cost
+    -- would stand, which is the second assertion -- the contract, stated, not an accident.
+    it("tracks a rune-driven cost change (345 -> 69) once the rune event arrives", function()
       local spells = spellsFixture()
       mock.spell(spells.EXORCISM.id, { known = true, cost = 345 }) -- no Art of War
       local state = Vanilla.newState(spells, setsFixture(), soulsFixture())
       assert.equal(345, (state:powerCost("EXORCISM")))
 
       mock.powerCosts[spells.EXORCISM.id] = 69 -- Art of War engraved mid-session
+      assert.equal(345, (state:powerCost("EXORCISM")), "held until the character changes")
+      Vanilla.forgetSpellbook()                   -- what Core/Init does on RUNE_UPDATED
       assert.equal(69, (state:powerCost("EXORCISM")))
     end)
 
@@ -484,6 +490,28 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       Vanilla.forgetSpellbook()
     end)
 
+    -- For `/elm debug alloc`: a book the client would not read whole is re-scanned for every
+    -- unknown spell on every frame, and no other diagnostic can see that.
+    it("reports whether the book is cached, how far a scan got, and how often it was forgotten", function()
+      assert.matches("^spellbook: not read yet; character%-change forgets this session: %d+", Vanilla.spellbookStatus())
+      local state = withBook({ "Exorcism", "Holy Wrath" })
+      state:known("EXORCISM")
+      assert.matches("^spellbook: cached, 2 entries read;", Vanilla.spellbookStatus())
+
+      _G.GetSpellBookItemName = function(i) if i > 3 then error("index out of range") end return "Spell" .. i end
+      Vanilla.forgetSpellbook()
+      state:known("EXORCISM")
+      assert.matches("NOT cached %-%- the client stopped answering at index 4, so every unknown spell re%-scans 3 entries",
+        Vanilla.spellbookStatus())
+
+      _G.GetSpellBookItemName = function() return nil end
+      local before = tonumber(Vanilla.spellbookStatus():match("forgets this session: (%d+)"))
+      Vanilla.forgetSpellbook()
+      state:known("EXORCISM")
+      assert.matches("NOT cached %-%- the client answered nothing", Vanilla.spellbookStatus())
+      assert.equal(before + 1, tonumber(Vanilla.spellbookStatus():match("forgets this session: (%d+)")))
+    end)
+
     it("finds a lower rank through the spellbook when the id is the max rank", function()
       assert.is_true(withBook({ "Exorcism", "Holy Wrath" }):known("EXORCISM"))
     end)
@@ -509,7 +537,70 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
       assert.is_true(state:known("EXORCISM"))
       mock.knownSpells = { [415073] = false }
+      -- The answer is cached per id now, and unlearning a spell is not something that happens to a
+      -- live client without SPELLS_CHANGED firing -- which is precisely what Core/Init turns into
+      -- this call. The invalidation itself is pinned by the two tests below; here it only has to
+      -- stand in for the event, so that this test keeps testing what it is named after.
+      Vanilla.forgetSpellbook()
       assert.is_false(state:known("EXORCISM"))
+    end)
+
+    -- 270 IsPlayerSpell calls per recompute, for about thirty distinct spells whose answers had not
+    -- changed since login (measured on the live client, 2026-09-05: `simulate` was 80-91% of the
+    -- addon's whole memory footprint at ~25 KB a recompute). The answer is now held until something
+    -- the player did could have changed it.
+    it("asks the client once per spell, not once per question", function()
+      mock.knownSpells = { [415073] = true }
+      local asked = 0
+      local real = _G.IsPlayerSpell
+      _G.IsPlayerSpell = function(id) asked = asked + 1; return real(id) end
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      state:known("EXORCISM")
+      local afterFirst = asked
+      for _ = 1, 20 do assert.is_true(state:known("EXORCISM")) end
+      _G.IsPlayerSpell = real
+      assert.equal(afterFirst, asked, "twenty more questions must cost the client nothing")
+    end)
+
+    -- The whole point of the cache is that it ENDS. Learning a rank, levelling and engraving a rune
+    -- all reach this through Core/Init; a cache that survived them would answer "you do not know
+    -- that" about an ability the player just engraved, for ever, with nothing to show why.
+    it("forgets what it knew when the spellbook is invalidated", function()
+      -- A book with something IN it, so the scan completes. An answer derived from a book that
+      -- could not be read whole is deliberately not cached (see the partial-read test below), and
+      -- an EMPTY book is indistinguishable from a client that would not answer -- `spellbookNames`
+      -- returns nil for both -- so `withBook({})` would prove nothing about invalidation here.
+      local state = withBook({ "Holy Wrath" })
+      assert.is_false(state:known("EXORCISM"))
+      mock.knownSpells = { [415073] = true }
+      assert.is_false(state:known("EXORCISM"), "still cached until something says otherwise")
+      Vanilla.forgetSpellbook()
+      assert.is_true(state:known("EXORCISM"), "and the moment it is told, it re-reads")
+    end)
+
+    -- The rule the partial-read guard rests on, stated one level up: a derived answer must not
+    -- outlive the truncated book it came from, or every spell past the failure reads "not known"
+    -- until the next SPELLS_CHANGED. Caught by the existing partial-read test when this cache was
+    -- first written, which is exactly what that test is for.
+    it("does not cache an answer derived from a spellbook that failed partway", function()
+      mock.knownSpells = { [415073] = false }
+      mock.spellNames = { [415073] = "Exorcism" }
+      _G.GetSpellBookItemName = function(i, booktype)
+        if booktype ~= "spell" then return nil end
+        if i == 1 then return "Holy Wrath" end
+        error("the client gave up")
+      end
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_false(state:known("EXORCISM"))
+      -- The book becomes readable and now lists it. No event fires: nothing about the PLAYER
+      -- changed, only the client's willingness to answer, so only the refusal to cache can save it.
+      _G.GetSpellBookItemName = function(i, booktype)
+        if booktype ~= "spell" then return nil end
+        return ({ "Exorcism" })[i]
+      end
+      assert.is_true(state:known("EXORCISM"), "a truncated read must not be frozen in")
     end)
 
     -- Both sources silent: "cannot tell", never "you have learned nothing", which would grey the
@@ -776,6 +867,230 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       mock.gcdActive = true
       local state = Vanilla.newState(spells, setsFixture(), soulsFixture())
       assert.equal(1.5, state:gcd())
+    end)
+  end)
+
+  -- The queue looks five casts ahead across every entry, so the same handful of questions get asked
+  -- of the client hundreds of times for one suggestion. Measured in game on 2026-09-05: 764 client
+  -- calls per recompute, ~25 KB of garbage, 80-91% of the addon's entire memory footprint
+  -- (`/elm debug memory`, phase `simulate`). None of those answers can change without a frame
+  -- boundary, so none of them needs asking twice.
+  describe("asking the client once per frame instead of once per question", function()
+    local function counting(name)
+      local calls, real = 0, _G[name]
+      _G[name] = function(...) calls = calls + 1; return real(...) end
+      return function() _G[name] = real; return calls end, function() calls = 0 end
+    end
+
+    -- "The client would not say" is a third answer, distinct from yes and no, and it has to be
+    -- cacheable too: a client that is still starting up would otherwise be re-interrogated about
+    -- every spell, several times a second, for as long as it stayed quiet.
+    it("does not keep re-asking a client that will not answer", function()
+      mock.knownSpells = {}
+      -- Restored explicitly at the end: this spec's after_each puts GetSpellBookItemName back but
+      -- nothing else, and a GetSpellInfo left stubbed to nil silently breaks castTime() forty tests
+      -- later, where it reads as a bug in castTime.
+      local realIs, realInfo = _G.IsPlayerSpell, _G.GetSpellInfo
+      _G.IsPlayerSpell = nil
+      _G.GetSpellBookItemName = function(i, booktype)
+        if booktype ~= "spell" then return nil end
+        return ({ "Holy Wrath" })[i]      -- a whole book, so the answer may be cached
+      end
+      _G.GetSpellInfo = function() return nil end        -- and no name for the id, so: no answer
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_nil(state:known("EXORCISM"))
+      -- Counting GetSpellInfo, not the spellbook read: the book has its OWN cache, so it answers
+      -- from memory whether or not this one does, and counting it would pass either way.
+      local looks = 0
+      _G.GetSpellInfo = function() looks = looks + 1; return nil end
+      for _ = 1, 10 do assert.is_nil(state:known("EXORCISM"), "still cannot tell") end
+      _G.IsPlayerSpell, _G.GetSpellInfo = realIs, realInfo
+      assert.equal(0, looks, "a silence is an answer, and it is remembered like one")
+    end)
+
+    -- A client that reports no cooldown returns nil, not 0. Left unnormalised, the frame cache
+    -- cannot tell "asked and there is none" from "not asked yet", so every ready spell -- which out
+    -- of combat is all of them -- would be re-read on every single question.
+    it("remembers that a spell has no cooldown, rather than re-asking about it", function()
+      mock.time = 100
+      mock.cooldowns[415073] = nil
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(0, state:cooldown("EXORCISM"))
+      local stop = counting("GetSpellCooldown")
+      for _ = 1, 20 do assert.equal(0, state:cooldown("EXORCISM")) end
+      assert.equal(0, stop(), "no cooldown is a fact worth remembering for the frame")
+    end)
+
+    -- A client that answers nil rather than 0,0. The mock always answers with numbers, so this
+    -- stubs the global directly rather than teaching the mock a client behaviour nobody here has
+    -- verified in game (docs/07). Left unnormalised, nil is indistinguishable from "not asked yet"
+    -- in the frame cache, so every ready spell -- out of combat, all of them -- is re-read on every
+    -- question, which is the whole defect this cache exists to remove.
+    it("treats a nil answer as 'no cooldown' and caches that too", function()
+      mock.time = 100
+      local real = _G.GetSpellCooldown
+      local asked = 0
+      _G.GetSpellCooldown = function() asked = asked + 1; return nil, nil end
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(0, state:cooldown("EXORCISM"))
+      assert.equal(0, state:baseCooldown("EXORCISM"))
+      for _ = 1, 20 do assert.equal(0, state:cooldown("EXORCISM")) end
+      _G.GetSpellCooldown = real
+      assert.equal(1, asked, "one nil answer, remembered; not twenty-two questions")
+    end)
+
+    it("reads a spell's cooldown once however many times it is asked for", function()
+      mock.time = 100
+      mock.cooldowns[415073] = { 90, 30 }
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      state:cooldown("EXORCISM")                       -- warm
+      local stop = counting("GetSpellCooldown")
+      for _ = 1, 20 do state:cooldown("EXORCISM") end
+      assert.equal(0, stop(), "twenty more asks in the same frame must cost the client nothing")
+    end)
+
+    -- Two questions, one reading. `cooldown` wants what is LEFT and `baseCooldown` wants how long
+    -- one LASTS; they were making a client call each, so every spell was read twice per evaluation.
+    it("answers 'how much is left' and 'how long does it last' from one reading", function()
+      mock.time = 100
+      mock.cooldowns[415073] = { 90, 30 }
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      local stop = counting("GetSpellCooldown")
+      state:cooldown("EXORCISM")
+      state:baseCooldown("EXORCISM")
+      assert.equal(1, stop(), "the second question must reuse the first one's answer")
+    end)
+
+    -- A frozen cooldown is a rotation that never notices a spell coming off cooldown. GetTime is
+    -- stamped once per frame by the client, so a new stamp is a new frame is a new reading.
+    it("re-reads on the next frame, and reports the cooldown ticking down", function()
+      mock.time = 100
+      mock.cooldowns[415073] = { 90, 30 }
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(20, state:cooldown("EXORCISM"))
+      mock.time = 110
+      local stop = counting("GetSpellCooldown")
+      assert.equal(10, state:cooldown("EXORCISM"), "the next frame sees ten seconds less")
+      assert.is_true(stop() > 0, "and it got there by asking the client again")
+    end)
+
+    it("reads usability once per spell per frame, and again on the next one", function()
+      mock.time = 100
+      mock.knownSpells[415073] = true
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      state:usable("EXORCISM")                          -- warm
+      local stop = counting("IsUsableSpell")
+      for _ = 1, 20 do assert.is_true(state:usable("EXORCISM")) end
+      assert.equal(0, stop(), "twenty more asks in the same frame cost the client nothing")
+
+      -- Mana and range move during a fight, so a cache that never expired would keep offering a
+      -- spell the player can no longer afford.
+      mock.time = 110
+      mock.knownSpells[415073] = false
+      assert.is_false(state:usable("EXORCISM"), "the next frame asks again")
+    end)
+
+    -- setCount walked all nineteen inventory slots ONCE PER SET. Six sets is 114 client calls for
+    -- nineteen answers, and it rebuilt the set's item lookup table every time on top.
+    it("reads the equipped slots once per frame, not once per set", function()
+      mock.inventory[5] = 900101
+      local sets = setsFixture()
+      sets.SECOND = { name = "Second", items = { 900101 }, bonuses = {} }
+      sets.THIRD  = { name = "Third",  items = { 900102 }, bonuses = {} }
+      local state = Vanilla.newState(spellsFixture(), sets, soulsFixture())
+      local stop = counting("GetInventoryItemID")
+      assert.equal(1, state:setCount("LAWBRINGER"))
+      assert.equal(1, state:setCount("SECOND"), "the same piece counts for the set that lists it")
+      assert.equal(0, state:setCount("THIRD"))
+      assert.equal(1, state:setCount("LAWBRINGER"))
+      local total = stop()
+      assert.is_true(total <= 19,
+        "nineteen slots exist; four set questions must not read more than that: " .. total)
+      assert.is_true(total > 0, "and it did read them, rather than answering from nothing")
+
+      -- Gear cannot change mid-frame, but it very much changes between them.
+      mock.time = mock.time + 0.1
+      mock.inventory[5] = nil
+      assert.equal(0, state:setCount("LAWBRINGER"), "the next frame sees the piece removed")
+    end)
+
+    -- The one nobody would guess, and the one that mattered most: `gcd`/`gcdDuration` walk the
+    -- WHOLE spell table looking for something showing a global cooldown, and out of combat nothing
+    -- is, so both ran to completion. Core/Simulation asks for them once per simulated slot, so a
+    -- five-deep lookahead ran that scan ten times per recompute -- 264 of the 764 calls, before the
+    -- rotation's own conditions had asked anything.
+    it("scans for the global cooldown once a frame, not once per lookahead slot", function()
+      mock.time = 100
+      mock.knownSpells[415073] = true
+      mock.knownSpells[20271] = true
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      state:gcd()
+      local stop = counting("GetSpellCooldown")
+      for _ = 1, 10 do state:gcd(); state:gcdDuration() end
+      assert.equal(0, stop(), "twenty more asks in one frame must not walk the spell table again")
+    end)
+
+    -- The scan walks the spell table; `cooldownRead` caches underneath it, so counting client calls
+    -- cannot see a second walk. Counting `knownById` -- which the scan asks about every spell -- can.
+    local function countingScans()
+      local calls, real = 0, Vanilla.knownById
+      Vanilla.knownById = function(id) calls = calls + 1; return real(id) end
+      return function() Vanilla.knownById = real; return calls end
+    end
+
+    it("holds the global cooldown answer for the frame instead of walking the table again", function()
+      mock.time = 100
+      mock.knownSpells[415073] = true
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      state:gcd()                                        -- warm
+      local stop = countingScans()
+      for _ = 1, 10 do state:gcd(); state:gcdDuration() end
+      assert.equal(0, stop(), "twenty asks in one frame must not walk the spell table again")
+    end)
+
+    -- Core/Simulation asks per lookahead slot, so this is the difference between one pass and ten.
+    it("stops at the first spell showing a global cooldown", function()
+      mock.time = 100
+      -- Every spell in the pack on a GCD-length cooldown, so whichever `pairs` reaches first is a
+      -- match and the count is deterministic however the table happens to be ordered.
+      for _, data in pairs(spellsFixture()) do
+        mock.knownSpells[data.id] = true
+        mock.cooldowns[data.id] = { 99.5, 1.5 }
+      end
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      local stop = countingScans()
+      state:gcd()
+      assert.equal(1, stop(), "it had its answer after the first spell and kept going")
+    end)
+
+    it("still finds the global cooldown, and still falls back when nothing is on one", function()
+      mock.time = 100
+      mock.knownSpells[415073] = true
+      -- 1.2s, not 1.5: the fallback IS 1.5, so a fixture using it cannot tell "read from the
+      -- client" apart from "gave up and used the default" -- the assertion would pass either way.
+      mock.cooldowns[415073] = { 99.8, 1.2 }
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(1.2, state:gcdDuration(), "the reading, not the fallback")
+      assert.equal(1, state:gcd(), "0.2s in, one second left")
+
+      mock.cooldowns[415073] = nil
+      mock.time = 200
+      local idle = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(0, idle:gcd(), "nothing on a global cooldown")
+      assert.equal(1.5, idle:gcdDuration(), "and the base duration is what a fresh one would last")
+    end)
+
+    -- They used to make separate passes and could pick different spells. One pass means the two
+    -- halves of one answer always describe the same reading.
+    it("rescans on the next frame", function()
+      mock.time = 100
+      mock.knownSpells[415073] = true
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(0, state:gcd())
+      mock.cooldowns[415073] = { 109.5, 1.5 }
+      mock.time = 110
+      assert.equal(1, state:gcd(), "a new frame sees the global cooldown that just started")
     end)
   end)
 
@@ -1346,4 +1661,271 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.is_nil(Vanilla.talents())
     end)
   end)
+  -- ============================================================ memory round 3: allocate nothing on a warm frame
+  --
+  -- The first per-frame cache allocated fresh tables on every new frame, the aura scan a table per
+  -- aura per frame, and the client charged Elmira ~32 KB per recompute for it, four times a second,
+  -- standing still. The headless benchmark had missed all of it because the mock clock never moved;
+  -- every case here moves it. The memo is now stamped on permanent tables, and the answers that
+  -- only a character change can move (a cost, a rune, a soul, a weapon) are held until
+  -- forgetSpellbook -- which Core/Init calls on exactly those events.
+  describe("allocating nothing on a warm frame, and holding what only the character can change", function()
+    local function counting(name)
+      local calls, real = 0, _G[name]
+      _G[name] = function(...) calls = calls + 1; return real(...) end
+      return function() _G[name] = real; return calls end
+    end
+
+    local allocatedKB = helper.allocatedKB
+
+    -- A character with something to read in every table: known spells, cooldowns, sixteen buffs,
+    -- nineteen equipped items, a soul on the shoulders, a two-hander, one rune.
+    local function liveState()
+      local spells = spellsFixture()
+      spells.RUNE_REBUKE.id = 425609
+      mock.spell(spells.EXORCISM.id, { known = true, cooldown = 15, cost = 345 })
+      mock.spell(spells.JUDGEMENT.id, { known = true })
+      mock.spell(spells.CONSECRATION.id, { known = true })
+      for i = 1, 15 do mock.auras.player[i] = { name = "Buff" .. i, spellID = 900000 + i } end
+      mock.auras.player[16] = { name = "Avenging Wrath", spellID = 407788, count = 1 }
+      for slot = 1, 19 do mock.inventory[slot] = 900100 + slot end
+      mock.inventory[16] = 900500
+      mock.itemInfo[900500] = { name = "Big Sword", equipLoc = "INVTYPE_2HWEAPON" }
+      mock.tooltipLines[3] = { "Shoulders", "Exile" }
+      mock.tooltipLines[16] = { "Big Sword" }; mock.tooltipRight[16] = { "Speed 3.40" }
+      mock.runes[7] = { name = "Rebuke", learnedAbilitySpellIDs = { 425609 } }
+      return Vanilla.newState(spells, setsFixture(), soulsFixture())
+    end
+
+    local function askEverything(state)
+      state:gcd(); state:gcdDuration()
+      state:cooldown("EXORCISM"); state:baseCooldown("EXORCISM"); state:usable("EXORCISM")
+      state:cooldown("JUDGEMENT"); state:usable("JUDGEMENT"); state:known("CONSECRATION")
+      state:buff("AVENGING_WRATH_BUFF"); state:buff("EXORCISM"); state:debuff("EXORCISM", true)
+      state:setCount("LAWBRINGER"); state:bonus("AVENGERS_2P"); state:enchant(3)
+      state:weapon(16); state:rune("RUNE_REBUKE"); state:powerCost("EXORCISM")
+      state:seal(); state:power("MANA"); state:itemCooldown(13); state:itemUsable(13)
+    end
+
+    it("asks every question again on a new frame without allocating", function()
+      mock.time = 100
+      local state = liveState()
+      askEverything(state)                       -- frame 1: the memo fills
+      mock.time = 100.1
+      askEverything(state)                       -- frame 2: every slot now exists
+      mock.time = 100.2
+      local kb = allocatedKB(function() askEverything(state) end)
+      assert.is_true(kb == nil or kb < 0.05, string.format("a warm frame allocated %.3f KB", kb or 0))
+    end)
+
+    it("still re-reads the per-frame facts on that new frame", function()
+      mock.time = 100
+      local state = liveState()
+      askEverything(state)
+      mock.time = 101
+      local cooldowns, usable, auras, items = counting("GetSpellCooldown"), counting("IsUsableSpell"),
+                                              counting("UnitAura"), counting("GetInventoryItemID")
+      askEverything(state)
+      assert.is_true(cooldowns() > 0, "cooldowns tick between frames")
+      assert.is_true(usable() > 0, "mana and range move between frames")
+      assert.is_true(auras() > 0, "auras come and go between frames")
+      assert.is_true(items() > 0, "gear is re-read per frame")
+    end)
+
+    it("asks for a spell's cost once, and again only after the character changes", function()
+      local state = liveState()
+      local stop = counting("GetSpellPowerCost")
+      for _ = 1, 10 do state:powerCost("EXORCISM") end
+      assert.equal(1, stop())
+      Vanilla.forgetSpellbook()
+      stop = counting("GetSpellPowerCost")
+      state:powerCost("EXORCISM")
+      assert.equal(1, stop(), "forgotten, so asked again")
+    end)
+
+    it("remembers a spell with no cost, and one whose cost has no kind", function()
+      local spells = spellsFixture()
+      mock.spell(spells.JUDGEMENT.id, { known = true })       -- no cost at all
+      local real = _G.GetSpellPowerCost
+      local asked = 0
+      _G.GetSpellPowerCost = function(id)
+        asked = asked + 1
+        if id == spells.JUDGEMENT.id then return {} end
+        return { { cost = 90 } }                             -- a cost with no `name`
+      end
+      local state = Vanilla.newState(spells, setsFixture(), soulsFixture())
+      for _ = 1, 3 do
+        assert.equal(0, (state:powerCost("JUDGEMENT")))
+        assert.is_nil(select(2, state:powerCost("JUDGEMENT")))
+      end
+      local amount, kind = state:powerCost("EXORCISM")
+      assert.equal(90, amount)
+      assert.equal("MANA", kind, "a cost with no kind is mana")
+      state:powerCost("EXORCISM")
+      _G.GetSpellPowerCost = real
+      assert.equal(2, asked, "one ask per spell, whatever the answer")
+    end)
+
+    it("reads the rune slots once per rune, and again only after the character changes", function()
+      local state = liveState()
+      local reads, real = 0, C_Engraving.GetRuneForEquipmentSlot
+      C_Engraving.GetRuneForEquipmentSlot = function(...) reads = reads + 1; return real(...) end
+      assert.is_true(state:rune("RUNE_REBUKE"))
+      assert.is_false(state:rune("RUNE_HALLOWED_GROUND"))
+      local afterFirst = reads
+      for _ = 1, 10 do state:rune("RUNE_REBUKE"); state:rune("RUNE_HALLOWED_GROUND") end
+      assert.equal(afterFirst, reads, "a yes and a no are both held")
+      mock.runes[7] = nil                                   -- un-engraved, and RUNE_UPDATED fires
+      assert.is_true(state:rune("RUNE_REBUKE"), "held until the event arrives")
+      Vanilla.forgetSpellbook()
+      assert.is_false(state:rune("RUNE_REBUKE"))
+      C_Engraving.GetRuneForEquipmentSlot = real
+    end)
+
+    it("scans the shoulder tooltip once for the soul, and again only after a gear change", function()
+      local scans, realCreate = 0, _G.CreateFrame
+      _G.CreateFrame = function(...)
+        local frame = realCreate(...)
+        local set = frame.SetInventoryItem
+        frame.SetInventoryItem = function(...) scans = scans + 1; return set(...) end
+        return frame
+      end
+      local state = liveState()
+      for _ = 1, 10 do assert.equal("SOUL_OF_THE_EXILE", state:enchant(3)) end
+      assert.equal(1, scans)
+      mock.tooltipLines[3] = { "Shoulders" }               -- soul gone, PLAYER_EQUIPMENT_CHANGED fires
+      assert.equal("SOUL_OF_THE_EXILE", state:enchant(3), "held until the event arrives")
+      Vanilla.forgetSpellbook()
+      assert.is_nil(state:enchant(3))
+      for _ = 1, 10 do assert.is_nil(state:enchant(3)) end
+      assert.equal(2, scans, "'no soul' is held too")
+      _G.CreateFrame = realCreate
+    end)
+
+    it("reads the weapon once, refreshing only the hasted speed, until a gear change", function()
+      local state = liveState()
+      mock.attackSpeed = { 2.5, nil }
+      local stop = counting("GetItemInfo")
+      local w = state:weapon(16)
+      assert.equal("2H", w.type)
+      assert.equal(3.4, w.speed, "base speed from the tooltip")
+      assert.equal(2.5, w.hastedSpeed)
+      mock.attackSpeed = { 1.9, nil }                       -- a haste proc, no gear event
+      assert.equal(1.9, state:weapon(16).hastedSpeed, "the live number stays live")
+      assert.equal(3.4, state:weapon(16).speed)
+      assert.equal(1, stop(), "one item read for three questions")
+      mock.inventory[16] = 900501
+      mock.itemInfo[900501] = { name = "Shield", equipLoc = "INVTYPE_SHIELD" }
+      assert.equal("2H", state:weapon(16).type, "held until the event arrives")
+      Vanilla.forgetSpellbook()
+      assert.equal("Shield", state:weapon(16).type)
+    end)
+
+    it("holds 'no weapon' and 'no readable weapon' without re-reading either", function()
+      local state = liveState()
+      mock.inventory[17] = nil
+      mock.inventory[18] = 900502
+      mock.itemInfo[900502] = nil                           -- an item the client cannot describe
+      local stop = counting("GetItemInfo")
+      for _ = 1, 5 do
+        assert.is_nil(state:weapon(17))
+        assert.is_nil(state:weapon(18))
+      end
+      assert.equal(1, stop())
+    end)
+
+    it("falls back to the hasted speed when the tooltip has no base speed", function()
+      local state = liveState()
+      mock.tooltipRight[16] = {}
+      mock.attackSpeed = { 2.2, nil }
+      assert.equal(2.2, state:weapon(16).speed)
+    end)
+
+    it("answers nil for a soul line on anything but the shoulders, without holding it", function()
+      local state = liveState()
+      mock.tooltipLines[16] = { "Big Sword", "Exile" }        -- a weapon cannot carry a soul
+      assert.is_nil(state:enchant(16))
+      assert.equal("SOUL_OF_THE_EXILE", state:enchant(3))
+    end)
+
+    it("answers false for every rune on a client with no engraving API, rather than erroring", function()
+      local state = liveState()
+      local real = _G.C_Engraving
+      _G.C_Engraving = nil
+      assert.is_false(state:rune("RUNE_REBUKE"))
+      _G.C_Engraving = { }                                     -- the namespace without the call
+      assert.is_false(state:rune("RUNE_REBUKE"))
+      _G.C_Engraving = real
+      assert.is_true(state:rune("RUNE_REBUKE"), "and nothing was held from the silent client")
+    end)
+
+    it("forgets what a previous pack's state held when a new state is built", function()
+      local state = liveState()
+      assert.equal("SOUL_OF_THE_EXILE", state:enchant(3))
+      local renamed = soulsFixture()
+      renamed.SOUL_OF_THE_EXILE = nil
+      renamed.SOUL_OF_THE_SEALBEARER = { itemID = 1, short = "Exile", grants = {} }
+      local fresh = Vanilla.newState(spellsFixture(), setsFixture(), renamed)
+      assert.equal("SOUL_OF_THE_SEALBEARER", fresh:enchant(3))
+    end)
+
+    it("an aura that dropped last frame is gone this frame, though its record is kept", function()
+      mock.time = 100
+      local state = liveState()
+      assert.equal(1, (state:buff("AVENGING_WRATH_BUFF")))
+      mock.time = 101
+      mock.auras.player[16] = nil
+      assert.is_nil(state:buff("AVENGING_WRATH_BUFF"))
+      mock.time = 102
+      mock.auras.player[16] = { name = "Avenging Wrath", spellID = 407788, count = 3 }
+      assert.equal(3, (state:buff("AVENGING_WRATH_BUFF")), "back, with this frame's stacks")
+    end)
+
+    it("the first of two copies of an aura still wins on a reused record", function()
+      mock.time = 100
+      local state = liveState()
+      mock.auras.player[1] = { name = "AW", spellID = 407788, count = 1 }
+      mock.auras.player[2] = { name = "AW", spellID = 407788, count = 5 }
+      assert.equal(1, (state:buff("AVENGING_WRATH_BUFF")))
+      mock.time = 101
+      mock.auras.player[1], mock.auras.player[2] = mock.auras.player[2], mock.auras.player[1]
+      assert.equal(5, (state:buff("AVENGING_WRATH_BUFF")), "next frame, the other copy is first")
+    end)
+
+    -- An answer that cannot be cached is asked again on every render-loop tick, so the miss itself
+    -- must be free: a client whose spellbook is unreadable used to cost a table and a closure per
+    -- ask, for every spell it would not vouch for.
+    it("asks a client that will not answer again on every frame, but allocates nothing doing it", function()
+      -- Neither source answers: no IsPlayerSpell, no spellbook. That is the one case the adapter may
+      -- not cache, so it is the one case that is re-asked on every tick.
+      local realIs = _G.IsPlayerSpell
+      _G.IsPlayerSpell, _G.GetSpellBookItemName = nil, nil
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_nil(state:known("EXORCISM"))
+      local answers = 0
+      local kb = allocatedKB(function()
+        for _ = 1, 20 do if state:known("EXORCISM") ~= nil then answers = answers + 1 end end
+      end)
+      _G.IsPlayerSpell = realIs
+      assert.equal(0, answers, "still cannot tell")
+      assert.is_true(kb == nil or kb < 0.05, string.format("twenty unanswerable asks allocated %.3f KB", kb or 0))
+    end)
+
+    it("bonus() walks sets without a bonus table and souls without grants, allocating nothing", function()
+      local sets = setsFixture()
+      sets.BARE = { name = "Bare", items = { 1, 2 } }
+      local souls = soulsFixture()
+      souls.SOUL_OF_THE_TEMPLAR = { itemID = 3, short = "Templar" }
+      mock.time = 100
+      local state = Vanilla.newState(spellsFixture(), sets, souls)
+      assert.is_false(state:bonus("AVENGERS_4P"))
+      mock.time = 101
+      state:bonus("AVENGERS_4P")
+      mock.time = 102
+      local kb = allocatedKB(function() for _ = 1, 10 do state:bonus("AVENGERS_4P") end end)
+      assert.is_true(kb == nil or kb < 0.05, string.format("ten bonus() calls allocated %.3f KB", kb or 0))
+    end)
+  end)
+
 end)

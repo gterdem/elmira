@@ -1,5 +1,57 @@
 # Changelog
 ## Unreleased
+- **Fixed: Elmira's memory figure climbed by megabytes a minute while you stood still, when every
+  other addon's stood flat.** The display recomputes the queue four times a second whether or not
+  anything changed, and every recompute allocated about 30 KB it then threw away: the queue rebuilt
+  its whole simulation scratch state (thirty closures, six tables) each time; the per-frame cache
+  below threw its tables away every frame and made new ones -- it had made the growth worse, not
+  better; the aura scan built a record per buff per frame; and the queue tables, the pack lookup and
+  the visibility check each added a little. Nothing is rebuilt now: the simulation state is made
+  once and reset, the caches are stamped on permanent tables, aura records persist, the queue is
+  double-buffered. Measured on the shipped Shockadin build with a moving clock: **21.5 KB per
+  recompute before, 0.01 KB after**, nothing retained across 3000 recomputes. The answers only a
+  rune, rank, level or gear change can move -- a spell's mana cost, which runes are engraved, the
+  soul on your shoulders, your weapon -- are read once and again on those events, and on entering
+  the world. A new spec ticks the whole stack with a moving clock and fails if a steady rotation
+  allocates again.
+- **New: `/elm debug alloc` says which question one refresh pays for.** `/elm debug memory` can say the
+  simulation allocated so much per refresh and nothing more; this measures a single refresh on a
+  fresh frame and charges it to each thing the rotation asked -- cooldowns, buffs, the seal, runes,
+  set bonuses -- plus whatever none of them accounts for, and says whether the spellbook cache is
+  holding and how often a character change has emptied it.
+- **Fixed: a talent respec that learned no new spell left a held mana cost stale** (Benediction moves
+  a seal's cost). Talent changes now clear the held answers like a rune or a level does.
+- **Fixed: the rotation asked the game 764 questions to work out one suggestion.** It now asks about
+  60. The queue looks five casts ahead across every line of your rotation, and nothing remembered an
+  answer between one question and the next — so the same handful of facts (is this on cooldown, do
+  you know it, what are you wearing) were fetched from the client hundreds of times for a single
+  refresh, four times a second. None of them can change without a frame passing, so none of them
+  needed asking twice. Measured in game before the fix: **111 KB of memory a second, 80–91% of it
+  here.**
+- **Fixed: working out the global cooldown scanned your whole spellbook, ten times per refresh.**
+  Two separate functions each walked every spell in the rotation looking for one showing a global
+  cooldown — and out of combat nothing is, so both ran to the end every time, once per look-ahead
+  step. They now share one pass and remember the answer for the frame. On its own that was 264 of
+  the 764 calls, before your rotation's own conditions had asked anything.
+- **Fixed: counting your set pieces re-read all nineteen equipment slots once per set**, and rebuilt
+  the set's item list every time it did. Six sets meant 114 reads to answer nineteen questions.
+- **`/elm debug memory` now says which PART of the display loop the memory went to.** Knowing the
+  loop owns the growth is not the same as knowing what to rewrite, so the measurement now breaks the
+  running window down by phase — reading the visibility, resolving the build, simulating the queue,
+  and each renderer by name — with a rate, a call count and a per-call cost for each. The accounting
+  is off unless a measurement is running, so an ordinary frame pays one comparison for it.
+- **New: `/elm debug memory` — is the memory growth actually Elmira's?** The client reports one
+  number per addon and it only ever goes up; it cannot tell a leak from churn, and it cannot tell
+  our allocations from those of the shared libraries we happen to own. This measures the one thing
+  that separates them: it samples Elmira's memory for twenty seconds with the display running, then
+  for twenty with the display suspended, and compares the two rates. If they match, nothing in the
+  render loop is responsible.
+- **New: `/elm debug libs` — which shared libraries the whole UI is getting from us.** LibStub hands
+  out exactly one copy of each library, and the client bills a function's memory to the addon whose
+  file defined it. Elmira embeds eighteen libraries, so whenever our copy is the one that won, every
+  *other* addon's use of it is charged to Elmira's memory figure — ElvUI's event dispatch, WeakAuras'
+  glow animations, everyone's timers. This lists exactly which ones those are, and `/elm debug perf`
+  now says so beside the number instead of leaving it to be read as a leak.
 - **Fixed: Elmira was by far the most memory-hungry addon on the list, and did not need to be.**
   Every time the rotation asked whether you had a buff, it walked all forty aura slots and asked the
   game about each one **twice** — the second time only to learn which spell it was, which the first

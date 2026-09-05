@@ -40,6 +40,13 @@ end
 
 ns.log = function(fmt, ...) NA:Printf(fmt, ...) end
 
+-- The second half of the library-ownership probe (Adapters/LibOwner.lua, listed before embeds.xml).
+-- Sealed HERE, at file scope of the last file in our TOC, because that is still inside our own load:
+-- every file between embeds.xml and this line is ours and none calls LibStub:NewLibrary, and no
+-- other addon's code can run until our TOC finishes. Deferring it to OnInitialize would let every
+-- addon that loads after us register its libraries first, and we would report theirs as ours.
+if ns.LibOwner then ns.LibOwner.sealAfterEmbeds() end
+
 -- Overrides the no-op in Core/Slash.lua. Only ONE snapshot is kept: the dump is a diagnostic, and
 -- docs/12 budgets the Insights/Tracker ENCOUNTER history (20/100/250 records), which is a different
 -- thing from the recorder's mark/cast ring buffer — that one is budgeted in Core/Recorder.lua itself.
@@ -111,6 +118,9 @@ function NA:OnInitialize()
   self:RegisterEvent("PLAYER_LEVEL_UP", "OnGearOrCharacterChanged")
   -- Learning a rank changes which spells `known` can see, and the adapter caches the spellbook.
   self:RegisterEvent("SPELLS_CHANGED", "OnGearOrCharacterChanged")
+  -- A talent respec that learns no new spell fires only this, and a talent can move a spell's mana
+  -- cost (Benediction), which the adapter now holds until told otherwise.
+  self:RegisterEvent("CHARACTER_POINTS_CHANGED", "OnGearOrCharacterChanged")
   -- Engraving. The event name is SoD's and exists on no other flavor, so it is registered only
   -- where the adapter says runes are readable at all -- and inside a pcall, because registering an
   -- event the client does not know is an error, not a no-op.
@@ -147,7 +157,13 @@ function NA:OnInitialize()
     "ACTIONBAR_SLOT_CHANGED", "ACTIONBAR_PAGE_CHANGED", "UPDATE_BONUS_ACTIONBAR",
     "UPDATE_MACROS", "PLAYER_ENTERING_WORLD", "UPDATE_SHAPESHIFT_FORM",
   }) do
-    self:RegisterEvent(event, function()
+    self:RegisterEvent(event, function(fired)
+      -- Entering the world is also the moment the adapter's held answers (spell costs, runes, the
+      -- soul on the shoulders) may have been read before the client could give them. Registered
+      -- HERE rather than a second time by name, for the AceEvent reason above.
+      if fired == "PLAYER_ENTERING_WORLD" and ns.Adapter and ns.Adapter.forgetSpellbook then
+        ns.Adapter.forgetSpellbook()
+      end
       if ns.BarGlow then ns.BarGlow.Invalidate() end
       if ns.BarProviders then ns.BarProviders.Invalidate() end
       if ns.Display then ns.Display.refresh() end

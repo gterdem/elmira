@@ -15,11 +15,12 @@ describe("Display.Driver", function()
     Display.computeQueue = function() return queue, key end
   end
 
+  -- One state table per stub, not one per GetState call: the allocation specs below measure the
+  -- driver, and a stub that allocated on every read would be charged to it.
   local function stubState(inCombat, hasTarget)
-    ns.API = { GetState = function()
-      return { inCombat = function() return inCombat end,
-               targetExists = function() return hasTarget end }
-    end }
+    local state = { inCombat = function() return inCombat end,
+                    targetExists = function() return hasTarget end }
+    ns.API = { GetState = function() return state end }
   end
 
   before_each(function()
@@ -126,7 +127,9 @@ describe("Display.Driver", function()
       helper.load("Elmira/Core/UserBuilds.lua")
       ns.compileBuild = ns.compileBuild or function(b, ctx) return ns.Schema.compile(b, ctx) end
       local pack = helper.classPack("Paladin")
-      ns.API = { GetProviders = function() return { PALADIN = pack } end }
+      ns.API = { GetProvider = function(kind, class)
+        return kind == "dataPacks" and class == "PALADIN" and pack or nil
+      end }
       ns.Adapter = { playerClass = function() return "PALADIN" end }
       local fork = {}
       for k, v in pairs(pack.builds.PALADIN_EXODIN) do fork[k] = v end
@@ -484,4 +487,252 @@ describe("Display.Driver", function()
       assert.equal(1, #rendered)
     end)
   end)
+  -- `/elm debug memory` proved the render loop owns the growth; it could not say WHICH PART of the
+  -- loop, and that is the answer that decides what gets rewritten. These are the hooks that say so.
+  -- All of them must be free when nothing is measuring: the loop runs at the client's framerate.
+  describe("allocation phases (Core/MemProbe)", function()
+    local MemProbe
+
+    before_each(function()
+      MemProbe = helper.load("Elmira/Core/MemProbe.lua")
+    end)
+
+    after_each(function()
+      if MemProbe then MemProbe.stopPhases() end
+    end)
+
+    local function phaseNames()
+      local names = {}
+      for _, row in ipairs(MemProbe.stopPhases()) do names[row.name] = row.calls end
+      return names
+    end
+
+    it("records nothing at all while no measurement is running", function()
+      tick()
+      assert.is_false(MemProbe.isProfiling())
+      assert.same({}, MemProbe.stopPhases())
+    end)
+
+    it("names the visibility check and every renderer once a measurement starts", function()
+      Display.register("second", function() end)
+      MemProbe.startPhases()
+      tick()
+      local names = phaseNames()
+      assert.equal(1, names["visibility"], "the visibility read is its own phase")
+      assert.equal(1, names["render:test"])
+      assert.equal(1, names["render:second"], "each renderer is attributed by name, not lumped")
+    end)
+
+    -- Going hidden paints once, on purpose, so the strip actually disappears -- and that paint is
+    -- real work that has to be attributed. What a hidden tick must NEVER show is a queue: the whole
+    -- point of the hidden path is that it computes none, and a `simulate` row here would mean the
+    -- throttle had stopped working.
+    it("attributes the paint that hides the display, and no queue at all", function()
+      ns.db.profile.visibility = "combat"
+      MemProbe.startPhases()
+      assert.equal("hidden", tick())
+      assert.equal("hidden", tick())
+      local names = phaseNames()
+      assert.equal(2, names["visibility"], "every tick reads it; that is what makes it cheap or not")
+      assert.equal(1, names["render:test"], "the transition paints once, the second tick is free")
+      assert.is_nil(names["simulate"], "a hidden tick must not compute a queue")
+    end)
+
+    -- The two halves of computeQueue fail for different reasons: resolving the build should be a
+    -- cache hit costing nothing, while simulating is hundreds of client calls. One combined number
+    -- cannot tell them apart, which is the whole reason this split exists.
+    -- The split is only worth having if each half is measured from its OWN starting point. Reusing
+    -- the build's mark for the simulation would still produce two rows, both named correctly and
+    -- both with a plausible call count -- and the simulation's number would silently include
+    -- everything the build allocated. So the fixture makes the build expensive and the simulation
+    -- free, and asserts they do not come back looking alike.
+    it("splits the queue into resolving the build and simulating it, from separate marks", function()
+      local D = helper.load("Elmira/Display/Driver.lua")   -- fresh, with the real computeQueue
+      local sink
+      D.activeBuild = function()
+        sink = {}
+        for i = 1, 2000 do sink[i] = { i } end
+        return { entries = {} }, "PALADIN_EXODIN"
+      end
+      ns.Simulation = { queue = function() return { { spell = "EXORCISM" } } end }
+      MemProbe.startPhases()
+      -- The collector paused for the span being measured. Allocating 2000 tables under Lua 5.1's
+      -- incremental GC provokes collection steps of its own, and a phase that frees more than it
+      -- allocates reads as zero -- which is correct behaviour (MemProbe counts positive steps only)
+      -- and makes the assertion below a coin toss. WoW never runs with the collector stopped; this
+      -- is the fixture holding still, not the code under test behaving differently.
+      collectgarbage("stop")
+      local queue, key = D.computeQueue(3)
+      collectgarbage("restart")
+      assert.equal("PALADIN_EXODIN", key)
+      assert.equal(1, #queue)
+      assert.equal(2000, #sink)
+
+      local rows = {}
+      for _, row in ipairs(MemProbe.stopPhases()) do rows[row.name] = row end
+      assert.equal(1, rows["build"].calls)
+      assert.equal(1, rows["simulate"].calls)
+      assert.is_true(rows["build"].kb > 10, "2000 tables have to land somewhere: " .. rows["build"].kb)
+      assert.is_true(rows["simulate"].kb < rows["build"].kb / 2,
+        "the simulation must not be charged for what the build allocated")
+    end)
+
+    -- A build that will not compile returns before the simulation: charging `simulate` for a run
+    -- that never happened would invent a phase out of nothing.
+    it("does not attribute a simulation that never ran", function()
+      local D = helper.load("Elmira/Display/Driver.lua")
+      D.activeBuild = function() return nil, "BROKEN" end
+      MemProbe.startPhases()
+      assert.is_nil(D.computeQueue(3))
+      local names = phaseNames()
+      assert.equal(1, names["build"])
+      assert.is_nil(names["simulate"])
+    end)
+  end)
+
+  -- Memory round 3. Most recomputes come back "unchanged", and every one of them used to allocate a
+  -- fresh queue: five slot tables, four times a second, standing still. The tick now owns two
+  -- buffers and computes into whichever is NOT on screen, so the queue being shown survives the
+  -- recompute untouched and an unchanged recompute allocates nothing.
+  describe("double-buffered queue", function()
+    local computed
+    local function realComputeQueue()
+      -- The real computeQueue with a stand-in Simulation that honours `into`, as the real one does.
+      Display.computeQueue = nil
+      local D = helper.load("Elmira/Display/Driver.lua")
+      D.register("test", function(queue, key, visible)
+        rendered[#rendered + 1] = { queue = queue, key = key, visible = visible }
+      end)
+      local build = { entries = {} }
+      D.activeBuild = function() return build, "PALADIN_EXODIN" end
+      ns.Simulation = { queue = function(_, _, _, into)
+        local out = into or {}
+        for i = #computed + 1, #out do out[i] = nil end
+        for i, spell in ipairs(computed) do
+          out[i] = out[i] or {}
+          out[i].spell = spell
+        end
+        return out
+      end }
+      return D
+    end
+
+    it("leaves the queue on screen untouched while an unchanged recompute runs", function()
+      computed = { "EXORCISM", "JUDGEMENT" }
+      local D = realComputeQueue()
+      assert.equal("rendered", D.tick(1))
+      local shown = rendered[#rendered].queue
+      assert.equal("EXORCISM", shown[1].spell)
+      assert.equal("unchanged", D.tick(2))
+      assert.equal("unchanged", D.tick(3))
+      assert.equal("EXORCISM", shown[1].spell, "the shown table was not written over")
+      assert.equal(2, #shown)
+    end)
+
+    it("swaps buffers on a change and alternates between the same two tables", function()
+      computed = { "EXORCISM" }
+      local D = realComputeQueue()
+      D.tick(1)
+      local first = rendered[#rendered].queue
+      computed = { "JUDGEMENT" }
+      assert.equal("rendered", D.tick(2))
+      local second = rendered[#rendered].queue
+      assert.are_not.equal(first, second, "a changed queue lands in the other buffer")
+      assert.equal("EXORCISM", first[1].spell, "the previous buffer still holds what it showed")
+      computed = { "CRUSADER_STRIKE" }
+      D.tick(3)
+      assert.equal(first, rendered[#rendered].queue, "the third queue reuses the first buffer")
+      assert.equal("CRUSADER_STRIKE", first[1].spell)
+      computed = { "EXORCISM" }
+      D.tick(4)
+      assert.equal(second, rendered[#rendered].queue)
+    end)
+
+    it("hands the tick's buffer to Simulation and no buffer to anyone else", function()
+      computed = { "EXORCISM" }
+      local D = realComputeQueue()
+      local given = {}
+      local sim = ns.Simulation.queue
+      ns.Simulation.queue = function(b, s, d, into) given[#given + 1] = into; return sim(b, s, d, into) end
+      D.tick(1)
+      assert.is_table(given[1], "the tick passes a buffer")
+      D.computeQueue(3)
+      assert.is_nil(given[2], "a direct caller gets fresh tables it may keep")
+    end)
+
+    it("allocates nothing for a tick whose queue did not change", function()
+      computed = { "EXORCISM", "JUDGEMENT", "CRUSADER_STRIKE" }
+      ns.db.profile.visibility = "combat_or_target"
+      stubState(true, true)
+      local D = realComputeQueue()
+      D.tick(1); D.tick(2); D.tick(3)
+      local changed = 0
+      local kb = helper.allocatedKB(function()
+        for at = 4, 13 do if D.tick(at) ~= "unchanged" then changed = changed + 1 end end
+      end)
+      assert.equal(0, changed)
+      assert.is_true(kb == nil or kb < 0.05, string.format("ten unchanged ticks allocated %.3f KB", kb or 0))
+    end)
+  end)
+
+  describe("resolving the pack and its compile context without allocating", function()
+    local pack
+    before_each(function()
+      helper.load("Elmira/Adapters/Interface.lua")
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Profiles.lua")
+      helper.load("Elmira/Core/UserBuilds.lua")
+      helper.load("Elmira/Core/Slash.lua")        -- the real compile cache
+      pack = helper.classPack("Paladin")
+      ns.API = { GetProvider = function(kind, class)
+        return kind == "dataPacks" and class == "PALADIN" and pack or nil
+      end }
+      ns.Adapter = { playerClass = function() return "PALADIN" end }
+      ns.db = { profile = { activeBuild = "PALADIN_EXODIN" }, global = { userBuilds = {} } }
+    end)
+
+    it("resolves the pinned build through the uncopied provider lookup", function()
+      local compiled, key, reason = Display.activeBuild()
+      assert.equal("PALADIN_EXODIN", key)
+      assert.equal("pinned", reason)
+      assert.equal("PALADIN_EXODIN", compiled.key)
+    end)
+
+    it("hands the compile cache the same context every tick, so the compile is a hit", function()
+      local a = Display.activeBuild()
+      local b = Display.activeBuild()
+      assert.equal(a, b, "same compiled table: the ctx was reused, so the cache hit")
+      local kb = helper.allocatedKB(function() for _ = 1, 10 do Display.activeBuild() end end)
+      assert.is_true(kb == nil or kb < 0.05, string.format("ten resolutions allocated %.3f KB", kb or 0))
+    end)
+
+    it("rebuilds the context when the pack's tables are swapped underneath it", function()
+      local a = Display.activeBuild()
+      local spells = {}
+      for k, v in pairs(pack.spells) do spells[k] = v end
+      pack.spells = spells
+      local b = Display.activeBuild()
+      assert.are_not.equal(a, b, "new spell table, new ctx, new compile")
+    end)
+
+    it("says so when the API cannot look a provider up", function()
+      ns.API = { GetProviders = function() return { PALADIN = pack } end }
+      assert.is_nil(Display.currentPack())
+    end)
+  end)
+
+  describe("shouldShow() without a closure", function()
+    it("reads combat and target through one reused context", function()
+      ns.db.profile.visibility = "combat_or_target"
+      stubState(false, false)
+      assert.is_false((Display.shouldShow()))
+      stubState(false, true)
+      assert.is_true((Display.shouldShow()))
+      stubState(true, false)
+      assert.is_true((Display.shouldShow()))
+      local kb = helper.allocatedKB(function() for _ = 1, 10 do Display.shouldShow() end end)
+      assert.is_true(kb == nil or kb < 0.05, string.format("ten visibility reads allocated %.3f KB", kb or 0))
+    end)
+  end)
+
 end)

@@ -60,4 +60,20 @@ function helper.classPack(class)
   return captured[1].value(), captured[1].class
 end
 
+-- Kilobytes `fn` allocated, measured with the collector stopped -- or nil when it cannot be
+-- measured. It cannot be measured under a debug hook: luacov's line hook allocates on every line it
+-- sees, so under `make coverage` the number is the hook's, not the code's. Callers assert on the
+-- number when there is one and let a coverage run pass through; the mutation gate and the plain
+-- suite run without a hook, and those are the runs the thresholds guard.
+function helper.allocatedKB(fn)
+  local hooked = debug.gethook() ~= nil
+  collectgarbage("stop")
+  local before = collectgarbage("count")
+  fn()
+  local kb = collectgarbage("count") - before
+  collectgarbage("restart")
+  if hooked then return nil end
+  return kb
+end
+
 return helper

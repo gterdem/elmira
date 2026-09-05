@@ -394,6 +394,160 @@ describe("Simulation.queue", function()
         "casting the seal must satisfy no_seal for the following slots")
     end)
   end)
+  -- Memory round 3: the virtual state was rebuilt for every queue -- thirty closures and six tables,
+  -- four times a second standing still -- and it was a quarter of everything the render loop
+  -- allocated per recompute. It is built once per real state now and RESET between queues. Each
+  -- case here is one field of that reset: leave the field un-reset and the case fails.
+  describe("one virtual state per real state, reset between queues", function()
+    it("does not carry the previous queue's simulated cooldowns or clock into the next", function()
+      local state = FakeState.new{ gcd = 1.5 }
+      local build = fiveAbilityBuild()
+      local first = Simulation.queue(build, state, 5)
+      assert.equal(5, #first)
+      local second = Simulation.queue(build, state, 5)
+      assert.equal(5, #second, "a leaked cooldown override would leave every later slot empty")
+      for i = 1, 5 do
+        assert.equal(first[i].spell, second[i].spell)
+        assert.equal(first[i].t, second[i].t, "a leaked clock would push slot " .. i .. " later")
+      end
+      assert.equal(1.5, second[2].t)
+    end)
+
+    it("does not carry a spell's own simulated aura into the next queue", function()
+      local build = compileBuild({
+        schema = 1, key = "SELF_BUFFS", name = "x", class = "PALADIN", flavor = "SoD",
+        entries = {
+          { spell = "JUDGEMENT", when = { {"no_buff", "JUDGEMENT"} } },
+          { spell = "EXORCISM",  when = { {"no_buff", "EXORCISM"} } },
+        },
+      })
+      local state = FakeState.new{ gcd = 1.5 }
+      local first = Simulation.queue(build, state, 2)
+      assert.same({ "JUDGEMENT", "EXORCISM" }, { first[1].spell, first[2].spell })
+      local second = Simulation.queue(build, state, 2)
+      assert.equal(2, #second, "a leaked self-buff on EXORCISM would empty slot 2")
+      assert.equal("EXORCISM", second[2].spell)
+    end)
+
+    it("does not carry a used item's suppression into the next queue", function()
+      local state = FakeState.new{ gcd = 1.5, items = { [13] = {} } }
+      local usesFirst = compileBuild({
+        schema = 1, key = "ITEM_FIRST", name = "x", class = "PALADIN", flavor = "SoD",
+        entries = { { item = 13, hold = true }, { spell = "JUDGEMENT" } },
+      })
+      local usesSecond = compileBuild({
+        schema = 1, key = "ITEM_SECOND", name = "x", class = "PALADIN", flavor = "SoD",
+        entries = { { spell = "JUDGEMENT" }, { item = 13, hold = true } },
+      })
+      assert.equal(13, Simulation.queue(usesFirst, state, 2)[1].item)
+      local next_ = Simulation.queue(usesSecond, state, 2)
+      assert.equal(2, #next_, "a leaked item suppression would hide the trinket in slot 2")
+      assert.equal(13, next_[2].item)
+    end)
+
+    it("does not carry the previous queue's spent mana into the next", function()
+      local build = compileBuild({
+        schema = 1, key = "MANA", name = "x", class = "PALADIN", flavor = "SoD",
+        entries = {
+          { spell = "JUDGEMENT" },
+          { spell = "EXORCISM", when = { {"resource", "MANA", min = 300} } },
+        },
+      })
+      -- 1000 mana, JUDGEMENT costs 400: one queue leaves 600 (EXORCISM castable), two leaked
+      -- would leave 200 (not).
+      local state = FakeState.new{ gcd = 1.5, powerCost = { JUDGEMENT = 400, EXORCISM = 0 } }
+      assert.equal("EXORCISM", Simulation.queue(build, state, 2)[2].spell)
+      local second = Simulation.queue(build, state, 2)
+      assert.equal(2, #second, "leaked spending would put EXORCISM out of mana")
+      assert.equal("EXORCISM", second[2].spell)
+    end)
+
+    it("does not carry the previous queue's simulated seal into the next", function()
+      local sealFirst = compileBuild({
+        schema = 1, key = "SEAL_FIRST", name = "x", class = "PALADIN", flavor = "SoD",
+        entries = { { spell = "SEAL_OF_MARTYRDOM", when = { {"no_seal"} } }, { spell = "JUDGEMENT" } },
+      })
+      local sealSecond = compileBuild({
+        schema = 1, key = "SEAL_SECOND", name = "x", class = "PALADIN", flavor = "SoD",
+        entries = { { spell = "JUDGEMENT" }, { spell = "SEAL_OF_RIGHTEOUSNESS", when = { {"no_seal"} } } },
+      })
+      local state = FakeState.new{ gcd = 1.5 }
+      assert.equal("SEAL_OF_MARTYRDOM", Simulation.queue(sealFirst, state, 2)[1].spell)
+      local next_ = Simulation.queue(sealSecond, state, 2)
+      assert.equal(2, #next_, "a leaked seal would make `no_seal` fail in slot 2")
+      assert.equal("SEAL_OF_RIGHTEOUSNESS", next_[2].spell)
+    end)
+
+    it("builds a fresh virtual state when the real state changes underneath it", function()
+      local build = fiveAbilityBuild()
+      local free = FakeState.new{ gcd = 1.5 }
+      assert.equal("EXORCISM", Simulation.queue(build, free, 3)[2].spell)
+      -- JUDGEMENT on a 10 s cooldown in the SECOND state. Slot 1 reads the real state either way;
+      -- slot 2 reads the virtual one, and a virtual state still wrapping the first real state would
+      -- offer JUDGEMENT there.
+      local busy = FakeState.new{ gcd = 1.5, cooldowns = { JUDGEMENT = 10 } }
+      local q = Simulation.queue(build, busy, 3)
+      assert.equal("EXORCISM", q[1].spell)
+      assert.equal("CRUSADER_STRIKE", q[2].spell, "slot 2 must see the second state's cooldowns")
+    end)
+  end)
+
+  -- The other half of the same fix: the output tables. Display/Driver double-buffers the queue,
+  -- so a recompute that changes nothing -- which is nearly all of them -- allocates nothing.
+  describe("refilling a caller's buffer (`into`)", function()
+    it("returns the very table it was given, with the slot tables reused", function()
+      local state = FakeState.new{ gcd = 1.5 }
+      local build = fiveAbilityBuild()
+      local buffer = {}
+      local out = Simulation.queue(build, state, 3, buffer)
+      assert.equal(buffer, out)
+      local slotTables = { out[1], out[2], out[3] }
+      Simulation.queue(build, state, 3, buffer)
+      for i = 1, 3 do assert.equal(slotTables[i], buffer[i], "slot " .. i .. " must be the same table") end
+      assert.equal("JUDGEMENT", buffer[1].spell)
+      assert.equal(1.5, buffer[2].t)
+      assert.equal("CRUSADER_STRIKE", buffer[3].spell)
+    end)
+
+    it("truncates a buffer that held more slots than this queue found", function()
+      local build = fiveAbilityBuild()
+      local buffer = Simulation.queue(build, FakeState.new{ gcd = 1.5 }, 5, {})
+      assert.equal(5, #buffer)
+      Simulation.queue(build, FakeState.new{ gcd = 1.5 }, 2, buffer)
+      assert.equal(2, #buffer)
+      assert.is_nil(buffer[3])
+    end)
+
+    it("truncates to one for depth one", function()
+      local build = fiveAbilityBuild()
+      local buffer = Simulation.queue(build, FakeState.new{ gcd = 1.5 }, 5, {})
+      Simulation.queue(build, FakeState.new{ gcd = 1.5 }, 1, buffer)
+      assert.equal(1, #buffer)
+    end)
+
+    it("empties the buffer on every early exit, never leaving last time's queue in it", function()
+      local build = fiveAbilityBuild()
+      local live = FakeState.new{ gcd = 1.5 }
+      local buffer = Simulation.queue(build, live, 3, {})
+      assert.equal(3, #buffer)
+      assert.equal(0, #Simulation.queue(nil, live, 3, buffer), "no build")
+      Simulation.queue(build, live, 3, buffer)
+      assert.equal(0, #Simulation.queue(build, live, 0, buffer), "depth below one")
+      Simulation.queue(build, live, 3, buffer)
+      local silenced = FakeState.new{ gcd = 1.5, usable = { JUDGEMENT = false, EXORCISM = false,
+        CRUSADER_STRIKE = false, DIVINE_STORM = false, HAMMER_OF_WRATH = false } }
+      assert.equal(0, #Simulation.queue(build, silenced, 3, buffer), "nothing castable")
+      Simulation.queue(build, live, 3, buffer)
+      helper.ns().Engine = nil
+      Simulation.resetWarnings()
+      assert.equal(0, #Simulation.queue(build, live, 3, buffer), "engine missing")
+    end)
+
+    it("a caller without a buffer still gets a fresh, empty table on an early exit", function()
+      assert.same({}, Simulation.queue(nil, FakeState.new{}, 3))
+    end)
+  end)
+
 end)
 
 -- M1 audit findings 1-3: every one of these used to fail silently or confusingly. They are grouped
@@ -428,6 +582,15 @@ describe("Simulation dependency and normalisation guards", function()
     assert.same({}, q)
     assert.equal(1, #logged)
     assert.matches("Core/Engine%.lua", logged[1])
+  end)
+
+  -- No build is the normal state for eight of nine classes, not a wiring fault: it must come back
+  -- empty and SILENT, before the dependency checks get a chance to complain about something else.
+  it("answers an absent build with an empty queue and no dependency warning", function()
+    loadAll{ withoutEngine = true }
+    assert.same({}, Simulation.queue(nil, FakeState.new{ gcd = 1.5 }, 3))
+    assert.same({}, Simulation.queue({ key = "NO_ENTRIES" }, FakeState.new{ gcd = 1.5 }, 3))
+    assert.equal(0, #logged)
   end)
 
   it("says so when Adapters/Interface.lua never loaded", function()
@@ -495,4 +658,5 @@ describe("Simulation dependency and normalisation guards", function()
       assert.is_nil(v:swingRemaining())
     end)
   end)
+
 end)

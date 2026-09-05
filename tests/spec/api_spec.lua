@@ -87,4 +87,21 @@ describe("Elmira.API v1 registry", function()
   it("GetProviders() returns an empty table for an unknown registry", function()
     assert.same({}, API.GetProviders("nonsense"))
   end)
+
+  -- The render loop resolves the player's pack on every recompute. GetProviders copies the whole
+  -- registry to answer that, which was an allocation four times a second standing still; this is
+  -- the uncopied single lookup Display/Driver uses instead.
+  it("GetProvider() answers one registered provider by key, without copying", function()
+    API.RegisterDataPack{ class = "PALADIN", flavor = "SoD", builds = {} }
+    local pack = API.GetProvider("dataPacks", "PALADIN")
+    assert.equal("PALADIN", pack.class)
+    assert.equal(pack, API.GetProviders("dataPacks").PALADIN, "the same spec table, not a copy")
+  end)
+
+  it("GetProvider() answers nil for an unknown registry, an unknown key, and no key", function()
+    API.RegisterDataPack{ class = "PALADIN", flavor = "SoD", builds = {} }
+    assert.is_nil(API.GetProvider("nonsense", "PALADIN"))
+    assert.is_nil(API.GetProvider("dataPacks", "MAGE"))
+    assert.is_nil(API.GetProvider("dataPacks", nil))
+  end)
 end)

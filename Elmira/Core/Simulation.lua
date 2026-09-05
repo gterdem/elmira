@@ -82,7 +82,7 @@ local function newVirtualState(real)
   -- here rather than by special-casing the entry. Everything else stays as documented: an entry that
   -- depends on an aura it just consumed is still not modelled (see M5d twist/stack).
   function v:seal()
-    if self.sealOverride ~= nil then return self.sealOverride end
+    if self.sealOverride then return self.sealOverride end
     return real:seal()
   end
 
@@ -92,7 +92,7 @@ local function newVirtualState(real)
   -- so it can only ever answer `buff`/`no_buff` about the spell that was just cast -- an aura with a
   -- different key (Avenging Wrath's buff, a set proc) is still the live value, and still not modelled.
   function v:buff(key)
-    if self.selfBuff[key] ~= nil then return 1, QUEUE_HORIZON end
+    if self.selfBuff[key] then return 1, QUEUE_HORIZON end
     return real:buff(key)
   end
 
@@ -102,7 +102,7 @@ local function newVirtualState(real)
     -- Time passing shortens a live cooldown; a spell we simulated casting has its own remaining.
     local live = base - self.elapsed
     if live < 0 then live = 0 end
-    if override == nil then return live end
+    if not override then return live end
     return math.max(override - self.elapsed, live)
   end
 
@@ -110,7 +110,7 @@ local function newVirtualState(real)
     local override = self.itemOverride[slot]
     local live = real:itemCooldown(slot) - self.elapsed
     if live < 0 then live = 0 end
-    if override == nil then return live end
+    if not override then return live end
     return math.max(override - self.elapsed, live)
   end
 
@@ -147,6 +147,33 @@ local function newVirtualState(real)
     end
   end
   return v
+end
+
+-- The virtual state is built ONCE per real state and reused for every queue after that. Building
+-- it is thirty-odd closures and six tables, and the display asks for a queue four times a second
+-- whether or not anything changed: measured headlessly, that construction alone was a quarter of
+-- everything the render loop allocated per recompute.
+--
+-- Reset writes `false`, not nil, into the override tables. Clearing a key with nil leaves a dead
+-- key behind, and once the collector has passed the next write for the same spell has to find a
+-- fresh node -- which is an allocation, and often a rehash. A key that is always present and
+-- merely false costs nothing to set again. The readers above test truthiness for exactly this
+-- reason; a spell that was never cast reads false and nil alike.
+local function resetVirtualState(v)
+  for key in pairs(v.cdOverride) do v.cdOverride[key] = false end
+  for slot in pairs(v.itemOverride) do v.itemOverride[slot] = false end
+  for key in pairs(v.selfBuff) do v.selfBuff[key] = false end
+  for kind in pairs(v.spent) do v.spent[kind] = false end
+  v.elapsed = 0
+  v.sealOverride = false
+  return v
+end
+
+local held = nil -- mutants: equivalent deletion only makes it a global
+
+local function virtualStateFor(real)
+  if not held or held._real ~= real then held = newVirtualState(real) end
+  return resetVirtualState(held)
 end
 
 -- Records the effect of casting `entry` at the current virtual time.
@@ -210,35 +237,57 @@ local function applyCast(v, entry)
   end
 end
 
--- Simulation.queue(build, state, depth) -> { {spell=|item=, entry=, t=, cdVolatile=, hold=}, ... }
+-- Writes one queue slot, reusing the table already at that index when the caller handed one in.
+local function fill(out, index, entry, t)
+  local slot = out[index]
+  if not slot then
+    slot = {}
+    out[index] = slot
+  end
+  slot.spell, slot.item, slot.entry, slot.t = entry.spell, entry.item, entry, t
+  slot.cdVolatile, slot.hold, slot.label = entry.cdVolatile, entry.hold, entry.label
+end
+
+-- Drops everything past `n`, so a reused buffer that held five slots last time cannot report five
+-- when this queue found three.
+local function truncate(out, n)
+  for i = #out, n + 1, -1 do out[i] = nil end
+  return out
+end
+
+-- Simulation.queue(build, state, depth, into) -> { {spell=|item=, entry=, t=, cdVolatile=, hold=}, ... }
 -- Slot 1 uses live state; later slots use the virtual state at the accumulated offset.
-function Simulation.queue(build, state, depth)
-  if not build or not build.entries then return {} end
+--
+-- `into` is optional: a table from a previous call, refilled in place instead of allocating a new
+-- one. Display/Driver double-buffers with it, because the queue it is showing must not be written
+-- over while a fresh one is being computed; every other caller leaves it out and gets fresh tables.
+function Simulation.queue(build, state, depth, into)
+  local out = into or {}
+  if not build or not build.entries then return truncate(out, 0) end
   -- Distinguish "nothing castable" (a legitimate empty queue) from "Core is not wired up".
-  if not requireDep("Core/Engine.lua", ns.Engine) then return {} end
-  if not requireDep("Adapters/Interface.lua", ns.Interface and ns.Interface.CONTRACT) then return {} end
+  if not requireDep("Core/Engine.lua", ns.Engine) then return truncate(out, 0) end
+  if not requireDep("Adapters/Interface.lua", ns.Interface and ns.Interface.CONTRACT) then
+    return truncate(out, 0)
+  end
   local Engine = ns.Engine
+  -- No guard for a depth below one: the loop below does not run and the final truncate empties
+  -- the buffer, which is the same answer a guard would give.
   depth = depth or 3
-  if depth < 1 then return {} end
 
-  local out = {}
   local first = Engine.pick(build, state, 0)
-  if not first then return out end
-  out[1] = { spell = first.spell, item = first.item, entry = first, t = 0,
-             cdVolatile = first.cdVolatile, hold = first.hold, label = first.label }
-  if depth == 1 then return out end
+  if not first then return truncate(out, 0) end
+  fill(out, 1, first, 0)
 
-  local v = newVirtualState(state)
+  local v = virtualStateFor(state)
   applyCast(v, first)
 
   for slot = 2, depth do
     local entry = Engine.pick(build, v, v.elapsed)
-    if not entry then break end
-    out[slot] = { spell = entry.spell, item = entry.item, entry = entry, t = v.elapsed,
-                  cdVolatile = entry.cdVolatile, hold = entry.hold, label = entry.label }
+    if not entry then return truncate(out, slot - 1) end
+    fill(out, slot, entry, v.elapsed)
     applyCast(v, entry)
   end
-  return out
+  return truncate(out, depth)
 end
 
 -- Exposed for specs. The virtual state is where the simulation's subtle bugs live — a cooldown that
