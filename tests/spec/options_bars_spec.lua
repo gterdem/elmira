@@ -23,6 +23,7 @@ describe("Options (action bars)", function()
     ns.Glow = { STYLES = { PIXEL = {}, BUTTON = {}, AUTOCAST = {} }, StopAll = function() end }
     ns.Queue = { Layout = function() end }
     ns.addon = { ScheduleTimer = function() return "timer" end, CancelTimer = function() end }
+    helper.load("Elmira/Options/Rotation.lua")
     Options = helper.load("Elmira/Options/Options.lua")
     return Options
   end
@@ -172,13 +173,15 @@ describe("Options (action bars)", function()
       orders[#orders + 1] = g.order
     end
     table.sort(orders)
-    assert.equal("queue", seen[orders[1]])
-    assert.equal("bars", seen[orders[2]])
-    assert.equal("glow", seen[orders[3]])
+    -- The Rotation section is the front door (ADR-0015 SS1), so it sorts above the display settings
+    -- rather than sitting at the bottom where Import/Export used to be.
+    assert.equal("rotation", seen[orders[1]])
+    assert.equal("queue", seen[orders[2]])
+    assert.equal("bars", seen[orders[3]])
+    assert.equal("glow", seen[orders[4]])
     -- Everything that TELLS you something lives under one heading (ADR-0015 F37), rather than as
     -- three more peers of "Queue": announcements, flares and cue sounds are one question.
-    assert.equal("notifications", seen[orders[4]])
-    assert.equal("exchange", seen[orders[5]])
+    assert.equal("notifications", seen[orders[5]])
   end)
 
   it("groups announcements, flares and cue sounds under Notifications, each exactly once", function()

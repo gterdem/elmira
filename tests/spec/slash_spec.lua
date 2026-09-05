@@ -74,6 +74,39 @@ describe("Core.Slash", function()
       assert.truthy(Slash.run("import ELM1:x")[1]:find("builds module is not loaded", 1, true))
     end)
 
+    -- ADR-0015 SS1: /elm rotation is the front door, and it must land ON the Rotation section
+    -- rather than wherever the panel happened to be left. `setup` stays as an alias until the
+    -- Builder lands, so no release has the old verb gone and the new panel not yet able to edit.
+    it("rotation opens the panel at the Rotation section", function()
+      local openedAt
+      ns.Options = { Open = function(path) openedAt = path; return true end }
+      assert.same({ "Opening your rotations." }, Slash.run("rotation"))
+      assert.equal("rotation", openedAt)
+    end)
+
+    -- Above `config` and `setup`: the front door should be the first of the three you see in help,
+    -- not buried under the verb it replaces.
+    it("lists rotation ahead of config and setup in help", function()
+      local order = {}
+      for _, line in ipairs(Slash.run("help")) do
+        local verb = line:match("^%s%s(%S+)")
+        if verb then order[verb] = #order + 1; order[#order + 1] = verb end
+      end
+      assert.is_truthy(order.rotation, "rotation is missing from help")
+      assert.is_true(order.rotation < order.config, "rotation should sort above config")
+      assert.is_true(order.rotation < order.setup, "rotation should sort above setup")
+    end)
+
+    it("rotation says so when the options are not loaded", function()
+      ns.Options = nil
+      assert.truthy(Slash.run("rotation")[1]:find("not loaded", 1, true))
+    end)
+
+    it("rotation reports rather than claiming success when the panel refuses to open", function()
+      ns.Options = { Open = function() return false end }
+      assert.truthy(Slash.run("rotation")[1]:find("not loaded", 1, true))
+    end)
+
     it("export hands the string to the Options box, where it can actually be copied from", function()
       local placed
       ns.Options = { setExchangeText = function(str) placed = str end }

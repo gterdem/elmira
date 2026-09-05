@@ -716,6 +716,15 @@ Slash.register{
     return { "config: options are not loaded" }
   end,
 }
+-- The front door (ADR-0015 SS1). `setup` stays as an alias until the Builder lands, so there is
+-- never a release where the old verb is gone and the new panel cannot yet do its job.
+Slash.register{
+  key = "rotation", desc = ns.L["Choose or edit your rotation"], order = 98,
+  run = function()
+    if ns.Options and ns.Options.Open("rotation") then return { "Opening your rotations." } end
+    return { "rotation: options are not loaded" }
+  end,
+}
 Slash.register{
   key = "setup", desc = ns.L["Run the setup wizard"], order = 100,
   run = function()

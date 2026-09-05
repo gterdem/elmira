@@ -61,6 +61,9 @@ local function uniqueKey(s, base)
   return base .. "_" .. n
 end
 
+-- Exported because Options/Rotation.lua's stale-parent banner must ask the SAME question this
+-- file answers when it writes `derivedAt`. A second copy over there drifts the first time either
+-- moves, and the symptom is a banner that silently stops appearing.
 local function catalogUpdated(pack, buildKey)
   local list = pack and pack.catalog and pack.class and pack.catalog[pack.class]
   for _, entry in ipairs(list or {}) do
@@ -68,6 +71,8 @@ local function catalogUpdated(pack, buildKey)
   end
   return nil -- mutants: equivalent Lua returns nil implicitly at the end of a function
 end
+
+UserBuilds.catalogUpdated = catalogUpdated
 
 local function ctxFor(pack)
   return { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }

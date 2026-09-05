@@ -455,6 +455,12 @@ function Options.exchangeText()
   return exchangeText
 end
 
+-- The one-line result under the box. Read by Options/Rotation.lua's Share tab, which owns the
+-- widget while the state stays here.
+function Options.exchangeNote()
+  return exchangeNote
+end
+
 -- Options.importText(str) -> true, key | false. Keeps the text in the box on failure so the user
 -- can fix it, clears it on success, and leaves a one-line result under the box either way.
 function Options.importText(str)
@@ -475,21 +481,6 @@ function Options.importText(str)
   exchangeNote = string.format(L["Imported as %s. /elm profile %s to use it."], key, key)
   if ns.Display and ns.Display.refresh then ns.Display.refresh() end
   return true, key
-end
-
-local function exchangeGroup()
-  return {
-    type = "group", order = 6, name = L["Import / Export"],
-    args = {
-      text = {
-        type = "input", multiline = 8, width = "full", order = 1, name = L["Build string"],
-        desc = L["Paste an ELM1: string to import it as one of your builds. /elm export fills this box with the active build."],
-        get = function() return exchangeText end,
-        set = function(_, value) Options.importText(value) end,
-      },
-      note = { type = "description", order = 2, name = function() return exchangeNote end },
-    },
-  }
 end
 
 -- A glow setting that is a NUMBER. `hidden` is driven by the style's own argument table rather
@@ -847,7 +838,7 @@ function Options.table()
           },
         },
       },
-      exchange = exchangeGroup(),
+      rotation = ns.Rotation and ns.Rotation.group() or nil,
     },
   }
 end
@@ -877,10 +868,13 @@ end
 -- unbounded recursion on close.
 local ourClose, ourPrior -- mutants: equivalent deletion only makes these globals
 
-function Options.Open()
+-- `...` is an optional path into the options table, e.g. Options.Open("rotation") to land on the
+-- Rotation section. AceConfigDialog supports it on `Open(appName, container, ...)`; nothing used it
+-- before the Rotation section became the front door.
+function Options.Open(...)
   if not Options.dialog then Options.Register() end
   if Options.dialog then
-    Options.dialog:Open("Elmira")
+    Options.dialog:Open("Elmira", nil, ...)
     -- Move mode enables the mouse on a frame across the middle of the screen. Closing the panel
     -- has to end it, or that frame sits there eating clicks with nothing on screen to explain it.
     --

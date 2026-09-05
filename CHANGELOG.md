@@ -1,5 +1,10 @@
 # Changelog
 ## Unreleased
+- **New: a Rotation section, and `/elm rotation` to open it.** It is now the first thing in the
+  settings window: what you are running, the templates that ship for your class, and your own
+  rotations listed separately. If you are running one of your own, it says which template it came
+  from and tells you when that template has been updated since you copied it. Import / Export moved
+  here as the **Share** tab; the **Builder** tab is the editor and arrives next.
 - **Fixed: closing the settings window could leave the Escape key dead.** Elmira replaced the
   settings window's own close handler instead of adding to it, so the window was never released
   when it closed. Anything you had clicked into — the import box, a slider's number — kept the

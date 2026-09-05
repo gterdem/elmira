@@ -592,6 +592,25 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal(1, stopped)
     end)
 
+    -- The Rotation section is the front door, so /elm rotation has to land on it. AceConfigDialog
+    -- takes the path as Open(appName, container, ...); passing it as the CONTAINER would silently
+    -- open the panel wherever it was last left.
+    it("passes a section path through to the dialog, after the container slot", function()
+      local got
+      ns.Announcers = { StopMoving = function() end }
+      Options.dialog = { Open = function(_, app, container, ...) got = { app, container, ... } end }
+      assert.is_true(Options.Open("rotation"))
+      assert.same({ "Elmira", nil, "rotation" }, got)
+    end)
+
+    it("opens with no path at all, which is what /elm config wants", function()
+      local got
+      ns.Announcers = { StopMoving = function() end }
+      Options.dialog = { Open = function(_, app, container, ...) got = { app, container, ... } end }
+      assert.is_true(Options.Open())
+      assert.same({ "Elmira" }, got)
+    end)
+
     it("opens without erroring on a dialog that exposes no frames", function()
       ns.Announcers = { StopMoving = function() end }
       Options.dialog = { Open = function() end }
@@ -677,8 +696,16 @@ describe("Options (overlay/peripheral cues)", function()
 
   -- PRD F9: the Import/Export box. The import itself is Core/UserBuilds' job and is tested there;
   -- here the box must route text in and out and report the outcome under it.
+  -- The WIDGET moved to Options/Rotation.lua's Share tab (ADR-0015 SS2); the state stayed here.
+  -- This block drives that state through the accessors the tab reads, so it keeps testing the
+  -- behaviour rather than the layout. The tab's own wiring is rotation_spec's job.
   describe("Import / Export box", function()
-    local function box() return Options.table().args.exchange.args end
+    local function box()
+      return {
+        text = { get = Options.exchangeText, set = function(_, v) Options.importText(v) end },
+        note = { name = Options.exchangeNote },
+      }
+    end
 
     it("shows what /elm export placed in it", function()
       Options.setExchangeText("ELM1:abc")
@@ -693,13 +720,6 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal(Options.exchangeText(), box().text.get())
     end)
 
-    it("describes itself: a group of its own holding one multiline input", function()
-      local group = Options.table().args.exchange
-      assert.equal("group", group.type); assert.equal(6, group.order); assert.equal("Import / Export", group.name)
-      assert.equal("input", box().text.type); assert.equal(8, box().text.multiline)
-      assert.equal("Build string", box().text.name)
-      assert.truthy(box().text.desc:find("ELM1:", 1, true))
-    end)
 
     it("imports on set: clears the box, names the new fork, refreshes the display, and returns the key", function()
       local got, refreshes = nil, 0

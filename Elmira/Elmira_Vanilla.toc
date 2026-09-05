@@ -52,6 +52,7 @@ Setup\Detect.lua
 Setup\Wizard.lua
 
 # Options
+Options\Rotation.lua
 Options\Options.lua
 
 # Shipped class data (ADR-0011). Each file registers a THUNK -- it must construct nothing at load,
