@@ -326,6 +326,34 @@ describe("Display.BarGlow", function()
   -- that cannot find its button is the MOST important failure in the display, and until now it was
   -- the quietest — it degraded to the queue icon and said nothing, which is how a rank mismatch
   -- survived a whole build.
+  -- F37: this is the display's most valuable failure to notice, so it goes through Announce and the
+  -- player decides how loudly they hear it -- rather than being printed to whatever chat frame.
+  describe("noteMissing() announces rather than prints", function()
+    before_each(function()
+      ns.db = { profile = { glow = { enabled = true, barGlow = true } } }
+      BarGlow.resetAnnouncements()
+    end)
+
+    it("sends a warning naming the spell it could not place", function()
+      local said = {}
+      ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+      assert.is_true(BarGlow.noteMissing("EXORCISM"))
+      assert.equal(1, #said)
+      assert.equal("warning", said[1][1])
+      assert.is_truthy(said[1][2]:find("EXORCISM"))
+      assert.is_truthy(said[1][2]:find("/elm debug bars"))
+    end)
+
+    it("still says it the old way on a load where Announce is missing", function()
+      local printed = {}
+      ns.Announce = nil
+      ns.log = function(fmt, ...) printed[#printed + 1] = string.format(fmt, ...) end
+      assert.is_true(BarGlow.noteMissing("EXORCISM"))
+      assert.equal(1, #printed)
+      assert.is_truthy(printed[1]:find("EXORCISM"))
+    end)
+  end)
+
   describe("noteMissing()", function()
     before_each(function()
       helper.ns().db = { profile = { glow = { enabled = true, barGlow = true } } }

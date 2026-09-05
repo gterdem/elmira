@@ -23,6 +23,7 @@ Core\Colors.lua
 Core\API.lua
 Core\Packs.lua
 Core\DB.lua
+Core\Announce.lua
 Core\Schema.lua
 Core\Serialize.lua
 Core\UserBuilds.lua
@@ -43,6 +44,7 @@ Display\BarGlow.lua
 Display\BarProviders.lua
 Display\Queue.lua
 Display\Overlay.lua
+Display\Announcers.lua
 
 # Setup
 Setup\Detect.lua

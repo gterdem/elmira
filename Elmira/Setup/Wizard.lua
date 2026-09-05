@@ -168,7 +168,12 @@ end
 function Wizard.OfferOnLogin()
   local offer, why = Wizard.shouldOffer()
   if not offer then return false end
-  ns.log("Elmira: %s. Type /elm setup to choose a playstyle.", why)
+  local text = string.format("%s. Type /elm setup to choose a playstyle.", why)
+  if ns.Announce then
+    ns.Announce.emit("status", text)
+  else
+    ns.log("Elmira: %s", text)
+  end
   local char = charDB()
   -- Mark it seen either way. The prompt is once per catalog version, not once per login.
   if char then char.setupDone = Wizard.catalogVersion() end

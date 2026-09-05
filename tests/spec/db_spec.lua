@@ -45,6 +45,30 @@ describe("Core.DB", function()
     assert.is_false(DB.defaults.profile.glow.secondary)
   end)
 
+  -- F37. `routes` starts EMPTY on purpose: Core/Announce falls back to its shipped defaults, so a
+  -- category added by a later release arrives with its intended routing instead of silent, and a
+  -- user who never opened the panel is not carrying a frozen copy of an old default set.
+  it("ships announcements with no stored routing and the default chat window", function()
+    local a = DB.defaults.profile.announce
+    assert.same({}, a.routes)
+    assert.equal(0, a.chatWindow)
+    assert.equal("None", a.sound)
+  end)
+
+  it("gives the on-screen message a font, a size and a place to sit", function()
+    local screen = DB.defaults.profile.announce.screen
+    assert.equal("Friz Quadrata TT", screen.font)
+    assert.equal(18, screen.size)
+    assert.equal(4, screen.duration)
+    assert.equal("TOP", screen.anchor.point)
+    assert.equal(-140, screen.anchor.y)
+  end)
+
+  it("keeps the announcement log account-wide, so an alt sees what was said", function()
+    assert.same({}, DB.defaults.global.announceLog)
+    assert.equal(0, DB.defaults.global.announceDropped)
+  end)
+
   it("defaults.profile.depth is 3", function()
     assert.equal(3, DB.defaults.profile.depth)
   end)

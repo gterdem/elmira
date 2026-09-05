@@ -191,6 +191,20 @@ describe("Display.Driver", function()
       assert.equal(2, #logged)
     end)
 
+    -- F37: routed as a warning, so a player who has moved warnings off chat still gets it in the
+    -- Log rather than losing it entirely.
+    it("routes the report as a warning when Announce is loaded", function()
+      local said = {}
+      ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+      Display.register("broken", function() error("kaboom") end)
+      tick()
+      assert.equal(1, #said)
+      assert.equal("warning", said[1][1])
+      assert.is_truthy(said[1][2]:find("kaboom", 1, true))
+      assert.is_truthy(said[1][2]:find("broken", 1, true))
+      assert.equal(0, #logged)
+    end)
+
     it("one broken renderer does not stop the others", function()
       Display.register("broken", function() error("kaboom") end)
       tick()

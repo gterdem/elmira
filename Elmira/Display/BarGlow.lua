@@ -253,9 +253,16 @@ function BarGlow.noteMissing(spellKey)
   announced[spellKey] = true
   local profileGlow = ns.db and ns.db.profile and ns.db.profile.glow
   if not (profileGlow and profileGlow.enabled and profileGlow.barGlow) then return false end
-  if ns.log then
-    ns.log("Elmira: no visible action-bar button holds %s, so only the queue icon can glow. "
-        .. "/elm debug bars explains why.", tostring(spellKey))
+  -- Routed as a warning (F37) rather than printed: the player decides whether this reaches chat,
+  -- the screen or only the Log. The latch above stays -- it is per SPELL and clears when the bars
+  -- change, which is finer than Announce's per-sentence one.
+  local text = string.format(
+    "No visible action-bar button holds %s, so nothing can glow for it. /elm debug bars explains why.",
+    tostring(spellKey))
+  if ns.Announce then
+    ns.Announce.emit("warning", text)
+  elseif ns.log then
+    ns.log("Elmira: %s", text)
   end
   return true
 end

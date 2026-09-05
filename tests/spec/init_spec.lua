@@ -302,6 +302,72 @@ describe("Core.Init", function()
 
   -- The strip needs every cast, not only the ones inside a recording session: it is how a CAST is
   -- told apart from a PROMOTION. The call used to sit below the recorder guard, where it never ran.
+  -- F37. Everything Elmira says goes through Core/Announce, which is pure: the clock and the
+  -- combat question are handed in here, and the sinks that can actually speak are registered here.
+  describe("announcements", function()
+    local function withAnnounce()
+      local said, registered = {}, {}
+      ns.Announce = {
+        use = function(t) ns.Announce.clock = t; return true end,
+        flush = function() said[#said + 1] = "flush" end,
+        log = function() return {} end,
+        category = function() return nil end,
+        plain = function(t) return t end,
+      }
+      ns.Announcers = {
+        Create = function() registered[#registered + 1] = "create" end,
+        Register = function() registered[#registered + 1] = "register" end,
+      }
+      return said, registered
+    end
+
+    it("hands Core/Announce a clock and a way to ask about combat", function()
+      withAnnounce()
+      ns.now = function() return 42 end
+      ns.API.GetState = function() return { inCombat = function() return true end } end
+      NA:OnInitialize()
+      assert.is_function(ns.Announce.clock.now)
+      assert.equal(42, ns.Announce.clock.now())
+      assert.is_true(ns.Announce.clock.inCombat())
+    end)
+
+    it("answers 'not in combat' rather than erroring when there is no state yet", function()
+      withAnnounce()
+      NA:OnInitialize()
+      ns.API.GetState = function() return nil end
+      assert.is_false(ns.Announce.clock.inCombat())
+    end)
+
+    it("builds and registers the things that can speak before the first render", function()
+      local _, registered = withAnnounce()
+      NA:OnInitialize()
+      NA:OnEnable()
+      assert.same({ "create", "register" }, registered)
+    end)
+
+    -- Combat is the worst moment to be left with a mouse-enabled frame across screen centre.
+    it("leaves move mode when a fight starts", function()
+      withAnnounce()
+      local stopped = 0
+      ns.Announcers.StopMoving = function() stopped = stopped + 1 end
+      NA:OnInitialize()
+      NA:OnEnable()
+      NA:OnCombatStart()
+      assert.equal(1, stopped)
+    end)
+
+    -- On-screen messages are held while fighting (F37) and must actually arrive afterwards.
+    it("releases anything held back when combat ends", function()
+      local said = withAnnounce()
+      NA:OnInitialize()
+      NA:OnEnable()
+      NA:OnCombatEnd()
+      local flushed = false
+      for _, e in ipairs(said) do if e == "flush" then flushed = true end end
+      assert.is_true(flushed, "messages held during the fight were never delivered")
+    end)
+  end)
+
   describe("the player's own casts reach the strip", function()
     it("tells the queue about a cast with nothing recording", function()
       NA:OnInitialize()
@@ -547,6 +613,55 @@ describe("Core.Init", function()
       assert.equal("Elmira", dbicon.registered[1].name)
       assert.equal(obj, dbicon.registered[1].obj)
       assert.equal(NA.db.global.minimap, dbicon.registered[1].db)
+    end)
+
+    -- A player who has routed announcements away from chat still has to be able to notice one.
+    it("shows the last few things Elmira said, in their categories' colours", function()
+      local ldb = installMinimapLibs()
+      ns.Announce = {
+        use = function() return true end,
+        log = function(n)
+          assert.equal(3, n)
+          return { { category = "warning", text = "|cffE8A33Dcareful|r" },
+                   { category = "status", text = "using Exodin" } }
+        end,
+        category = function(key) return { key = key, color = key == "warning" and "WARN" or "MUTED" } end,
+        plain = function(t) return (t:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end,
+      }
+      NA:OnInitialize()
+      NA:StartDisplay()
+      local lines = {}
+      local tt = { AddLine = function(_, text, r, g, b) lines[#lines + 1] = { text, r, g, b } end }
+      ldb.objects.Elmira.OnTooltipShow(tt)
+
+      local texts = {}
+      for _, line in ipairs(lines) do texts[#texts + 1] = line[1] end
+      assert.is_truthy(table.concat(texts, "\n"):find("careful"))
+      assert.is_truthy(table.concat(texts, "\n"):find("using Exodin"))
+      -- A blank line between the click hints and the log, or the tooltip reads as one run-on block.
+      assert.equal(" ", texts[4])
+      assert.equal(6, #lines)
+      local plainSeen = false
+      for _, line in ipairs(lines) do
+        if line[1] == "careful" then
+          plainSeen = true
+          assert.equal(ns.Colors.WARN.r, line[2])
+        end
+      end
+      -- Stripped, not shown raw: a tooltip line still carrying |cff…|r renders the escape as text.
+      assert.is_true(plainSeen, "the log line was not stripped of its colour escape")
+    end)
+
+    it("adds no blank separator when nothing has been said", function()
+      local ldb = installMinimapLibs()
+      ns.Announce = { use = function() return true end, log = function() return {} end,
+                      category = function() end, plain = function(t) return t end }
+      NA:OnInitialize()
+      NA:StartDisplay()
+      local lines = {}
+      local tt = { AddLine = function(_, text) lines[#lines + 1] = text end }
+      ldb.objects.Elmira.OnTooltipShow(tt)
+      assert.equal(3, #lines)     -- brand, left-click, right-click, and no trailing gap
     end)
 
     it("left-click opens Options; right-click toggles the queue lock", function()

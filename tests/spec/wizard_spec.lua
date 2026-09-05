@@ -268,6 +268,18 @@ describe("Setup.Wizard", function()
       assert.is_true(Wizard.shouldOffer())
     end)
 
+    -- F37: the login line is a status message, so a player can move it out of chat entirely
+    -- without losing it -- it is still in the Log.
+    it("announces as status when Announce is loaded", function()
+      install(packWith({}, { catalogVersion = 2 }))
+      local said = {}
+      ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+      assert.is_true(Wizard.OfferOnLogin())
+      assert.equal(1, #said)
+      assert.equal("status", said[1][1])
+      assert.is_truthy(said[1][2]:find("/elm setup"))
+    end)
+
     it("prints once and then stops, rather than nagging every login", function()
       install(packWith({}, { catalogVersion = 2 }))
       local printed = 0

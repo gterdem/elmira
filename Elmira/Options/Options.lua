@@ -508,6 +508,145 @@ local function numberRow(order, name, key, minimum, maximum, step, desc)
   }
 end
 
+-- ============================================================ Announcements (F37)
+-- The Log first, then where each kind of message goes. That order is the point: a player who has
+-- just been told something and missed it looks here, and finds the message before finding the
+-- switches that would have made it louder.
+local LOG_LINES = 20
+
+local function announceGroup()
+  local args = {}
+  local A = ns.Announce
+
+  args.logHeader = {
+    type = "description", order = 1, fontSize = "medium",
+    name = ns.Colors.wrap(ns.Colors.BRAND, L["Log"]) .. "  " ..
+           ns.Colors.wrap(ns.Colors.MUTED,
+             L["everything Elmira has said, newest first — kept whatever the routing below says"]),
+  }
+  local dropped = (A and A.dropped()) or 0
+  if dropped > 0 then
+    args.logDropped = {
+      type = "description", order = 29,
+      name = ns.Colors.wrap(ns.Colors.MUTED,
+        string.format(L["%d older line(s) have been dropped."], dropped)),
+    }
+  end
+  local rows = (A and A.log(LOG_LINES)) or {}
+  if #rows == 0 then
+    args.logEmpty = {
+      type = "description", order = 2,
+      name = ns.Colors.wrap(ns.Colors.MUTED, L["Nothing yet."]),
+    }
+  end
+  for i, row in ipairs(rows) do
+    local cat = A.category(row.category)
+    args["log" .. i] = {
+      type = "description", order = 1 + i,
+      name = ns.Colors.wrap(ns.Colors.MUTED, (cat and cat.label) or row.category) .. "  " ..
+             ns.Colors.wrap((cat and ns.Colors[cat.color]) or ns.Colors.MUTED, A.plain(row.text)),
+    }
+  end
+  args.logClear = {
+    type = "execute", order = 30, name = L["Clear the log"],
+    func = function() if A then A.clear() end end,
+  }
+
+  args.routing = {
+    type = "header", order = 40, name = L["Where each kind of message goes"],
+  }
+  for i, cat in ipairs((A and A.CATEGORIES) or {}) do
+    local channels = {}
+    -- The Log is not offered: it is the record, not a channel. Party is offered only where the
+    -- category is shareable IN CODE -- a rotation change is about your bars, not the group's.
+    --
+    -- Ordered by Announce.CHANNELS rather than by pairs(), which put the toggles in a different
+    -- order for every category and a different order again on another Lua build.
+    local names = { chat = L["Chat"], screen = L["Screen"], sound = L["Sound"],
+                    party = L["Party / raid"] }
+    local order = 0
+    for _, channel in ipairs(A.CHANNELS) do
+      local label = names[channel]
+      if channel == "party" and not cat.shareable then label = nil end
+      if label then
+      order = order + 1
+      channels[channel] = {
+        type = "toggle", order = order, name = label, width = 0.7,
+        get = function() return A.routes(cat.key)[channel] == true end,
+        set = function(_, v)
+          local a = profile().announce
+          -- Read the EFFECTIVE routing before storing anything: creating the row first makes
+          -- A.routes see an empty stored table and stop falling back, so switching one channel on
+          -- would switch every other channel for that category off.
+          local stored = a.routes[cat.key]
+          if not stored then
+            stored = A.routes(cat.key)
+            a.routes[cat.key] = stored
+          end
+          stored[channel] = v
+        end,
+      }
+      end
+    end
+    args["cat" .. cat.key] = {
+      type = "group", order = 40 + i, name = ns.Colors.wrap(ns.Colors[cat.color], cat.label),
+      inline = true, args = channels,
+    }
+  end
+
+  args.where = { type = "header", order = 60, name = L["How they look"] }
+  args.chatWindow = {
+    type = "select", order = 61, name = L["Chat window"],
+    desc = L["Which of your chat tabs Elmira prints into."],
+    values = function() return ns.Announcers and ns.Announcers.chatWindows() or {} end,
+    get = function() return profile().announce.chatWindow or 0 end,
+    set = function(_, v) profile().announce.chatWindow = v end,
+  }
+  args.font = {
+    type = "select", order = 62, name = L["Screen font"],
+    values = function() return ns.Announcers and ns.Announcers.fonts() or {} end,
+    get = function() return profile().announce.screen.font end,
+    set = function(_, v)
+      profile().announce.screen.font = v
+      if ns.Announcers then ns.Announcers.ApplyFont() end
+    end,
+  }
+  args.size = {
+    type = "range", order = 63, name = L["Screen text size"], min = 10, max = 36, step = 1,
+    get = function() return profile().announce.screen.size end,
+    set = function(_, v)
+      profile().announce.screen.size = v
+      if ns.Announcers then ns.Announcers.ApplyFont() end
+    end,
+  }
+  args.duration = {
+    type = "range", order = 64, name = L["Seconds on screen"], min = 1, max = 15, step = 1,
+    get = function() return profile().announce.screen.duration end,
+    set = function(_, v)
+      profile().announce.screen.duration = v
+      if ns.Announcers then ns.Announcers.ApplyFont() end
+    end,
+  }
+  args.sound = {
+    type = "select", order = 65, name = L["Sound"],
+    values = function() return ns.Announcers and ns.Announcers.sounds() or {} end,
+    get = function() return profile().announce.sound end,
+    set = function(_, v) profile().announce.sound = v end,
+  }
+  args.move = {
+    type = "toggle", order = 66, name = L["Move the on-screen message"],
+    desc = L["Shows one sample of every kind so you can see how tall it gets, and lets you drag it."],
+    get = function() return ns.Announcers and ns.Announcers.isMoving() or false end,
+    set = function(_, v) if ns.Announcers then ns.Announcers.SetMoving(v) end end,
+  }
+  args.test = {
+    type = "execute", order = 67, name = L["Test each kind"],
+    desc = L["Sends one message of every kind, through whatever you have switched on above."],
+    func = function() if A then A.test() end end,
+  }
+  return args
+end
+
 function Options.table()
   return {
     type = "group",
@@ -595,8 +734,9 @@ function Options.table()
               -- Say what a preset changed. A toggle that silently rewrites two other settings the
               -- user can see in the same panel is how a settings screen loses trust.
               if applied then
-                ns.log("Learning mode on: icons set to %d, scale to %d%%.",
-                       applied.depth, math.floor(applied.scale * 100))
+                local text = string.format("Learning mode on: icons set to %d, scale to %d%%.",
+                                           applied.depth, math.floor(applied.scale * 100))
+                if ns.Announce then ns.Announce.emit("status", text) else ns.log("%s", text) end
               end
             end,
           },
@@ -679,18 +819,31 @@ function Options.table()
           },
         },
       },
-      overlay = {
-        type = "group", order = 4, name = L["Peripheral cues"],
-        args = overlayGroup(),
-      },
-      sounds = {
-        type = "group", order = 5, name = L["Sounds"],
+      -- One heading for everything that TELLS you something, as against the sections above, which
+      -- are about what the display shows. Announcements, flares and cue sounds were three peers of
+      -- "Queue" and "Action bars", which put "how the addon talks to me" and "what the addon draws"
+      -- in one flat list.
+      notifications = {
+        type = "group", order = 4, name = L["Notifications"], childGroups = "tree",
         args = {
-          enabled = {
-            type = "toggle", order = 1, name = L["Play cue sounds"],
-            desc = L["Sounds use the same per-cue opt-in as flares."],
-            get = function() return profile().sounds.enabled end,
-            set = function(_, v) profile().sounds.enabled = v end,
+          announce = {
+            type = "group", order = 1, name = L["Announcements"],
+            args = announceGroup(),
+          },
+          overlay = {
+            type = "group", order = 2, name = L["Peripheral cues"],
+            args = overlayGroup(),
+          },
+          sounds = {
+            type = "group", order = 3, name = L["Cue sounds"],
+            args = {
+              enabled = {
+                type = "toggle", order = 1, name = L["Play cue sounds"],
+                desc = L["Sounds use the same per-cue opt-in as flares."],
+                get = function() return profile().sounds.enabled end,
+                set = function(_, v) profile().sounds.enabled = v end,
+              },
+            },
           },
         },
       },
@@ -722,6 +875,14 @@ function Options.Open()
   if not Options.dialog then Options.Register() end
   if Options.dialog then
     Options.dialog:Open("Elmira")
+    -- Move mode enables the mouse on a frame across the middle of the screen. Closing the panel
+    -- has to end it, or that frame sits there eating clicks with nothing on screen to explain it.
+    local open = Options.dialog.OpenFrames and Options.dialog.OpenFrames.Elmira
+    if open and open.SetCallback then
+      open:SetCallback("OnClose", function()
+        if ns.Announcers then ns.Announcers.StopMoving() end
+      end)
+    end
     return true
   end
   return false

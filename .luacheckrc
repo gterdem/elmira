@@ -50,7 +50,12 @@ files["Elmira/Display/"] = { read_globals = { "CreateFrame", "UIParent", "GameTo
   -- Ranks: the id on a bar and the id in the data pack can be different ranks of one ability, so the
   -- bar map is keyed by the rank-free name as well. Presentation-side lookup, not state.
   "GetSpellInfo",
-  "GetInventoryItemID", "RANGE_INDICATOR" } }
+  "GetInventoryItemID", "RANGE_INDICATOR",
+  -- F37 announcements (Display/Announcers.lua). LibStub is here rather than at the top level so it
+  -- stays out of Core/, and SendChatMessage is the ONE global in this addon that talks to other
+  -- players -- worth being able to grep for.
+  "LibStub", "DEFAULT_CHAT_FRAME", "NUM_CHAT_WINDOWS", "GetChatWindowInfo",
+  "SendChatMessage", "IsInGroup", "IsInRaid" } }
 files["Elmira/Setup/"] = { read_globals = { "CreateFrame", "UIParent", "UnitClass", "UnitLevel",
   "GetTalentTabInfo", "C_Engraving" } }
 files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent" } }

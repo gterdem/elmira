@@ -88,6 +88,18 @@ function NA:OnInitialize()
     ns.Serialize.use{ serializer = LibStub("LibSerialize", true), deflate = LibStub("LibDeflate", true) }
   end
 
+  -- F37. Core/Announce is pure, so the clock and the combat question are handed in: `now` stamps
+  -- the log, `inCombat` is what holds an on-screen message back until the fight ends.
+  if ns.Announce then
+    ns.Announce.use{
+      now = ns.now,
+      inCombat = function()
+        local state = ns.API and ns.API.GetState()
+        return state and state:inCombat() == true or false
+      end,
+    }
+  end
+
   self:RegisterChatCommand("elm", "OnSlash")
   self:RegisterChatCommand("elmira", "OnSlash")
 
@@ -160,7 +172,10 @@ local COMBAT_SAMPLE = 3
 -- that is at most this stale.
 local SUGGEST_POLL = 1
 
+-- Combat is the worst moment to be left with a mouse-enabled frame across the middle of the
+-- screen, so move mode ends whether or not the panel is still open.
 function NA:OnCombatStart()
+  if ns.Announcers then ns.Announcers.StopMoving() end
   self:RecordAuto("combat-start")
   if not (ns.Recorder and ns.Recorder.isRecording()) then return end
   if self._combatTimer then return end
@@ -244,6 +259,8 @@ function NA:OnCombatEnd()
     self._suggestTimer = nil
   end
   self._suggestion = nil
+  -- Anything held back while fighting (F37: on-screen messages wait rather than landing mid-pull).
+  if ns.Announce then ns.Announce.flush() end
   self:RecordAuto("combat-end")
 end
 
@@ -321,6 +338,12 @@ function NA:StartDisplay()
   end
   ns.Queue.Create()
   ns.Queue.SetLocked(self.db.profile.locked)
+  -- Registered before the first render, or the first thing Elmira says on login has nowhere to go
+  -- but the Log -- and the login line is the one message every player sees.
+  if ns.Announcers then
+    ns.Announcers.Create()
+    ns.Announcers.Register()
+  end
   ns.Display.register("queue", ns.Queue.Render)
   -- The bar glow is its own renderer, not something the strip does on the side (ADR-0015 §3): the
   -- two were joined, so hiding the strip took the glow with it and the player lost the half of the
@@ -372,6 +395,15 @@ function NA:SetupMinimapButton()
       tt:AddLine(ns.Colors.prefix())
       tt:AddLine(ns.L["Left-click: options"], 1, 1, 1)
       tt:AddLine(ns.L["Right-click: lock/unlock the queue"], 1, 1, 1)
+  -- The last few things Elmira said. A player who has routed announcements away from chat still
+  -- has somewhere to notice one, without opening the panel.
+  local recent = ns.Announce and ns.Announce.log(3) or {}
+  if #recent > 0 then tt:AddLine(" ") end
+  for _, row in ipairs(recent) do
+    local cat = ns.Announce.category(row.category)
+    local c = (cat and ns.Colors[cat.color]) or ns.Colors.MUTED
+    tt:AddLine(ns.Announce.plain(row.text), c.r, c.g, c.b)
+  end
     end,
   })
 

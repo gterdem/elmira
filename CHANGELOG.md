@@ -1,5 +1,20 @@
 # Changelog
 ## Unreleased
+- **New: you decide how Elmira talks to you.** A new **Notifications → Announcements** page splits
+  everything the addon says into six kinds — rotation changed, template updated, mode, warnings,
+  status, cooldowns used — and lets you send each one where you want it: your chat window (any tab,
+  not just the default one), an on-screen message in the middle of your screen, a sound, or
+  nowhere. Whatever you choose, every message is kept in a **Log** at the top of that page and the
+  last few show on the minimap tooltip, so silencing something never means losing it. On-screen
+  messages wait for the fight to end rather than landing mid-pull, each kind has its own colour,
+  and the font, size and position are yours — drag it with **Move**, which shows a sample of every
+  kind so you can see how much room it needs and switches itself off when you close the panel or
+  enter combat. **Test each kind** sends one of each, and never to your group.
+- Party and raid chat is offered for exactly one kind of message, cooldowns used, and ships off.
+  Nothing about your own rotation can be routed to a group — that is fixed in the addon, not a
+  setting, because "Divine Storm is now active in my rotation" is noise to everyone but you.
+- Peripheral cues and cue sounds moved under the same **Notifications** heading. They were sitting
+  beside "Queue" and "Action bars", which mixed up what the addon draws with how it talks to you.
 - **The action-bar glow is yours to style now.** A fourth style, **Proc** — the modern burst-then-
   pulse animation — joins Pixel, Autocast and Button, and every one of them takes a colour, with
   sliders for however many particles travel around the button, how fast they go, how heavy the

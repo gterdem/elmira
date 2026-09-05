@@ -113,7 +113,12 @@ local function renderAll(queue, key, visible)
       err = tostring(err)
       if lastError[r.name] ~= err then
         lastError[r.name] = err
-        ns.log("Elmira: display renderer '%s' errored: %s", r.name, err)
+        local text = string.format("Display renderer '%s' errored: %s", r.name, err)
+        if ns.Announce then
+          ns.Announce.emit("warning", text)
+        else
+          ns.log("Elmira: %s", text)
+        end
       end
     else
       lastError[r.name] = nil

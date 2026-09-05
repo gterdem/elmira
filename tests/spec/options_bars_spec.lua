@@ -175,9 +175,26 @@ describe("Options (action bars)", function()
     assert.equal("queue", seen[orders[1]])
     assert.equal("bars", seen[orders[2]])
     assert.equal("glow", seen[orders[3]])
-    assert.equal("overlay", seen[orders[4]])
-    assert.equal("sounds", seen[orders[5]])
-    assert.equal("exchange", seen[orders[6]])
+    -- Everything that TELLS you something lives under one heading (ADR-0015 F37), rather than as
+    -- three more peers of "Queue": announcements, flares and cue sounds are one question.
+    assert.equal("notifications", seen[orders[4]])
+    assert.equal("exchange", seen[orders[5]])
+  end)
+
+  it("groups announcements, flares and cue sounds under Notifications, each exactly once", function()
+    local notifications = Options.table().args.notifications
+    assert.equal("tree", notifications.childGroups)
+    local seen, orders = {}, {}
+    for key, g in pairs(notifications.args) do
+      assert.is_number(g.order, key .. " has no order")
+      assert.is_nil(seen[g.order], key .. " shares order " .. tostring(g.order))
+      seen[g.order] = key
+      orders[#orders + 1] = g.order
+    end
+    table.sort(orders)
+    assert.equal("announce", seen[orders[1]])
+    assert.equal("overlay", seen[orders[2]])
+    assert.equal("sounds", seen[orders[3]])
   end)
 
   describe("the bar glow toggle", function()

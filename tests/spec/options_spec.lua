@@ -123,6 +123,19 @@ describe("Options (overlay/peripheral cues)", function()
       ns.Queue = { Layout = function() end }
     end)
 
+    it("still offers the cue-sound switch after the move under Notifications", function()
+      local row = Options.table().args.notifications.args.sounds.args.enabled
+      assert.equal("toggle", row.type)
+      assert.equal(1, row.order)
+      assert.equal("Play cue sounds", row.name)
+      assert.is_truthy(row.desc)
+      ns.db.profile.sounds = { enabled = false }
+      assert.is_false(row.get())
+      row.set(nil, true)
+      assert.is_true(ns.db.profile.sounds.enabled)
+      assert.is_true(row.get())
+    end)
+
     it("offers Proc alongside the three older styles", function()
       ns.Glow.available = function() return { PIXEL = true, PROC = true } end
       local values = glowArgs().style.values()
@@ -175,6 +188,27 @@ describe("Options (overlay/peripheral cues)", function()
       glowArgs().particles.set(nil, 14)
       assert.equal(14, ns.db.profile.glow.particles)
       assert.equal(14, glowArgs().particles.get())
+    end)
+
+    it("announces the learning-mode change as status rather than printing it", function()
+      local said = {}
+      -- The whole table is built here, so the stub has to answer everything announceGroup() asks.
+      ns.Announce = {
+        emit = function(c, t) said[#said + 1] = { c, t } end,
+        log = function() return {} end,
+        category = function() return nil end,
+        plain = function(t) return t end,
+        dropped = function() return 0 end,
+        CATEGORIES = {},
+        CHANNELS = { "chat", "screen", "sound", "party" },
+        routes = function() return {} end,
+      }
+      ns.Queue.ApplyLearningPreset = function() return { depth = 1, scale = 1.4 } end
+      ns.db.profile.learning = false
+      Options.table().args.queue.args.learning.set(nil, true)
+      assert.equal(1, #said)
+      assert.equal("status", said[1][1])
+      assert.is_truthy(said[1][2]:find("Learning mode on"))
     end)
 
     it("offers the dim second-suggestion hint, off, and says why", function()
@@ -281,6 +315,290 @@ describe("Options (overlay/peripheral cues)", function()
     end)
   end)
 
+  -- F37. The Log first, then where each kind of message goes: a player who has just been told
+  -- something and missed it looks here, and finds the message before finding the switches.
+  describe("Announcements", function()
+    local function announceArgs()
+      return Options.table().args.notifications.args.announce.args
+    end
+
+    before_each(function()
+      helper.load("Elmira/Core/Announce.lua")
+      ns.db.profile.announce = {
+        chatWindow = 0, sound = "None",
+        screen = { font = "Friz Quadrata TT", size = 18, duration = 4,
+                   anchor = { point = "TOP", relPoint = "TOP", x = 0, y = -140 } },
+        routes = {},
+      }
+      ns.db.global = { announceLog = {}, announceDropped = 0 }
+      ns.Announce.use{ now = function() return 1 end, inCombat = function() return false end }
+      ns.Announcers = {
+        chatWindows = function() return { [0] = "Default", [2] = "Addons" } end,
+        fonts = function() return { ["Friz Quadrata TT"] = "Friz Quadrata TT" } end,
+        sounds = function() return { None = "None", Chime = "Chime" } end,
+        ApplyFont = function() return true end,
+        SetMoving = function() return true end,
+        isMoving = function() return false end,
+      }
+    end)
+
+    it("says so plainly when nothing has been said yet", function()
+      assert.is_truthy(announceArgs().logEmpty.name:find("Nothing yet"))
+      assert.is_nil(announceArgs().log1)
+    end)
+
+    it("lists what was said, newest first, in the category's own colour", function()
+      ns.Announce.emit("status", "first")
+      ns.Announce.emit("warning", "second")
+      local args = announceArgs()
+      assert.is_truthy(args.log1.name:find("second"))
+      assert.is_truthy(args.log1.name:find(ns.Colors.WARN.hex))
+      assert.is_truthy(args.log2.name:find("first"))
+      assert.is_nil(args.logEmpty)
+      -- Each line is its own row, in order, under the header and above the Clear button.
+      assert.equal("description", args.log1.type)
+      assert.equal(2, args.log1.order)
+      assert.equal(3, args.log2.order)
+      assert.is_true(args.log2.order < args.logClear.order)
+    end)
+
+    it("empties the log on request", function()
+      ns.Announce.emit("status", "x")
+      announceArgs().logClear.func()
+      assert.equal(0, #ns.Announce.log())
+    end)
+
+    it("gives every category its own row of channels", function()
+      local args = announceArgs()
+      for _, c in ipairs(ns.Announce.CATEGORIES) do
+        assert.is_not_nil(args["cat" .. c.key], c.key .. " has no row")
+        assert.is_true(args["cat" .. c.key].inline)
+      end
+    end)
+
+    -- The Log is the record, not a channel; party is offered only where the category is shareable
+    -- in code, so no amount of clicking can put "my rotation changed" into a group's chat.
+    it("offers party only where the category may leave the client, and never offers the log", function()
+      local args = announceArgs()
+      assert.is_nil(args.catrotation.args.party)
+      assert.is_nil(args.catwarning.args.party)
+      assert.is_not_nil(args.catcooldown.args.party)
+      assert.is_nil(args.catrotation.args.log)
+      assert.is_not_nil(args.catrotation.args.chat)
+      assert.is_not_nil(args.catrotation.args.screen)
+      assert.is_not_nil(args.catrotation.args.sound)
+    end)
+
+    it("shows the shipped routing before the user has touched anything", function()
+      local args = announceArgs()
+      assert.is_true(args.catrotation.args.chat.get())
+      assert.is_true(args.catrotation.args.screen.get())
+      assert.is_false(args.catrotation.args.sound.get())
+    end)
+
+    -- Switching one channel on must not switch the category's other channels off: an empty stored
+    -- row means "use the defaults", so the first touch has to copy them before writing.
+    it("keeps the other channels when one is changed", function()
+      announceArgs().catrotation.args.sound.set(nil, true)
+      local args = announceArgs()
+      assert.is_true(args.catrotation.args.sound.get())
+      assert.is_true(args.catrotation.args.chat.get())
+      assert.is_true(args.catrotation.args.screen.get())
+    end)
+
+    it("turns a channel off and keeps it off", function()
+      announceArgs().catrotation.args.chat.set(nil, false)
+      assert.is_false(announceArgs().catrotation.args.chat.get())
+      assert.is_true(announceArgs().catrotation.args.screen.get())
+    end)
+
+    it("chooses a chat window from the player's own tabs", function()
+      local row = announceArgs().chatWindow
+      assert.equal("Addons", row.values()[2])
+      assert.equal(0, row.get())
+      row.set(nil, 2)
+      assert.equal(2, ns.db.profile.announce.chatWindow)
+    end)
+
+    it("applies the font, size and duration to the frame as they change", function()
+      local applied = 0
+      ns.Announcers.ApplyFont = function() applied = applied + 1 end
+      announceArgs().font.set(nil, "Expressway")
+      announceArgs().size.set(nil, 22)
+      announceArgs().duration.set(nil, 6)
+      assert.equal(3, applied)
+      assert.equal("Expressway", ns.db.profile.announce.screen.font)
+      assert.equal(22, ns.db.profile.announce.screen.size)
+      assert.equal(6, ns.db.profile.announce.screen.duration)
+    end)
+
+    it("shows what is currently set, not a blank control", function()
+      local args = announceArgs()
+      assert.equal("Friz Quadrata TT", args.font.get())
+      assert.equal(18, args.size.get())
+      assert.equal(4, args.duration.get())
+      assert.equal("None", args.sound.get())
+      assert.is_false(args.move.get())
+    end)
+
+    it("offers the fonts and sounds the player actually has", function()
+      local args = announceArgs()
+      assert.equal("Friz Quadrata TT", args.font.values()["Friz Quadrata TT"])
+      assert.equal("Chime", args.sound.values().Chime)
+    end)
+
+    it("reflects move mode being on", function()
+      ns.Announcers.isMoving = function() return true end
+      assert.is_true(announceArgs().move.get())
+    end)
+
+    it("chooses a sound", function()
+      announceArgs().sound.set(nil, "Chime")
+      assert.equal("Chime", ns.db.profile.announce.sound)
+      assert.equal("Chime", announceArgs().sound.get())
+    end)
+
+    it("turns move mode on and reports it", function()
+      local moved
+      ns.Announcers.SetMoving = function(v) moved = v end
+      announceArgs().move.set(nil, true)
+      assert.is_true(moved)
+    end)
+
+    it("sends one message of every kind on request", function()
+      announceArgs().test.func()
+      assert.equal(#ns.Announce.CATEGORIES, #ns.Announce.log())
+    end)
+
+    -- A button for previewing your own settings must not put six lines in a group's chat.
+    it("keeps the test messages out of party, whatever the routing says", function()
+      local partied = 0
+      ns.Announce.registerSink("party", function() partied = partied + 1 end)
+      ns.db.profile.announce.routes.cooldown = { party = true }
+      announceArgs().test.func()
+      assert.equal(0, partied)
+    end)
+
+    -- Each row is a control the user has to be able to recognise. A row with no type does not
+    -- render, and one with no name renders as an unlabelled widget.
+    it("builds every control as what it claims to be", function()
+      local args = announceArgs()
+      local expected = {
+        logHeader  = { type = "description", order = 1 },
+        logEmpty   = { type = "description", order = 2 },
+        logClear   = { type = "execute", order = 30, name = "Clear the log" },
+        routing    = { type = "header", order = 40, name = "Where each kind of message goes" },
+        where      = { type = "header", order = 60, name = "How they look" },
+        chatWindow = { type = "select", order = 61, name = "Chat window" },
+        font       = { type = "select", order = 62, name = "Screen font" },
+        size       = { type = "range", order = 63, name = "Screen text size" },
+        duration   = { type = "range", order = 64, name = "Seconds on screen" },
+        sound      = { type = "select", order = 65, name = "Sound" },
+        move       = { type = "toggle", order = 66, name = "Move the on-screen message" },
+        test       = { type = "execute", order = 67, name = "Test each kind" },
+      }
+      for key, want in pairs(expected) do
+        local row = args[key]
+        assert.is_not_nil(row, key .. " is missing")
+        assert.equal(want.type, row.type, key .. " is the wrong kind of control")
+        assert.equal(want.order, row.order, key .. " is in the wrong place")
+        if want.name then assert.equal(want.name, row.name, key .. " is labelled wrongly") end
+      end
+      assert.is_truthy(args.logHeader.name:find("Log"))
+      assert.equal("medium", args.logHeader.fontSize)
+      assert.is_truthy(args.chatWindow.desc)
+      assert.is_truthy(args.move.desc)
+      assert.is_truthy(args.test.desc)
+    end)
+
+    it("bounds the size and duration sliders where a human can read them", function()
+      local args = announceArgs()
+      assert.equal(10, args.size.min)
+      assert.equal(36, args.size.max)
+      assert.equal(1, args.size.step)
+      assert.equal(1, args.duration.min)
+      assert.equal(15, args.duration.max)
+      assert.equal(1, args.duration.step)
+    end)
+
+    it("names and colours each category's row and keeps them in order", function()
+      local args = announceArgs()
+      for i, c in ipairs(ns.Announce.CATEGORIES) do
+        local group = args["cat" .. c.key]
+        assert.equal("group", group.type)
+        assert.equal(40 + i, group.order)
+        assert.is_truthy(group.name:find(c.label), c.key .. " is not labelled")
+        assert.is_truthy(group.name:find(ns.Colors[c.color].hex), c.key .. " is not in its colour")
+      end
+    end)
+
+    -- The toggles used to be ordered by pairs(), so they came out in a different order for every
+    -- category and a different order again on another Lua build.
+    it("lays the channel toggles out in one fixed order, party last", function()
+      local args = announceArgs().catcooldown.args
+      for key, row in pairs(args) do
+        assert.equal("toggle", row.type, key .. " is not a toggle")
+        assert.is_not_nil(row.name, key .. " has no label")
+      end
+      assert.equal(1, args.chat.order)
+      assert.equal(2, args.screen.order)
+      assert.equal(3, args.sound.order)
+      assert.equal(4, args.party.order)
+    end)
+
+    it("numbers a non-shareable category's toggles without a gap where party would be", function()
+      local args = announceArgs().catrotation.args
+      assert.equal(1, args.chat.order)
+      assert.equal(2, args.screen.order)
+      assert.equal(3, args.sound.order)
+    end)
+
+    -- A counter that nothing reads is a number that can be wrong forever without anyone noticing.
+    it("says how many lines the log has thrown away, once it has thrown any", function()
+      assert.is_nil(announceArgs().logDropped)
+      for i = 1, ns.Announce.MAX_LOG + 2 do ns.Announce.emit("status", "line " .. i) end
+      local row = announceArgs().logDropped
+      assert.is_not_nil(row)
+      assert.equal("description", row.type)
+      assert.is_truthy(row.name:find("2"))
+    end)
+
+    -- Without a cap the panel grows without limit and the switches below the log become
+    -- unreachable on a long session.
+    it("lists at most twenty log lines however many there are", function()
+      for i = 1, 25 do ns.Announce.emit("status", "line " .. i) end
+      local args = announceArgs()
+      assert.is_not_nil(args.log20)
+      assert.is_nil(args.log21)
+      assert.is_truthy(args.log1.name:find("line 25"))
+    end)
+  end)
+
+  -- Move mode enables the mouse on a frame across the middle of the screen. Closing the panel has
+  -- to end it, or that frame sits there eating clicks with nothing on screen to explain it.
+  describe("Options.Open", function()
+    it("ends move mode when the panel is closed", function()
+      local stopped, closer = 0, nil
+      ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
+      Options.dialog = {
+        Open = function() end,
+        OpenFrames = { Elmira = { SetCallback = function(_, event, fn)
+          if event == "OnClose" then closer = fn end
+        end } },
+      }
+      assert.is_true(Options.Open())
+      assert.is_function(closer, "nothing was hooked to the panel closing")
+      closer()
+      assert.equal(1, stopped)
+    end)
+
+    it("opens without erroring on a dialog that exposes no frames", function()
+      ns.Announcers = { StopMoving = function() end }
+      Options.dialog = { Open = function() end }
+      assert.is_true(Options.Open())
+    end)
+  end)
+
   -- PRD F9: the Import/Export box. The import itself is Core/UserBuilds' job and is tested there;
   -- here the box must route text in and out and report the outcome under it.
   describe("Import / Export box", function()
@@ -362,7 +680,7 @@ describe("Options (overlay/peripheral cues)", function()
   -- Rebuilds Options.table() (overlayGroup() runs at build time, so a fresh call is needed after
   -- changing which cues the active build suggests) and returns just the overlay group's args.
   local function overlayArgs()
-    return Options.table().args.overlay.args
+    return Options.table().args.notifications.args.overlay.args
   end
 
   -- An AVAILABLE cue renders as an inline group (toggle + colour + edge + intensity); an unavailable

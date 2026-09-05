@@ -14,7 +14,9 @@ DB.CURRENT = 1 -- SavedVariables layout version
 -- a `nil` default is ambiguous between "unset" and "equals the default", `false` is not.
 DB.defaults = {
   -- ADR-0010: the user's own builds, account-wide, keyed USER_<slug> (Core/UserBuilds.lua).
-  global = { dbVersion = 0, userBuilds = {} },
+  -- The announcement log survives a reload on purpose: "what did it just tell me?" is most often
+  -- asked after the chat frame has scrolled or the on-screen message has faded.
+  global = { dbVersion = 0, userBuilds = {}, announceLog = {}, announceDropped = 0 },
   profile = {
     enabled = true,
     depth = 3,
@@ -49,6 +51,17 @@ DB.defaults = {
     -- Master mute only. A cue carries its own sound name, on the same opt-in set and the same
     -- change-to trigger as its flare.
     sounds = { enabled = false },
+    -- F37. `chatWindow = 0` means "wherever Elmira printed before", i.e. the default frame; a real
+    -- number picks one. `routes` starts EMPTY and Core/Announce falls back to its shipped defaults,
+    -- so a category added by a later release arrives with its intended routing rather than silent --
+    -- and a user who has never opened the panel is not carrying a frozen copy of an old default set.
+    announce = {
+      chatWindow = 0,
+      sound = "None",
+      screen = { font = "Friz Quadrata TT", size = 18, duration = 4,
+                 anchor = { point = "TOP", relPoint = "TOP", x = 0, y = -140 } },
+      routes = {},
+    },
     dbVersion = 0,
   },
   char = { setupDone = 0, pinnedBuild = false, snoozed = {} },
