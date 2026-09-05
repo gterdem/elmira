@@ -440,6 +440,35 @@ describe("BarGlow Blizzard scan", function()
     assert.equal(3, #buttons)
   end)
 
+  -- `/elm debug perf` must not change what it measures. `/elm debug bars` and the provider
+  -- `describe()` both rebuild on demand -- right for "what WOULD you find" -- but if the
+  -- performance report did the same, the two commands could never agree about one session, which
+  -- is exactly how an owner ended up holding two contradictory answers.
+  describe("stats()", function()
+    it("reports the fallback as unbuilt without building it", function()
+      local s1 = BarGlow2.stats()
+      assert.is_false(s1.built)
+      assert.equal(0, s1.mapped)
+      -- Still unbuilt after asking: the question did not answer itself.
+      assert.is_false(BarGlow2.stats().built)
+    end)
+
+    it("reports what the fallback holds once something has built it", function()
+      _G.ActionButton1 = frame{ action = 1 }
+      mock2.actionInfo = { [1] = { "spell", 415073 } }
+      BarGlow2.Rebuild()
+      local s = BarGlow2.stats()
+      assert.is_true(s.built)
+      assert.equal(1, s.mapped)
+    end)
+
+    it("counts the registered bar addon providers", function()
+      local ns2 = _G.__ELM_NS
+      ns2.API = { GetProviders = function() return { { name = "ElvUI" }, { name = "Bartender4" } } end }
+      assert.equal(2, BarGlow2.stats().providers)
+    end)
+  end)
+
   describe("slot resolution", function()
     it("reads the paged slot off the secure `action` attribute first", function()
       mock2.actionInfo[61] = { "spell", 415073 }

@@ -156,6 +156,51 @@ describe("Core.Slash", function()
     assert.is_true(#lines >= 1)
   end)
 
+  -- Reported from a client: `/elm debug bars` said ElvUI held 43 mapped spells while
+  -- `/elm debug perf` said "bar map: 0 spells, built=false" in the same install. Both numbers were
+  -- right and the LABEL was the lie -- perf reports the Blizzard FALLBACK, which is unbuilt
+  -- precisely because a bar addon is doing the work. Read bare, it said the display was broken.
+  describe("'debug perf' bar map reporting", function()
+    -- The bar-map line only renders once the display is loaded, so it needs the same Display stub
+    -- the build-reason cases use.
+    local function withMap(stats)
+      local ns = helper.ns()
+      ns.Display = {
+        isEnabled = function() return true end,
+        stats = function()
+          return { build = "PALADIN_EXODIN", renderers = 1, runs = 1, skipped = 1,
+                   visible = true, visibleReason = "ok", mode = "always" }
+        end,
+      }
+      ns.BarGlow = { stats = function() return stats end }
+      return Slash.run("debug perf")
+    end
+
+    it("names which map the numbers are about, and how to see the rest", function()
+      local lines = withMap{ mapped = 0, providers = 2, built = false }
+      assert.is_true(hasLineMatching(lines, "2 bar addon provider%(s%)"))
+      assert.is_true(hasLineMatching(lines, "Blizzard fallback 0 spell%(s%)"))
+      assert.is_true(hasLineMatching(lines, "/elm debug bars"))
+    end)
+
+    -- An unbuilt fallback with a bar addon present is not a fault, and the line has to say so or
+    -- the next person reads it the same way.
+    it("explains an unbuilt fallback differently depending on why", function()
+      assert.is_true(hasLineMatching(withMap{ mapped = 0, providers = 2, built = false },
+        "not needed while a bar addon"))
+      local lines = withMap{ mapped = 0, providers = 0, built = false }
+      assert.is_true(hasLineMatching(lines, "nothing has asked for a button yet"))
+      assert.is_false(hasLineMatching(lines, "not needed while a bar addon"))
+    end)
+
+    it("says nothing about why once the fallback is built", function()
+      local lines = withMap{ mapped = 9, providers = 0, built = true }
+      assert.is_true(hasLineMatching(lines, "Blizzard fallback 9 spell%(s%), built=true"))
+      assert.is_false(hasLineMatching(lines, "not needed"))
+      assert.is_false(hasLineMatching(lines, "nothing has asked"))
+    end)
+  end)
+
   -- This command exists to answer "is Elmira expensive" — it used to open with the WHOLE client's
   -- Lua heap under a bare "lua memory:" label, which read as if Elmira itself used 300 MB.
   describe("'debug perf' memory reporting", function()

@@ -271,11 +271,21 @@ function BarGlow.resetAnnouncements()
   announced = {}
 end
 
+-- What `/elm debug perf` reports about the bar map.
+--
+-- `mapped` and `built` are about the BLIZZARD FALLBACK only, and the caller has to say so. Reported
+-- as a bare "bar map: 0 spells, built=false" they read as "Elmira has mapped nothing", which is
+-- what an owner saw while ElvUI was quite happily holding 43 mapped spells -- a diagnostic saying
+-- the display was broken when it was working. With a provider active the fallback is SUPPOSED to
+-- be unbuilt: nothing has needed it.
+--
+-- Deliberately does not build. `/elm debug bars` and the provider `describe()` both rebuild on
+-- demand, which is right for a question about what WOULD be found; a performance report must not
+-- change the thing it is measuring, or the two commands can never agree about the same session.
 function BarGlow.stats()
-  if not blizzMap then return { mapped = 0, providers = #providers(), built = false } end
   local n = 0
-  for _ in pairs(blizzMap) do n = n + 1 end
-  return { mapped = n, providers = #providers(), built = true }
+  if blizzMap then for _ in pairs(blizzMap) do n = n + 1 end end
+  return { mapped = n, providers = #providers(), built = blizzMap ~= nil }
 end
 
 -- The client's name for a spell id, for the options panel to show instead of a symbolic key.

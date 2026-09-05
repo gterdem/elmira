@@ -1,5 +1,12 @@
 # Changelog
 ## Unreleased
+- **Fixed: `/elm debug perf` said the bar map was empty when it was not.** It reported
+  *"bar map: 0 spells, built=false"* while `/elm debug bars` showed a bar addon holding 43 mapped
+  spells in the same install — a diagnostic saying the display was broken when it was working. Both
+  numbers were right; the label was wrong. The line now names which map it means, says how many bar
+  addon providers are in use, and explains that the Blizzard fallback being unbuilt is expected
+  while a bar addon is handling your bars. It also no longer builds the map as a side effect of
+  being asked, which is why the two commands could disagree about the same session.
 - **The hint on the cast after next can now use its own glow style.** Telling it apart by
   brightness alone did not work: Proc drives its own brightness, so the hint came out looking
   identical to the real suggestion. It can now be a different SHAPE — pick any style for it, or

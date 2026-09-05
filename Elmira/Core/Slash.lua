@@ -511,8 +511,19 @@ Slash.register{
         s.runs or 0, s.skipped or 0, total > 0 and (s.skipped or 0) / total * 100 or 0)
       if ns.BarGlow then
         local b = ns.BarGlow.stats()
-        lines[#lines + 1] = string.format("bar map: %d spells, %d provider(s), built=%s",
-          b.mapped or 0, b.providers or 0, tostring(b.built))
+        -- Name which map the numbers are about. "bar map: 0 spells, built=false" was read as "no
+        -- spells are mapped at all" by the one person who had a bar addon holding 43 of them --
+        -- the fallback is unbuilt precisely BECAUSE a provider is doing the work.
+        local why = ""
+        if not b.built then
+          why = (b.providers or 0) > 0
+            and " (not needed while a bar addon is handling your bars)"
+            or " (nothing has asked for a button yet)"
+        end
+        lines[#lines + 1] = string.format(
+          "bar map: %d bar addon provider(s); Blizzard fallback %d spell(s), built=%s%s",
+          b.providers or 0, b.mapped or 0, tostring(b.built), why)
+        lines[#lines + 1] = "  /elm debug bars for what each provider actually mapped"
       end
       lines[#lines + 1] = string.format("visible: %s (%s), mode=%s",
         tostring(s.visible), tostring(s.visibleReason), tostring(s.mode))
