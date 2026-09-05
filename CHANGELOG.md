@@ -1,5 +1,12 @@
 # Changelog
 ## Unreleased
+- **Fixed: closing the settings window could leave the Escape key dead.** Elmira replaced the
+  settings window's own close handler instead of adding to it, so the window was never released
+  when it closed. Anything you had clicked into — the import box, a slider's number — kept the
+  keyboard, and every later Escape went to that invisible box instead of opening the game menu.
+  The window is now released properly, and nothing Elmira does on close can stop that happening.
+- On-screen messages no longer depend on message-frame calls existing: a client missing one now
+  loses that touch and says so once, instead of erroring from inside the settings window closing.
 - **New: Elmira tells you when your gear changes your rotation.** Equip the fourth piece of a set,
   engrave a rune, or hit the level a line was waiting for, and it says so once: *"Divine Storm
   consumes Holy Power: Divine Storm is now active in PALADIN_EXODIN."* — and the reverse when you

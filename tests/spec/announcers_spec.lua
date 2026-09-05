@@ -399,6 +399,63 @@ describe("Display.Announcers", function()
       assert.is_false(Announcers.frame().mouse)
       assert.equal(0, #Announcers.frame().messages)
     end)
+
+    -- Every MessageFrame method below is a first use at interface 11509 -- Clear is not even on the
+    -- M5g checklist's list of unverified ones. Some are reached from the options panel closing, so
+    -- a method that turns out not to exist would throw from inside a frame's OnHide. Each has to
+    -- degrade to "that touch did nothing" instead.
+    --
+    -- Parameterised over the whole list on purpose: a spec that blinds only Clear leaves the other
+    -- eight call sites unprotected, and reverting any one of them to a direct `frame:Method(...)`
+    -- would break no test -- a covered function with an uncovered call site, which is this
+    -- project's recurring defect.
+    local GUARDED = { "SetInsertMode", "SetJustifyH", "SetFading", "SetFadeDuration",
+                      "SetTimeVisible", "AddMessage", "Clear", "SetFont" }
+
+    -- Not `f.Method = nil`: fakeFrame's metatable answers every capitalised key with a no-op, which
+    -- would hide exactly the failure these tests are about.
+    local function blindTo(method)
+      return function(kind, name)
+        local f = fakeFrame(kind, name)
+        frames[#frames + 1] = f
+        return setmetatable({}, { __index = function(_, k)
+          if k == method then return nil end
+          local v = f[k]
+          if type(v) == "function" then return function(_, ...) return v(f, ...) end end
+          return v
+        end })
+      end
+    end
+
+    for _, method in ipairs(GUARDED) do
+      it("survives a client whose MessageFrame has no " .. method .. "()", function()
+        _G.CreateFrame = blindTo(method)
+        local logged = {}
+        ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+        local fresh = helper.load("Elmira/Display/Announcers.lua")
+
+        -- Every path that touches the frame: create, font, move in, move out, and a real message.
+        fresh.Create()
+        fresh.ApplyFont()
+        -- Twice round, because a missing method is hit once per exit: the report has to be
+        -- suppressed on the second, not merely happen to be single on the first.
+        for _ = 1, 2 do
+          fresh.SetMoving(true)
+          assert.is_true(fresh.StopMoving())
+          assert.is_false(fresh.isMoving())
+        end
+        fresh.screen(cat("status"), row("still speaking"))
+
+        -- Said once, and it names the method, because "on-screen messages degrade" with no name is
+        -- a report nobody can act on.
+        local about = {}
+        for _, line in ipairs(logged) do
+          if line:find(method .. "()", 1, true) then about[#about + 1] = line end
+        end
+        assert.equal(1, #about,
+          method .. " was reported " .. #about .. " times, wanted exactly once")
+      end)
+    end
   end)
 
   describe("registration", function()

@@ -19,6 +19,25 @@ local Announcers = {}
 local frame = nil
 local moving = false
 
+-- Every MessageFrame method this file calls is a client API with no precedent anywhere else in this
+-- addon or its vendored libraries -- SetInsertMode, SetFading, SetFadeDuration, SetTimeVisible,
+-- AddMessage and Clear are all first uses at interface 11509. A method that turns out not to exist
+-- must degrade to "that touch did nothing", because some of these are reached from the options
+-- panel's close path, and an error thrown there is an error thrown from inside a frame's OnHide.
+-- Reported once per method: the calls that matter repeat several times a second.
+local reported = {}
+local function call(f, method, ...)
+  local fn = f and f[method]
+  if type(fn) ~= "function" then
+    if not reported[method] then
+      reported[method] = true
+      ns.log("Elmira: this client's MessageFrame has no %s(); on-screen messages degrade.", method)
+    end
+    return
+  end
+  fn(f, ...)
+end
+
 local function profile()
   return (ns.db and ns.db.profile) or ns.DB.defaults.profile
 end
@@ -82,10 +101,10 @@ function Announcers.Create()
   frame:SetSize(600, 120)
   frame:SetPoint(s.screen.anchor.point or "TOP", UIParent, s.screen.anchor.relPoint or "TOP",
                  s.screen.anchor.x or 0, s.screen.anchor.y or -140)
-  frame:SetInsertMode("TOP")
-  frame:SetJustifyH("CENTER")
-  frame:SetFading(true)
-  frame:SetFadeDuration(1)
+  call(frame, "SetInsertMode", "TOP")
+  call(frame, "SetJustifyH", "CENTER")
+  call(frame, "SetFading", true)
+  call(frame, "SetFadeDuration", 1)
   frame:SetMovable(true)
   frame:SetClampedToScreen(true)
   -- Mouse OFF unless the panel is open: this frame sits over the middle of the screen, and one that
@@ -110,8 +129,8 @@ function Announcers.ApplyFont()
   local path = lsm and lsm:Fetch("font", s.screen.font)
   -- No media library, or a font pack the player has since uninstalled: keep the frame's own font
   -- rather than passing nil, which blanks every message with no error anywhere.
-  if path then frame:SetFont(path, s.screen.size or 18, "OUTLINE") end
-  frame:SetTimeVisible(s.screen.duration or 4)
+  if path then call(frame, "SetFont", path, s.screen.size or 18, "OUTLINE") end
+  call(frame, "SetTimeVisible", s.screen.duration or 4)
   return path ~= nil
 end
 
@@ -130,14 +149,14 @@ function Announcers.SetMoving(on)
   if not frame then return moving end
   frame:EnableMouse(moving)
   if moving then
-    frame:SetTimeVisible(3600)
+    call(frame, "SetTimeVisible", 3600)
     for _, cat in ipairs(ns.Announce.CATEGORIES) do
       local c = colorOf(cat)
-      frame:AddMessage(cat.label, c.r, c.g, c.b, 1)
+      call(frame, "AddMessage", cat.label, c.r, c.g, c.b, 1)
     end
   else
-    frame:Clear()
-    frame:SetTimeVisible(settings().screen.duration or 4)
+    call(frame, "Clear")
+    call(frame, "SetTimeVisible", settings().screen.duration or 4)
   end
   return moving
 end
@@ -161,7 +180,7 @@ function Announcers.screen(cat, row)
   local c = colorOf(cat)
   local text = row.text
   if row.icon then text = "|T" .. tostring(row.icon) .. ":0|t " .. text end
-  frame:AddMessage(text, c.r, c.g, c.b, 1)
+  call(frame, "AddMessage", text, c.r, c.g, c.b, 1)
   return true
 end
 

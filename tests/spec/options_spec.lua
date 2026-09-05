@@ -597,6 +597,82 @@ describe("Options (overlay/peripheral cues)", function()
       Options.dialog = { Open = function() end }
       assert.is_true(Options.Open())
     end)
+
+    -- AceGUI keeps ONE callback per event name (`widget.events[name]`), so setting OnClose here
+    -- REPLACES the one AceConfigDialog has already installed -- FrameOnClose, which clears
+    -- OpenFrames[appName] and releases the widget back to the pool. M5g shipped the replacing
+    -- version, so from then on every close leaked the frame and left the app registered as open.
+    -- Nothing noticed, because the move-mode assertion above passes either way.
+    local function fakeWidget(prior)
+      local w = { events = { OnClose = prior } }
+      function w:SetCallback(event, fn) self.events[event] = fn end
+      function w:fireClose() return self.events.OnClose(self, "OnClose") end
+      return w
+    end
+
+    it("chains the dialog's own OnClose instead of replacing it", function()
+      local released, stopped = 0, 0
+      ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
+      local widget = fakeWidget(function() released = released + 1 end)
+      Options.dialog = { Open = function() end, OpenFrames = { Elmira = widget } }
+
+      assert.is_true(Options.Open())
+      widget:fireClose()
+
+      assert.equal(1, stopped, "move mode was not ended")
+      assert.equal(1, released, "AceConfigDialog's own OnClose never ran, so the frame leaks")
+    end)
+
+    -- Our own StopMoving runs from a frame's OnHide. If it throws, it must not take the dialog's
+    -- cleanup down with it -- the whole reason the callback is chained rather than replaced.
+    it("still runs the dialog's OnClose when ending move mode errors, and says so", function()
+      local released, logged = 0, {}
+      ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+      ns.Announcers = { StopMoving = function() error("MessageFrame has no Clear()") end }
+      local widget = fakeWidget(function() released = released + 1 end)
+      Options.dialog = { Open = function() end, OpenFrames = { Elmira = widget } }
+
+      assert.is_true(Options.Open())
+      widget:fireClose()
+
+      assert.equal(1, released, "an error in our callback skipped the dialog's cleanup")
+      -- Swallowing it would leave a mouse-enabled frame across the middle of the screen with
+      -- nothing anywhere saying why -- the silent failure this codebase keeps producing.
+      assert.equal(1, #logged, "the failure to leave move mode was never reported")
+      assert.is_truthy(logged[1]:find("move mode", 1, true))
+    end)
+
+    -- The chain reads AceGUI's `widget.events` to find the callback it must not drop. A widget that
+    -- does not expose it must still open and still end move mode, rather than erroring on the way.
+    it("opens against a widget that exposes no events table", function()
+      local stopped = 0
+      ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
+      local widget = { SetCallback = function(self, event, fn) self.closer = fn end }
+      Options.dialog = { Open = function() end, OpenFrames = { Elmira = widget } }
+
+      assert.is_true(Options.Open())
+      assert.is_function(widget.closer, "nothing was hooked to the panel closing")
+      widget.closer(widget, "OnClose")
+      assert.equal(1, stopped)
+    end)
+
+    -- A second Open must chain onto the dialog's callback, never onto the wrapper the first Open
+    -- installed. AceConfigDialog re-sets its own every time so this should be unreachable; without
+    -- the guard the unreachable case is unbounded recursion, which is a worse failure than a leak.
+    -- The dialog's callback must still survive the re-open, and be called once, not twice.
+    it("does not chain onto itself when the panel is opened twice", function()
+      local released, stopped = 0, 0
+      ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
+      local widget = fakeWidget(function() released = released + 1 end)
+      Options.dialog = { Open = function() end, OpenFrames = { Elmira = widget } }
+
+      assert.is_true(Options.Open())
+      assert.is_true(Options.Open()) -- the dialog did NOT reinstate its own callback in between
+      widget:fireClose()
+
+      assert.equal(1, stopped, "move mode was not ended after a re-open")
+      assert.equal(1, released, "the dialog's own OnClose was lost or run twice on a re-open")
+    end)
   end)
 
   -- PRD F9: the Import/Export box. The import itself is Core/UserBuilds' job and is tested there;

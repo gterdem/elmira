@@ -871,17 +871,42 @@ function Options.Register()
   return true
 end
 
+-- The wrapper we last installed and the callback it wraps, so a second Open() chains onto
+-- AceConfigDialog's callback rather than onto ourselves. AceConfigDialog re-sets its own on every
+-- Open, so this should never trigger; it is here because the alternative if it ever does is
+-- unbounded recursion on close.
+local ourClose, ourPrior -- mutants: equivalent deletion only makes these globals
+
 function Options.Open()
   if not Options.dialog then Options.Register() end
   if Options.dialog then
     Options.dialog:Open("Elmira")
     -- Move mode enables the mouse on a frame across the middle of the screen. Closing the panel
     -- has to end it, or that frame sits there eating clicks with nothing on screen to explain it.
+    --
+    -- CHAIN, never replace. AceGUI keeps ONE callback per event name (`self.events[name]`), and
+    -- AceConfigDialog has already put its own FrameOnClose on this frame -- the callback that clears
+    -- OpenFrames[appName] and releases the widget back to the pool. Overwriting it leaked the frame
+    -- on every close, which is what shipped in M5g.
     local open = Options.dialog.OpenFrames and Options.dialog.OpenFrames.Elmira
     if open and open.SetCallback then
-      open:SetCallback("OnClose", function()
-        if ns.Announcers then ns.Announcers.StopMoving() end
-      end)
+      local prior = open.events and open.events.OnClose
+      if prior == ourClose then prior = ourPrior end
+      ourPrior = prior
+      ourClose = function(widget, event, ...)
+        -- pcall because this runs from a frame's OnHide: ours must never be the reason the dialog's
+        -- own cleanup below is skipped. Reported, not swallowed -- failing to leave move mode
+        -- leaves a mouse-eating frame across the middle of the screen, which is precisely the kind
+        -- of thing nobody files a bug about because it does not look like an error.
+        if ns.Announcers then
+          local ok, err = pcall(ns.Announcers.StopMoving)
+          if not ok then
+            ns.log("Elmira: could not leave move mode when the panel closed: %s", tostring(err))
+          end
+        end
+        if prior then return prior(widget, event, ...) end
+      end
+      open:SetCallback("OnClose", ourClose)
     end
     return true
   end
