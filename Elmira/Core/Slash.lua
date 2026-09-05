@@ -304,7 +304,8 @@ end
 Slash.register{ key = "help", desc = ns.L["Show this help"], order = 0, run = helpLines }
 
 Slash.register{
-  key = "debug", args = "state|bars|swing|cues|perf|dump|queue|gates", desc = ns.L["Diagnostics"], order = 10,
+  key = "debug", args = "state|bars|swing|cues|perf|libs|memory|alloc|dump|queue|gates",
+  desc = ns.L["Diagnostics"], order = 10,
   run = function(rest)
     local sub = rest and rest:match("^(%S+)")
     if sub == "state" then
@@ -493,6 +494,18 @@ Slash.register{
       end
       lines[#lines + 1] = string.format("client Lua heap, ALL addons: %d KB",
         math.floor(collectgarbage("count")))
+      -- The figure above is not necessarily ABOUT Elmira. LibStub serves one copy of each library
+      -- to the whole UI and the client charges a function's memory to the addon whose file defined
+      -- it, so every library our copy won is billed to us for everyone else's use of it. Said here,
+      -- beside the number, and before the display early-return: reading it as a leak is what sent
+      -- the last three days in the wrong direction.
+      local owned = ns.LibOwner and ns.LibOwner.ownedCount()
+      if owned and owned > 0 then
+        lines[#lines + 1] = string.format(
+          "note: %d shared librar%s Elmira embeds is the copy the whole UI uses, so other addons'",
+          owned, owned == 1 and "y" or "ies")
+        lines[#lines + 1] = "  use of them is charged above. /elm debug libs, /elm debug memory"
+      end
       if not ns.Display then
         lines[#lines + 1] = "display: not loaded"
         return lines
@@ -532,6 +545,96 @@ Slash.register{
       end
       lines[#lines + 1] = "/elm debug perf again after a fight to compare"
       return lines
+    elseif sub == "alloc" then
+      -- Which State question does one recompute pay for? `/elm debug memory` says the simulation
+      -- allocated N KB per call; this says which accessor. Warmed in THIS frame, so the virtual
+      -- state and the queue buffer exist, and measured on the NEXT one, so every per-frame memo has
+      -- to refill exactly as it does on a real tick -- a same-frame measurement would only show
+      -- cache hits.
+      local M = ns.MemProbe
+      if not (M and M.attribute) then return { "alloc: the probe is not loaded" } end
+      if not (ns.Display and ns.Display.activeBuild and ns.Simulation and ns.Interface) then
+        return { "alloc: display, simulation or interface not loaded" }
+      end
+      local compiled, key, reason = ns.Display.activeBuild()
+      if not compiled then return { "alloc: no build to simulate (" .. tostring(reason) .. ")" } end
+      local state = ns.API.GetState()
+      local depth = (ns.db and ns.db.profile and ns.db.profile.depth) or 5
+      local buffer = ns.Simulation.queue(compiled, state, depth)
+      ns.addon:ScheduleTimer(function()
+        local result, err = M.attribute(state, ns.Interface.CONTRACT, function()
+          ns.Simulation.queue(compiled, state, depth, buffer)
+        end)
+        if not result then
+          ns.log("alloc: the measurement failed (%s)", tostring(err))
+        else
+          for _, line in ipairs(M.attributionLines(result, key, depth)) do ns.log("%s", line) end
+          -- The one cache that cannot be rebuilt from a stamp: a spellbook the client would not
+          -- read whole is re-scanned for every unknown spell on every frame, and that is invisible
+          -- from the rows above except as a cost under `gcd`.
+          if ns.Adapter and ns.Adapter.spellbookStatus then
+            ns.log("%s", ns.Adapter.spellbookStatus())
+          end
+        end
+      end, 0.05)
+      return { "alloc: one recompute is being measured on the next frame..." }
+    elseif sub == "libs" then
+      -- Which of the eighteen libraries Elmira vendors did OUR copy win? LibStub serves one copy to
+      -- the whole UI and the client bills a function's memory to the addon whose file defined it,
+      -- so this list is the difference between "Elmira is using 17 MB" and "Elmira is being charged
+      -- for ElvUI's event dispatch". See Adapters/LibOwner.lua.
+      if not ns.LibOwner then return { "libs: the library probe is not loaded" } end
+      local rows, why = ns.LibOwner.report()
+      if not rows then return { "libs: " .. tostring(why) } end
+      local lines = {}
+      local mine, lost = 0, 0
+      for _, row in ipairs(rows) do
+        if row.ours then
+          mine = mine + 1
+          lines[#lines + 1] = string.format("  OURS  %-28s r%s", row.name, tostring(row.minor))
+        else
+          lost = lost + 1
+          lines[#lines + 1] = string.format("  was   %-28s r%s, replaced by r%s", row.name,
+            tostring(row.minor), tostring(row.replacedBy))
+        end
+      end
+      table.insert(lines, 1, string.format(
+        "libraries Elmira installed: %d still ours, %d taken over by a later addon", mine, lost))
+      if mine > 0 then
+        lines[#lines + 1] = "Every OTHER addon's use of the libraries marked OURS is charged to"
+        lines[#lines + 1] = "  Elmira's memory figure. That is the client's accounting, not a leak."
+      end
+      if #rows == 0 then
+        lines[#lines + 1] = "  (nothing: every library was already loaded at a same-or-higher version)"
+      end
+      return lines
+    elseif sub == "memory" then
+      -- Measures instead of arguing: one window with the display running, one with our OnUpdate
+      -- suspended. Asynchronous, so the answer arrives in chat rather than as a return value.
+      if not ns.MemProbe then return { "memory: the probe is not loaded" } end
+      if not ns.Display then return { "memory: display not loaded, nothing to suspend" } end
+      local state = ns.API and ns.API.GetState()
+      if state and state.inCombat and state:inCombat() then
+        return { "memory: you are in combat — the display goes dark for half the run, so not now" }
+      end
+      local wasEnabled = ns.Display.isEnabled()
+      local ok, err = ns.MemProbe.run{
+        now = ns.now,
+        readKB = function() return ns.Adapter and ns.Adapter.addonMemoryKB and ns.Adapter.addonMemoryKB() end,
+        schedule = function(seconds, fn) ns.addon:ScheduleTimer(fn, seconds) end,
+        suspend = ns.Display.Disable,
+        -- Restores what the player had, not what the probe wants: running this with the display
+        -- already off must not turn it on afterwards.
+        resume = function() if wasEnabled then ns.Display.Enable() end end,
+        report = function(lines) for _, line in ipairs(lines) do ns.log("%s", line) end end,
+        owned = ns.LibOwner and ns.LibOwner.ownedCount() or nil,
+      }
+      if not ok then return { "memory: " .. tostring(err) } end
+      local half = ns.MemProbe.PHASE_SECONDS
+      return {
+        string.format("measuring for %d seconds. Stand still and do not fight.", half * 2),
+        string.format("the display goes dark for the last %d of them; that is the measurement.", half),
+      }
     elseif sub == "dump" then
       -- Writes a full character snapshot to SavedVariables for offline analysis (docs/01 §4a).
       -- Slash stays WoW-API-free: Collector does every client read, exactly as `state` delegates
@@ -621,7 +724,7 @@ Slash.register{
       end
       return lines
     end
-    return { "Usage: /elm debug state|bars|swing|cues|perf|dump|queue [build] [depth]" }
+    return { "Usage: /elm debug state|bars|swing|cues|perf|libs|memory|alloc|dump|queue [build] [depth]" }
   end,
 }
 

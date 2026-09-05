@@ -69,6 +69,28 @@ describe("core TOC", function()
     end
   end)
 
+  -- Adapters/LibOwner.lua snapshots LibStub.minors as it was BEFORE our libraries loaded, which is
+  -- the only moment that snapshot exists. Listed after embeds.xml it would record our own copies as
+  -- somebody else's and `/elm debug libs` would confidently report that Elmira owns nothing — a
+  -- diagnostic that answers the opposite of the truth while looking perfectly healthy. Nothing in
+  -- the Lua can catch this: it is a property of the TOC's line order.
+  it("loads Adapters/LibOwner.lua before embeds.xml, or the library probe measures nothing", function()
+    -- Comment lines stripped first: the comment explaining the ordering names embeds.xml itself, so
+    -- searching the raw body finds the explanation rather than the entry and the test passes on a
+    -- TOC with the two lines the wrong way round.
+    local entries = {}
+    for line in tocBody():gmatch("[^\r\n]+") do
+      if not line:match("^%s*#") then entries[#entries + 1] = line end
+    end
+    local body = table.concat(entries, "\n")
+    local probeAt = body:find("Adapters\\LibOwner%.lua")
+    local embedsAt = body:find("embeds%.xml")
+    assert.is_not_nil(probeAt, "Adapters\\LibOwner.lua missing from the TOC")
+    assert.is_not_nil(embedsAt, "embeds.xml missing from the TOC")
+    assert.is_true(probeAt < embedsAt,
+      "Adapters\\LibOwner.lua must be listed before embeds.xml")
+  end)
+
   it("loads Core/Init.lua last, since it publishes the Elmira global", function()
     local body = tocBody()
     local initAt = body:find("Core\\Init%.lua")

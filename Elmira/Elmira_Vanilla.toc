@@ -9,6 +9,11 @@
 ## X-License: MIT
 ## X-Category: Combat
 
+# BEFORE embeds.xml on purpose: it snapshots LibStub.minors as it was before our libraries loaded,
+# which is the only moment that snapshot can be taken. Core/Init.lua seals the second one.
+# Without the ordering, /elm debug libs cannot tell our copies from everyone else's.
+Adapters\LibOwner.lua
+
 embeds.xml
 
 # Adapters (State contract first) — Adapters\Vanilla.lua is the only file in Elmira/ that names a WoW global
@@ -34,6 +39,7 @@ Core\Profiles.lua
 Core\Advisor.lua
 Core\Visibility.lua
 Core\Ticker.lua
+Core\MemProbe.lua
 Core\Transition.lua
 Core\Palette.lua
 Core\Recorder.lua

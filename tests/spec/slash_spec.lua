@@ -257,6 +257,257 @@ describe("Core.Slash", function()
       local lines = Slash.run("debug perf")
       assert.is_true(hasLineMatching(lines, "^client Lua heap, ALL addons: %d+ KB$"))
     end)
+
+    -- The figure above is only Elmira's if Elmira's copies of the shared libraries did not win
+    -- LibStub. When they did, the client charges every other addon's use of them to us, and reading
+    -- the number as a leak sends the next three days in the wrong direction -- which is exactly what
+    -- happened. The caveat belongs where the number is read, not only in a command nobody runs.
+    it("warns beside the figure when Elmira owns shared libraries the whole UI is using", function()
+      local ns = helper.ns()
+      ns.Adapter = adapterWith({ addonMemory = true }, 1234)
+      ns.LibOwner = { ownedCount = function() return 4 end }
+      local lines = Slash.run("debug perf")
+      assert.is_true(hasLineMatching(lines, "4 shared libraries Elmira embeds"))
+      assert.is_true(hasLineMatching(lines, "/elm debug libs"))
+    end)
+
+    it("says nothing about libraries when none of ours won", function()
+      local ns = helper.ns()
+      ns.Adapter = adapterWith({ addonMemory = true }, 1234)
+      ns.LibOwner = { ownedCount = function() return 0 end }
+      assert.is_false(hasLineMatching(Slash.run("debug perf"), "shared librar"))
+    end)
+
+    it("says nothing about libraries when the probe could not tell", function()
+      local ns = helper.ns()
+      ns.Adapter = adapterWith({ addonMemory = true }, 1234)
+      ns.LibOwner = { ownedCount = function() return nil end }
+      assert.is_false(hasLineMatching(Slash.run("debug perf"), "shared librar"))
+    end)
+  end)
+
+  -- Both of these exist because the memory question could not be answered by reading code: the
+  -- headless benchmark says the render loop allocates 0.016 KB a frame and retains nothing, while
+  -- the client reported ~70 KB/s. These are the two commands that tell those apart in game.
+  describe("'debug alloc'", function()
+    local function wire(opts)
+      opts = opts or {}
+      local ns = helper.ns()
+      local env = { pending = {}, printed = {} }
+      helper.load("Elmira/Core/MemProbe.lua")
+      helper.load("Elmira/Adapters/Interface.lua")
+      ns.log = function(fmt, ...) env.printed[#env.printed + 1] = string.format(fmt, ...) end
+      ns.addon = { ScheduleTimer = function(_, fn, s) env.pending[#env.pending + 1] = { fn = fn, s = s } end }
+      local state = ns.Interface.newNullState()
+      ns.API = { GetState = function() return state end }
+      ns.db = { profile = { depth = 4 } }
+      local compiled = { entries = {} }
+      ns.Display = { activeBuild = function()
+        if opts.noBuild then return nil, nil, "no data pack for this class" end
+        return compiled, "PALADIN_EXODIN", "pinned"
+      end }
+      env.queued = {}
+      ns.Simulation = { queue = function(build, st, depth, into)
+        env.queued[#env.queued + 1] = { build = build, state = st, depth = depth, into = into }
+        st:cooldown("X")
+        return into or {}
+      end }
+      ns.Adapter = { spellbookStatus = function() return "spellbook: cached, 12 entries read" end }
+      return ns, env
+    end
+
+    it("says what is missing rather than silently doing nothing", function()
+      assert.is_true(hasLineMatching(Slash.run("debug alloc"), "probe is not loaded"))
+      helper.load("Elmira/Core/MemProbe.lua")
+      assert.is_true(hasLineMatching(Slash.run("debug alloc"), "not loaded"))
+      wire{ noBuild = true }
+      assert.is_true(hasLineMatching(Slash.run("debug alloc"), "no build to simulate"))
+    end)
+
+    -- Warm now, measure next frame: a same-frame measurement only shows cache hits, and the point
+    -- is what a real tick pays when every per-frame memo has to refill.
+    it("warms in this frame and measures one recompute on the next, into the same buffer", function()
+      local ns, env = wire()
+      assert.is_true(hasLineMatching(Slash.run("debug alloc"), "next frame"))
+      assert.equal(1, #env.queued, "warmed once, synchronously")
+      assert.equal(4, env.queued[1].depth, "the profile's depth")
+      assert.equal(1, #env.pending)
+      env.pending[1].fn()
+      assert.equal(2, #env.queued)
+      assert.equal(env.queued[1].state, env.queued[2].state)
+      assert.is_table(env.queued[2].into, "measured into the warmed buffer, as the tick does")
+      assert.is_true(hasLineMatching(env.printed, "^one recompute of PALADIN_EXODIN at depth 4"))
+      assert.is_true(hasLineMatching(env.printed, "^  cooldown%s+[%d%.]+ KB over   1 call"))
+      assert.is_true(hasLineMatching(env.printed, "^  unattributed"))
+      assert.is_true(hasLineMatching(env.printed, "^spellbook: cached"))
+      assert.equal(ns.Interface.newNullState().cooldown ~= nil, true)
+    end)
+
+    it("reports a measurement that threw, with the display's state restored", function()
+      local ns, env = wire()
+      Slash.run("debug alloc")
+      local state = ns.API.GetState()
+      local before = state.cooldown
+      ns.Simulation.queue = function() error("kaboom") end
+      env.pending[1].fn()
+      assert.is_true(hasLineMatching(env.printed, "measurement failed .*kaboom"))
+      assert.is_false(hasLineMatching(env.printed, "^spellbook"), "no rows, no status: the run did not happen")
+      assert.equal(before, state.cooldown)
+    end)
+  end)
+
+  describe("'debug libs'", function()
+    it("says so when the probe never loaded, rather than reporting no libraries", function()
+      assert.is_true(hasLineMatching(Slash.run("debug libs"), "probe is not loaded"))
+    end)
+
+    -- "we never looked" and "we own nothing" are different answers and the second one would end the
+    -- investigation on a false negative.
+    it("passes on the reason when the snapshots were never sealed", function()
+      helper.ns().LibOwner = { report = function() return nil, "never sealed" end }
+      assert.is_true(hasLineMatching(Slash.run("debug libs"), "never sealed"))
+    end)
+
+    it("marks a library we still own separately from one a later addon took back", function()
+      helper.ns().LibOwner = { report = function()
+        return {
+          { name = "LibCustomGlow-1.0", minor = 25, current = 25, ours = true },
+          { name = "AceTimer-3.0", minor = 17, current = 18, ours = false, replacedBy = 18 },
+        }
+      end }
+      local lines = Slash.run("debug libs")
+      assert.is_true(hasLineMatching(lines, "^  OURS  LibCustomGlow%-1%.0%s+r25$"))
+      assert.is_true(hasLineMatching(lines, "^  was   AceTimer%-3%.0%s+r17, replaced by r18$"))
+      assert.is_true(hasLineMatching(lines, "^libraries Elmira installed: 1 still ours, 1 taken over"))
+      assert.is_true(hasLineMatching(lines, "charged to"))
+      -- Both halves of the sentence: "charged to" alone stops mid-thought, and the second line is
+      -- the one that says this is the client's accounting rather than a leak to go hunting.
+      assert.is_true(hasLineMatching(lines, "not a leak"))
+    end)
+
+    -- An empty audit is a real, reportable outcome: every library was already loaded elsewhere at a
+    -- same-or-higher version. Printing a bare header for it reads as a broken command.
+    it("says why the list is empty when Elmira installed nothing", function()
+      helper.ns().LibOwner = { report = function() return {} end }
+      local lines = Slash.run("debug libs")
+      assert.is_true(hasLineMatching(lines, "already loaded at a same%-or%-higher version"))
+      assert.is_false(hasLineMatching(lines, "charged to"))
+    end)
+  end)
+
+  describe("'debug memory'", function()
+    -- Everything the command needs, wired to fakes. `pending` is the scheduler: draining it by hand
+    -- is what makes a forty-second measurement testable in a millisecond.
+    local function wire(opts)
+      opts = opts or {}
+      local ns = helper.ns()
+      local env = { pending = {}, printed = {}, kb = 1000, clock = 0, suspended = false }
+      helper.load("Elmira/Core/MemProbe.lua")
+      ns.log = function(fmt, ...) env.printed[#env.printed + 1] = string.format(fmt, ...) end
+      ns.now = function() return env.clock end
+      ns.addon = { ScheduleTimer = function(_, fn, s) env.pending[#env.pending + 1] = { fn = fn, s = s } end }
+      -- NOT `opts.noMemory and nil or env.kb`: `x and nil or y` always answers y in Lua, so the
+      -- "client cannot report memory" case would have handed back a real figure and tested nothing.
+      ns.Adapter = { addonMemoryKB = function()
+        if opts.noMemory then return nil end
+        return env.kb
+      end }
+      ns.API = { GetState = function()
+        return { inCombat = function() return opts.inCombat == true end }
+      end }
+      ns.Display = {
+        isEnabled = function() return opts.enabled ~= false end,
+        Disable = function() env.suspended = true end,
+        Enable = function() env.suspended = false end,
+      }
+      -- KB/s while running vs while suspended, so a spec can make the two windows agree or diverge.
+      function env.drain(running, idle)
+        local guard = 0
+        while #env.pending > 0 and guard < 500 do
+          guard = guard + 1
+          local job = table.remove(env.pending, 1)
+          env.clock = env.clock + job.s
+          env.kb = env.kb + job.s * (env.suspended and idle or running)
+          job.fn()
+        end
+      end
+      return ns, env
+    end
+
+    -- Both guards answer the same question -- "why did nothing happen?" -- and each names a
+    -- different missing piece. Collapsed into one, or dropped, the command returns nothing and
+    -- looks like it silently started.
+    it("says which piece is missing rather than starting a run it cannot finish", function()
+      local ns = helper.ns()
+      ns.Display = { isEnabled = function() return true end }
+      assert.is_true(hasLineMatching(Slash.run("debug memory"), "probe is not loaded"))
+      local _, env = wire()
+      ns.Display = nil
+      assert.is_true(hasLineMatching(Slash.run("debug memory"), "display not loaded"))
+      assert.equal(0, #env.pending, "nothing may be scheduled for a run that cannot start")
+    end)
+
+    -- The command runs for forty seconds and blanks the display for twenty of them. Saying so up
+    -- front is the difference between a measurement and an apparent bug, so both lines are pinned
+    -- with the real numbers the probe will actually use.
+    it("says how long it will take and warns that the display goes dark", function()
+      wire()
+      local lines = Slash.run("debug memory")
+      local half = helper.ns().MemProbe.PHASE_SECONDS
+      assert.is_true(hasLineMatching(lines,
+        "^measuring for " .. (half * 2) .. " seconds%. Stand still and do not fight%.$"))
+      assert.is_true(hasLineMatching(lines,
+        "^the display goes dark for the last " .. half .. " of them; that is the measurement%.$"))
+    end)
+
+    it("refuses to start in combat: the display goes dark for half the run", function()
+      local _, env = wire{ inCombat = true }
+      assert.is_true(hasLineMatching(Slash.run("debug memory"), "you are in combat"))
+      assert.equal(0, #env.pending)
+    end)
+
+    it("refuses on a client that will not report per-addon memory", function()
+      local _, env = wire{ noMemory = true }
+      assert.is_true(hasLineMatching(Slash.run("debug memory"), "does not report per%-addon memory"))
+      assert.is_false(env.suspended, "nothing may be suspended for a measurement that cannot run")
+    end)
+
+    it("says a second run is already in flight rather than starting one underneath it", function()
+      local _, env = wire()
+      Slash.run("debug memory")
+      assert.is_true(hasLineMatching(Slash.run("debug memory"), "already running"))
+      env.drain(20, 20)
+    end)
+
+    -- The whole point of the command: the same growth with the display suspended means the render
+    -- loop is not where the memory is going.
+    it("reports both windows and calls it not-the-render-loop when they agree", function()
+      local ns, env = wire()
+      ns.LibOwner = { ownedCount = function() return 4 end }
+      Slash.run("debug memory")
+      env.drain(20, 20)
+      assert.is_true(hasLineMatching(env.printed, "^display RUNNING:   20%.0 KB/s"))
+      assert.is_true(hasLineMatching(env.printed, "^display SUSPENDED: 20%.0 KB/s"))
+      assert.is_true(hasLineMatching(env.printed, "NOT the render loop"))
+      assert.is_true(hasLineMatching(env.printed, "^shared libraries: 4 of the libraries"))
+      assert.is_false(env.suspended, "the display must be running again when the run finishes")
+    end)
+
+    it("names the render loop's share when suspending it changes the rate", function()
+      local _, env = wire()
+      Slash.run("debug memory")
+      env.drain(100, 10)
+      assert.is_true(hasLineMatching(env.printed, "render loop accounts for 90%% of the growth"))
+    end)
+
+    -- Running it with the display already off must not turn it on: the command restores what the
+    -- player had, not what it wanted.
+    it("leaves a display the player had switched off switched off", function()
+      local _, env = wire{ enabled = false }
+      Slash.run("debug memory")
+      env.drain(20, 20)
+      assert.is_true(env.suspended, "resume must not enable a display that was never enabled")
+    end)
   end)
 
   -- Display.stats().build falls back to a resolved (not rendered) build when the display is hidden;
