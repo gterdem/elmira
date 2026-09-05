@@ -838,6 +838,94 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
     end)
   end)
 
+  -- The addon's single largest cost, found from a client memory readout: Elmira topped the addon
+  -- list at 73 MB and churned ~27 MB a minute standing still in a city (owner, 2026-09-05).
+  --
+  -- Each lookup walked 1..40 calling `UnitAura` TWICE per index -- the second only to read the
+  -- spellID the first call already returns as its tenth value. A build with a dozen aura-gated
+  -- lines, simulated across five slots, ran that hundreds of times per recompute. Measured on the
+  -- shipped Exodin build: 275 UnitAura calls per recompute before, 13 after.
+  describe("reading auras without rescanning for every one", function()
+    local function countCalls(fn)
+      local calls, real = 0, _G.UnitAura
+      _G.UnitAura = function(...) calls = calls + 1; return real(...) end
+      fn()
+      _G.UnitAura = real
+      return calls
+    end
+
+    before_each(function()
+      mock.time = 100
+      mock.auras.player = {}
+      for i = 1, 12 do
+        mock.auras.player[i] = { name = "Filler" .. i, spellID = 900000 + i, expires = 118 }
+      end
+      mock.auras.player[13] = { name = "Avenging Wrath", spellID = 407788, count = 1, expires = 118 }
+    end)
+
+    it("scans the list once however many auras are asked about", function()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      local once = countCalls(function() state:buff("AVENGING_WRATH_BUFF") end)
+      local tenMore = countCalls(function()
+        for _ = 1, 10 do state:buff("AVENGING_WRATH_BUFF") end
+      end)
+      assert.equal(0, tenMore, "ten more lookups in the same frame must cost nothing")
+      assert.is_true(once <= 14, "one pass over the list, not one per lookup: " .. once)
+    end)
+
+    -- A frozen cache would answer with auras that expired minutes ago. GetTime() is stamped once
+    -- per frame by the client, so a new stamp is a new frame and a new scan.
+    it("reads again on the next frame", function()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      state:buff("AVENGING_WRATH_BUFF")
+      mock.time = mock.time + 0.1
+      assert.is_true(countCalls(function() state:buff("AVENGING_WRATH_BUFF") end) > 0,
+        "the next frame must scan again")
+    end)
+
+    it("notices an aura that fell off between frames", function()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(1, state:buff("AVENGING_WRATH_BUFF"))
+      mock.auras.player[13] = nil
+      mock.time = mock.time + 0.1
+      assert.is_nil(state:buff("AVENGING_WRATH_BUFF"))
+    end)
+
+    -- A key the pack does not carry cannot match anything, so it must not cost a scan either.
+    -- Reading the map with a nil key would answer correctly and walk the whole list to do it.
+    it("does not scan at all for a key the pack does not carry", function()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(0, countCalls(function() state:buff("NOT_IN_THE_PACK") end))
+      assert.is_nil(state:buff("NOT_IN_THE_PACK"))
+    end)
+
+    it("answers nil for an aura that is not on the list at all", function()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_nil(state:buff("EXORCISM"), "not present, so there is nothing to report")
+      -- and the scan still answers correctly for one that IS there, from the same pass
+      assert.equal(1, state:buff("AVENGING_WRATH_BUFF"))
+    end)
+
+    -- Stacks matter: T3.5's Holy Power buff is gated `min = 3`, so reporting every aura as one
+    -- stack would hold that line back for ever.
+    it("reports how many stacks an aura has, not just that it is there", function()
+      mock.auras.player[13] = { name = "Avenging Wrath", spellID = 407788, count = 4, expires = 118 }
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(4, state:buff("AVENGING_WRATH_BUFF"))
+    end)
+
+    -- Player and target are different lists, and helpful and harmful are different filters: one
+    -- cache slot for all of them would answer a debuff question with a buff.
+    it("keeps the units and filters apart", function()
+      mock.auras.target = { { name = "Judgement", spellID = 20271, expires = 118,
+                              source = "player" } }
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.equal(1, state:buff("AVENGING_WRATH_BUFF"))
+      assert.is_nil(state:buff("JUDGEMENT"), "a target debuff is not a player buff")
+      assert.equal(1, state:debuff("JUDGEMENT"))
+    end)
+  end)
+
   describe("buff()", function()
     it("returns stacks and remaining seconds for a present player aura", function()
       mock.time = 100

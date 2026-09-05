@@ -417,19 +417,54 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
     return costs[1].cost or 0, costs[1].name or "MANA"
   end
 
+  -- One scan of a unit's auras per FRAME, shared by every lookup on it.
+  --
+  -- This was the addon's single largest cost. Each lookup walked 1..40 and called `UnitAura` TWICE
+  -- per index -- the second only to read the spellID, which the first call already returns as its
+  -- tenth value -- so a single `buff` condition cost up to 80 calls, each returning a dozen values
+  -- including strings. A build with a dozen aura-gated lines, evaluated across five simulated
+  -- slots, ran that thousands of times per recompute: the client attributed ~27 MB of garbage to
+  -- Elmira per minute standing still in a city, and the addon topped the memory list at 73 MB
+  -- before collection (owner's report, 2026-09-05).
+  --
+  -- `GetTime()` is stamped once per frame by the client, which makes it exactly the right cache
+  -- key: auras cannot change without a frame boundary, and the whole of one queue recompute
+  -- therefore shares one scan. The simulation's virtual clock never reaches here -- it delegates
+  -- `buff` to the real state, which is about NOW by definition.
+  local auraFrame, auraByUnit = nil, {}
+
+  local function auraScan(unit, filter)
+    local stamp = GetTime and GetTime() or 0
+    if auraFrame ~= stamp then
+      auraFrame, auraByUnit = stamp, {}
+    end
+    local slot = unit .. "\0" .. filter
+    local found = auraByUnit[slot]
+    if found then return found end
+
+    found = {}
+    for i = 1, 40 do
+      local name, _, count, _, duration, expires, source, _, _, spellID = UnitAura(unit, i, filter)
+      -- The first empty index is the end of the list: the client packs them.
+      if not name then break end
+      -- First writer wins, so a longer-lived duplicate cannot be masked by a later stack.
+      if spellID and found[spellID] == nil then
+        found[spellID] = { count = count, duration = duration, expires = expires, source = source }
+      end
+    end
+    auraByUnit[slot] = found
+    return found
+  end
+
   local function findAura(unit, key, filter, mineOnly)
     local id = resolve(key)
     if not id then return nil end
-    for i = 1, 40 do
-      local name, _, count, _, duration, expires, source = UnitAura(unit, i, filter)
-      if not name then return nil end
-      local _, _, _, _, _, _, _, _, _, spellID = UnitAura(unit, i, filter)
-      if spellID == id and (not mineOnly or source == "player") then
-        local remaining = expires and (expires - GetTime()) or 0
-        return (count and count > 0) and count or 1, remaining > 0 and remaining or 0, duration
-      end
-    end
-    return nil
+    local aura = auraScan(unit, filter)[id]
+    if not aura then return nil end
+    if mineOnly and aura.source ~= "player" then return nil end
+    local remaining = aura.expires and (aura.expires - GetTime()) or 0
+    local count = aura.count
+    return (count and count > 0) and count or 1, remaining > 0 and remaining or 0, aura.duration
   end
 
   function S:buff(key) return findAura("player", key, "HELPFUL") end

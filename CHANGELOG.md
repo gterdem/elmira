@@ -1,5 +1,11 @@
 # Changelog
 ## Unreleased
+- **Fixed: Elmira was by far the most memory-hungry addon on the list, and did not need to be.**
+  Every time the rotation asked whether you had a buff, it walked all forty aura slots and asked the
+  game about each one **twice** — the second time only to learn which spell it was, which the first
+  answer already contained. A rotation with a dozen aura-gated lines, looked ahead five casts, did
+  that hundreds of times a second. It now reads your auras **once per frame** and shares the answer.
+  Measured on the shipped Exodin rotation: 275 game calls per refresh before, 13 after.
 - **Fixed: "Cooldowns used" never said anything.** The category had its own colour, its own routing
   and the only party/raid switch in the addon — and nothing anywhere ever produced a message for it,
   so switching it on and using a cooldown was silent. Using a long cooldown is now announced, with
