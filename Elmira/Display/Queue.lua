@@ -33,6 +33,16 @@ local MAX_SLOTS = 5     -- PRD F5: 1-5, default 3
 -- become globals leaking between specs, but the key guard nils `rendered` on the first render of
 -- every one of them, so no test can tell the two apart. luacheck is the gate that can.
 local rendered, pendingCast, lastKey -- mutants: equivalent deletion only makes these globals
+local pendingCastAt = nil -- mutants: equivalent deletion only makes it a global
+
+-- How long a cast stays armed while the queue has not moved. `noteCast` forces a recompute so the
+-- pop lands with the press, but that render usually happens BEFORE the spell's cooldown registers,
+-- so the queue is still identical and there is nothing to pop. Clearing the cast there -- which is
+-- what shipped -- meant the real change a fraction of a second later was drawn as an ordinary
+-- shift, and the pop was never seen. Held instead, and spent when it is used.
+--
+-- One GCD is the bound: past that the queue moved for some other reason and this cast is stale.
+Queue.CAST_WINDOW = 1.5
 
 local function profile()
   return (ns.db and ns.db.profile) or ns.DB.defaults.profile
@@ -397,6 +407,8 @@ function Queue.noteCast(spellID)
   local key = keyForSpellID(spellID)
   if not key then return false end
   pendingCast = key
+  local st = ns.API and ns.API.GetState and ns.API.GetState()
+  pendingCastAt = (st and st.now) and st:now() or nil
   -- The queue itself is unchanged until the cooldown lands, and the tick that notices may be up to
   -- a tenth of a second away. Marking dirty makes the pop land with the press, not after it.
   if ns.Display and ns.Display.invalidate then ns.Display.invalidate() end
@@ -417,7 +429,7 @@ function Queue.Render(queue, key, visible)
     container:Hide()
     -- Forget what was on screen. Coming back should look like arriving, not like the icons
     -- teleported in from wherever the rotation happened to be when the strip went away.
-    rendered, pendingCast = nil, nil
+    rendered, pendingCast, pendingCastAt = nil, nil, nil
     return
   end
   container:Show()
@@ -490,7 +502,20 @@ function Queue.Render(queue, key, visible)
     if not slot then break end
     rendered[i] = { spell = slot.spell, item = slot.item }
   end
-  pendingCast = nil
+
+  -- Spend the cast only when it was actually used, or when it has gone stale. Clearing it on every
+  -- render is what stopped the pop ever being drawn.
+  if plan.popped then
+    pendingCast, pendingCastAt = nil, nil
+  elseif pendingCast and state and state.now then
+    -- No clock is not a reason to hold a cast for ever, but it is a reason not to guess: without
+    -- one the cast is spent immediately, which is the old behaviour and no worse than it.
+    if not pendingCastAt or (state:now() - pendingCastAt) > Queue.CAST_WINDOW then
+      pendingCast, pendingCastAt = nil, nil
+    end
+  elseif pendingCast then
+    pendingCast, pendingCastAt = nil, nil
+  end
 end
 
 ns.Queue = Queue

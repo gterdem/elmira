@@ -1,5 +1,11 @@
 # Changelog
 ## Unreleased
+- **Fixed: the queue never popped the spell you cast.** Casting the current suggestion was supposed
+  to make its icon pop and fade as it left, telling it apart from the rotation simply changing its
+  mind. It slid like any other change instead: the cast was noted and then thrown away on the very
+  next redraw, which happens a fraction of a second before the spell's cooldown registers and the
+  queue actually moves. The cast is now kept until it is used, and forgotten after one global
+  cooldown if the queue never moves.
 - **Fixed: abilities you had learned were shown as "not learned yet".** Classic gives every rank of
   a spell its own id and Elmira's data records one of them, so asking the game about that exact id
   answered "no" for anyone holding a different rank — Exorcism and Holy Wrath both showed greyed for

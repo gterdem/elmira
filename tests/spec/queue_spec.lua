@@ -14,7 +14,7 @@ local FakeState = dofile("tests/fake_state.lua")
 -- point: tests/wow_mock.lua's CreateFrame answers every method with a no-op, so EnableMouse(true)
 -- and never calling it are indistinguishable there.
 describe("Display.Queue", function()
-  local Queue, ns, frames, tooltip
+  local Queue, ns, frames, tooltip, clockNow
 
   local function fakeFrame(kind, name)
     local f = {
@@ -136,8 +136,11 @@ describe("Display.Queue", function()
       anchor = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },
       glow = { enabled = false, style = "PIXEL", barGlow = false },
     } }
-    ns.API = { GetState = function() return FakeState.new{} end }
-    ns.now = function() return 0 end
+    -- A clock the spec can move: Queue holds a cast for one GCD, so testing that it is eventually
+    -- forgotten needs time to pass.
+    clockNow = 0
+    ns.API = { GetState = function() return FakeState.new{ now = clockNow } end }
+    ns.now = function() return clockNow end
     stubBuild()
   end)
 
@@ -405,6 +408,56 @@ describe("Display.Queue", function()
       assert.is_true(ghost.shown)
       assert.same({ 52 * 1.15, 52 * 1.15 }, ghost.size)
       assert.is_true(math.abs(ghost.anim.anims.Scale.scale[1] - 1 / 1.15) < 1e-9)
+    end)
+
+    -- The defect the owner saw in game: casting slot 1 slid like an ordinary shift instead of
+    -- popping. `noteCast` forces an immediate recompute so the pop lands with the press, but that
+    -- render happens BEFORE the spell's cooldown registers, so the queue is still identical and
+    -- there is nothing to pop. The cast was then cleared anyway, so the real change a fraction of a
+    -- second later was drawn as a shift. Two renders, exactly as the client does it.
+    it("still pops when the queue has not moved yet at the moment of the cast", function()
+      Queue.Create()
+      Queue.Render(slotsOf("EXORCISM", "JUDGEMENT"), "PALADIN_EXODIN", true)
+      Queue.noteCast(415073)
+      -- The cooldown has not landed: same queue, so nothing has left and nothing may animate.
+      Queue.Render(slotsOf("EXORCISM", "JUDGEMENT"), "PALADIN_EXODIN", true)
+      assert.equal(0, ghosts()[1].anim.played, "nothing should have left yet")
+      -- Now it lands.
+      Queue.Render(slotsOf("JUDGEMENT", "EXORCISM"), "PALADIN_EXODIN", true)
+      local ghost = ghosts()[1]
+      assert.equal(1, ghost.anim.played, "the departing icon never animated")
+      assert.is_truthy(ghost.anim.anims.Scale, "it faded away instead of popping")
+      assert.is_true(math.abs(ghost.anim.anims.Scale.scale[1] - 1 / ns.Transition.POP_SCALE) < 1e-9,
+        "it left as a shrink, not as a pop")
+    end)
+
+    -- Held, but not for ever: a cast whose queue never moves must not pop a change made a minute
+    -- later for some unrelated reason.
+    it("forgets a cast that was never spent, after one global cooldown", function()
+      Queue.Create()
+      Queue.Render(slotsOf("EXORCISM", "JUDGEMENT"), "PALADIN_EXODIN", true)
+      Queue.noteCast(415073)
+      Queue.Render(slotsOf("EXORCISM", "JUDGEMENT"), "PALADIN_EXODIN", true)
+      clockNow = clockNow + Queue.CAST_WINDOW + 0.1
+      Queue.Render(slotsOf("EXORCISM", "JUDGEMENT"), "PALADIN_EXODIN", true)
+      Queue.Render(slotsOf("JUDGEMENT", "EXORCISM"), "PALADIN_EXODIN", true)
+      -- Exorcism is still in the queue, one slot down, so with no pop it simply SHIFTS: nothing
+      -- departs and no ghost animates at all. A ghost here would be praise for a press that
+      -- happened a global cooldown ago.
+      assert.equal(0, ghosts()[1].anim.played, "a stale cast should not pop")
+    end)
+
+    -- No clock is not a reason to hold a cast for ever. Without a state the cast is spent on the
+    -- next render, which is exactly the behaviour before it was held at all -- no worse, and it
+    -- cannot leave a press armed indefinitely.
+    it("does not hold a cast on a client with no state to time it by", function()
+      Queue.Create()
+      Queue.Render(slotsOf("EXORCISM", "JUDGEMENT"), "PALADIN_EXODIN", true)
+      Queue.noteCast(415073)
+      ns.API = { GetState = function() return nil end }
+      Queue.Render(slotsOf("EXORCISM", "JUDGEMENT"), "PALADIN_EXODIN", true)
+      Queue.Render(slotsOf("JUDGEMENT", "EXORCISM"), "PALADIN_EXODIN", true)
+      assert.equal(0, ghosts()[1].anim.played, "the cast should not have survived")
     end)
 
     it("shrinks an icon that just dropped out", function()

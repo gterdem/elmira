@@ -131,7 +131,11 @@ function Transition.plan(old, new, castSpell)
     end
   end
 
-  return { ops = ops, leaving = leaving }
+  -- `popped` is reported so the caller can tell a cast that was USED from one that arrived before
+  -- the queue had moved. Display/Queue holds the cast until it is spent: the invalidate that
+  -- follows a cast renders before the spell's cooldown lands, so the first plan after a press
+  -- routinely has nothing to pop yet.
+  return { ops = ops, leaving = leaving, popped = popped }
 end
 
 ns.Transition = Transition

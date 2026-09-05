@@ -242,7 +242,12 @@ local spellbookCache = nil -- mutants: equivalent deletion only makes it a globa
 
 -- The booktype the scan asks for. Named rather than inlined because it is the one value in this
 -- fix that no headless test can prove: a wrong constant reads an empty book, `known` falls back to
--- the id alone, and the rank defect returns silently. Verified in-client before shipping.
+-- the id alone, and the rank defect returns silently.
+--
+-- VERIFIED on the live 1.15 client, 2026-09-05:
+--   /dump GetSpellBookItemName(1, "spell")  ->  [1]="Attack", [2]="", [3]=6603
+-- Three returns: name, rank subtext, spellID. The rank subtext is empty here, which matches
+-- docs/07 §9.6 -- which is why the NAME is what this file matches on and the id is not enough.
 local BOOKTYPE = "spell"
 
 -- A spell listed but not yet learnable (a higher rank the trainer will sell you) must not count as
