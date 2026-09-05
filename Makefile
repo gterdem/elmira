@@ -97,11 +97,25 @@ deploy-package: package
 	done
 	@echo "Deployed packaged tree: $(ADDONS)"
 
-# Copies the versioned release zip to a local builds folder for manual install on a second PC.
+# Stages the release zip in a local builds folder for manual install on a second PC.
+#
+# Exactly ONE zip is left there. This used to `cp $(PKGDIR)/*.zip`, which copies every build the
+# packager dir has ever accumulated -- five of them, all named alike -- so the folder you install
+# from offered a choice between one current build and four stale ones. A stale zip was nearly
+# installed once; on 2026-09-05 the same glob put four back. Older ones move to superseded/ rather
+# than being deleted, because "which build produced this bug report" is a question worth answering.
 release-zip: package
-	@mkdir -p "$(BUILDS_DIR)"
-	@cp $(PKGDIR)/*.zip "$(BUILDS_DIR)/"
-	@echo "Copied to $(BUILDS_DIR)"
+	@mkdir -p "$(BUILDS_DIR)/superseded"
+	@zip="$$(ls -t $(PKGDIR)/*.zip 2>/dev/null | head -1)"; \
+	 [ -n "$$zip" ] || (echo "ERROR: no zip in $(PKGDIR) -- inspect the packager output" && exit 1); \
+	 for old in "$(BUILDS_DIR)"/*.zip; do \
+	   if [ -e "$$old" ] && [ "$$(basename "$$old")" != "$$(basename "$$zip")" ]; then \
+	     echo "  retiring $$(basename "$$old")"; \
+	     mv "$$old" "$(BUILDS_DIR)/superseded/"; \
+	   fi; \
+	 done; \
+	 cp "$$zip" "$(BUILDS_DIR)/"; \
+	 echo "Staged $$(basename "$$zip") in $(BUILDS_DIR) -- one zip, as intended."
 
 # Pulls per-date reports (e.g. BugSack.lua, ElmiraDB.lua) off a second PC's shared folder into a
 # local, gitignored working copy for analysis.
