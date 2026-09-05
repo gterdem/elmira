@@ -136,6 +136,56 @@ describe("Options (overlay/peripheral cues)", function()
       assert.is_true(row.get())
     end)
 
+    -- Reported from a client: the dim hint looked identical to the bright one on Proc, which
+    -- drives its own alpha animation. How dim "dim" is has to be adjustable, and comparable.
+    describe("the dim hint's brightness", function()
+      it("offers a slider only once the hint is switched on", function()
+        ns.db.profile.glow.secondary = false
+        local row = glowArgs().secondaryAlpha
+        assert.equal("range", row.type)
+        assert.equal(0.05, row.min)
+        assert.equal(1, row.max)
+        -- The description carries the reason this is a setting at all: a value that reads dim on
+        -- one style can look identical on another, so it names the way to check.
+        assert.is_truthy(row.desc:find("look identical on another", 1, true))
+        assert.is_truthy(row.desc:find("preview", 1, true))
+        assert.is_true(row.hidden(), "a slider for something switched off is a dead control")
+        ns.db.profile.glow.secondary = true
+        assert.is_false(row.hidden())
+      end)
+
+      it("reads and writes the profile through Glow, so the render agrees with the panel", function()
+        helper.load("Elmira/Display/Glow.lua")
+        ns.db.profile.glow.secondary = true
+        local row = glowArgs().secondaryAlpha
+        assert.equal(ns.Glow.secondaryAlpha(), row.get())
+        row.set(nil, 0.6)
+        assert.equal(0.6, ns.db.profile.glow.secondaryAlpha)
+        assert.equal(0.6, row.get())
+      end)
+
+      -- The SAME button, so the two brightnesses are directly comparable rather than at the mercy
+      -- of where two different buttons sit.
+      it("previews the dim hint, and only when there is a hint to preview", function()
+        ns.db.profile.glow.secondary = false
+        local row = glowArgs().previewDim
+        assert.equal("execute", row.type)
+        assert.is_true(row.hidden())
+        ns.db.profile.glow.secondary = true
+        assert.is_false(row.hidden())
+
+        local lit
+        ns.BarGlow = { buttonsFor = function() return { "BUTTON" } end }
+        ns.Glow = { Start = function(_, _, secondary) lit = secondary; return true end,
+                    Stop = function() end, isRendererFrame = function() return false end }
+        Options.setCheckSpell("EXORCISM")
+        row.func()
+        assert.is_true(lit, "the dim preview lit the bright glow")
+        glowArgs().preview.func()
+        assert.is_false(lit, "the ordinary preview should not be dim")
+      end)
+    end)
+
     it("offers Proc alongside the three older styles", function()
       ns.Glow.available = function() return { PIXEL = true, PROC = true } end
       local values = glowArgs().style.values()

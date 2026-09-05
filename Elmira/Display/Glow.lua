@@ -58,7 +58,21 @@ Glow.STYLES = STYLES
 
 -- The second suggestion, when the user asks for it. Dim on purpose and OFF by default: this whole
 -- ADR exists because two things were competing for one glance, and a second glow is that again.
-Glow.SECONDARY_ALPHA = 0.45
+Glow.SECONDARY_ALPHA = 0.35
+
+-- The user's dimness, or the shipped default. Read through here so the render path and the preview
+-- cannot disagree about how dim the hint is.
+function Glow.secondaryAlpha()
+  local p = (ns.db and ns.db.profile) or ns.DB.defaults.profile
+  local g = (p and p.glow) or {}
+  local a = tonumber(g.secondaryAlpha)
+  if not a then return Glow.SECONDARY_ALPHA end
+  -- Clamped: 0 is an invisible hint, which is what the OFF switch is for, and above 1 is not a
+  -- dimming at all.
+  if a < 0.05 then return 0.05 end
+  if a > 1 then return 1 end
+  return a
+end
 
 local function lib()
   return LibStub and LibStub("LibCustomGlow-1.0", true) or nil
@@ -135,7 +149,7 @@ function Glow.Start(frame, style, secondary)
   if not fn then return false end
   local s = Glow.settings()
   if secondary then
-    s.color = { s.color[1], s.color[2], s.color[3], Glow.SECONDARY_ALPHA }
+    s.color = { s.color[1], s.color[2], s.color[3], Glow.secondaryAlpha() }
   end
   local args, n = startArgs(def, frame, s, glowKey)
   fn(unpack(args, 1, n))

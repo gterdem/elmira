@@ -44,7 +44,12 @@ DB.defaults = {
     -- highlight. `secondary` ships off: ADR-0015 exists because two things competed for one glance.
     glow = { enabled = true, style = "PIXEL", barGlow = true, color = false,
              particles = false, frequency = false, thickness = false, speed = false,
-             secondary = false },
+             secondary = false,
+             -- How dim the "cast after next" hint is, as a fraction of the main glow. A setting
+             -- rather than a constant because how dim "dim" needs to be depends on the style: Proc
+             -- drives its own alpha animation (SetToFinalAlpha, from 1 to 1), so a value that reads
+             -- clearly dimmer on Pixel can look identical there. Reported from a client, 2026-09-05.
+             secondaryAlpha = 0.35 },
     -- ADR-0009: the overlay has no global "on" switch. `cues` maps a cue id to the user's settings
     -- for it, so an empty table is a quiet default install, and a cue only ever exists because the
     -- user opted it in. Reshaped at M1 with no dbVersion migration: the previous

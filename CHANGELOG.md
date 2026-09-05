@@ -1,5 +1,10 @@
 # Changelog
 ## Unreleased
+- **The dim hint on the cast after next is now adjustable, and you can compare it on demand.** How
+  dim it looked depended on the glow style — Proc drives its own brightness, so the hint could come
+  out looking identical to the real suggestion. There is a **How dim the hint is** slider, and a
+  **Preview the dim hint** button that flashes the same button as the ordinary preview so the two
+  can be held side by side without waiting for a fight. Both appear only once the hint is switched on.
 - **Fixed: the queue never popped the spell you cast.** Casting the current suggestion was supposed
   to make its icon pop and fade as it left, telling it apart from the rotation simply changing its
   mind. It slid like any other change instead: the cast was noted and then thrown away on the very

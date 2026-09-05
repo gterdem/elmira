@@ -139,7 +139,7 @@ end
 -- useful control in the panel: it separates "the glow is broken" from "nothing is being suggested
 -- right now", which are indistinguishable to a player standing in a city and are the likeliest
 -- source of a bug report that is not a bug.
-function Options.previewGlow()
+function Options.previewGlow(secondary)
   stopPreview()
   local key = Options.checkSpell()
   local buttons = key and ns.BarGlow and ns.BarGlow.buttonsFor(key)
@@ -150,7 +150,7 @@ function Options.previewGlow()
   end
   local p = profile()
   local style = (p and p.glow and p.glow.style) or "PIXEL"
-  if not (ns.Glow and ns.Glow.Start(frame, style)) then
+  if not (ns.Glow and ns.Glow.Start(frame, style, secondary and true or false)) then
     previewNote = L["The glow library is not loaded, so Elmira cannot draw a glow at all."]
     return false
   end
@@ -803,10 +803,29 @@ function Options.table()
             get = function() return profile().glow.secondary == true end,
             set = function(_, v) profile().glow.secondary = v; restyle() end,
           },
+          secondaryAlpha = {
+            type = "range", order = 9.5, name = L["How dim the hint is"],
+            desc = L["A fraction of the main glow. Some styles drive their own brightness, so a "
+                  .. "value that looks clearly dimmer on one can look identical on another -- "
+                  .. "compare them with the two preview buttons below."],
+            min = 0.05, max = 1, step = 0.05,
+            hidden = function() return profile().glow.secondary ~= true end,
+            get = function() return ns.Glow and ns.Glow.secondaryAlpha() or 0.35 end,
+            set = function(_, v) profile().glow.secondaryAlpha = v; restyle() end,
+          },
           preview = {
             type = "execute", order = 10, name = L["Preview glow"],
             desc = L["Flashes your current suggestion's button with these settings."],
             func = function() Options.previewGlow() end,
+          },
+          -- The same button, so the two are directly comparable. Two different buttons would put
+          -- the comparison at the mercy of where they sit and what is behind them.
+          previewDim = {
+            type = "execute", order = 11, name = L["Preview the dim hint"],
+            desc = L["Flashes the SAME button with the dim hint's brightness, so you can compare "
+                  .. "the two without waiting for a fight."],
+            hidden = function() return profile().glow.secondary ~= true end,
+            func = function() Options.previewGlow(true) end,
           },
         },
       },

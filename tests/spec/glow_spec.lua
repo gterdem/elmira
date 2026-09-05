@@ -277,6 +277,43 @@ describe("Display.Glow", function()
       assert.equal(now, calls[1].r)
     end)
 
+    -- How dim "dim" needs to be depends on the style: Proc drives its own alpha animation
+    -- (SetToFinalAlpha, from 1 to 1), so a value that reads clearly dimmer on Pixel can look
+    -- identical there. Reported from a client 2026-09-05, which is why it is a setting.
+    it("takes the dimness from the profile, and falls back to the shipped default", function()
+      -- A concrete number, not just "whatever the constant says": asserting them equal to each
+      -- other passes just as well when both are nil.
+      assert.equal(0.35, Glow.SECONDARY_ALPHA)
+      assert.equal(0.35, Glow.secondaryAlpha())
+      ns.db.profile.glow.secondaryAlpha = 0.6
+      assert.equal(0.6, Glow.secondaryAlpha())
+      ns.db.profile.glow.secondaryAlpha = nil
+      assert.equal(Glow.SECONDARY_ALPHA, Glow.secondaryAlpha())
+    end)
+
+    -- 0 is an invisible hint, which is what the OFF switch is for; above 1 is not a dimming at all.
+    it("clamps a dimness that would make the hint pointless", function()
+      ns.db.profile.glow.secondaryAlpha = 0
+      assert.equal(0.05, Glow.secondaryAlpha())
+      ns.db.profile.glow.secondaryAlpha = 5
+      assert.equal(1, Glow.secondaryAlpha())
+      ns.db.profile.glow.secondaryAlpha = "nonsense"
+      assert.equal(Glow.SECONDARY_ALPHA, Glow.secondaryAlpha())
+      ns.db.profile.glow.secondaryAlpha = nil
+    end)
+
+    it("uses the chosen dimness when it lights the hint", function()
+      ns.db.profile.glow.secondary = true
+      ns.db.profile.glow.secondaryAlpha = 0.7
+      Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
+      local second
+      for _, c in ipairs(calls) do if c.r == later then second = c end end
+      assert.is_not_nil(second, "the hint was never lit")
+      assert.equal(0.7, second.color[4])
+      assert.equal(1, calls[1].color[4], "the real answer stays at full strength")
+      ns.db.profile.glow.secondaryAlpha = nil
+    end)
+
     it("lights the second button under its own key, dimmed", function()
       ns.db.profile.glow.secondary = true
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
@@ -285,7 +322,7 @@ describe("Display.Glow", function()
       for _, c in ipairs(calls) do if c.r == later then second = c end end
       assert.is_not_nil(second, "the second suggestion was never glowed")
       assert.equal("ElmiraNext", second.key)
-      assert.equal(0.45, second.color[4])
+      assert.equal(Glow.SECONDARY_ALPHA, second.color[4])
       assert.equal(1, calls[1].color[4])          -- and the real answer stays at full strength
     end)
 
@@ -352,7 +389,7 @@ describe("Display.Glow", function()
       for _, c in ipairs(calls) do if c.r == later then second = c end end
       assert.equal("ProcGlow_Start", second.fn)
       assert.equal("ElmiraNext", second.options.key)
-      assert.equal(0.45, second.options.color[4])
+      assert.equal(Glow.SECONDARY_ALPHA, second.options.color[4])
       calls = {}
       Glow.SetNowSlot({ spell = "NOW" }, nil)
       assert.equal("ProcGlow_Stop", calls[1].fn)
