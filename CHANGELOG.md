@@ -1,10 +1,17 @@
 # Changelog
 ## Unreleased
-- **The dim hint on the cast after next is now adjustable, and you can compare it on demand.** How
-  dim it looked depended on the glow style — Proc drives its own brightness, so the hint could come
-  out looking identical to the real suggestion. There is a **How dim the hint is** slider, and a
-  **Preview the dim hint** button that flashes the same button as the ordinary preview so the two
-  can be held side by side without waiting for a fight. Both appear only once the hint is switched on.
+- **The hint on the cast after next can now use its own glow style.** Telling it apart by
+  brightness alone did not work: Proc drives its own brightness, so the hint came out looking
+  identical to the real suggestion. It can now be a different SHAPE — pick any style for it, or
+  leave it as "Same as above" — with a slider for how dim it is and a **Preview the hint** button
+  that flashes the same button as the ordinary preview, so the two can be held side by side without
+  waiting for a fight. All of it appears only once the hint is switched on.
+- The hint's settings moved to the bottom of the Glow page under their own heading, after everything
+  that describes the main glow, because they are a separate signal rather than another property of
+  that one.
+- **New: Reset these to defaults**, on the Glow page. The settings are worth playing with and there
+  was no way back — the colour picker's own Default button belongs to the game's colour frame and
+  never touched what Elmira had stored.
 - **Fixed: the queue never popped the spell you cast.** Casting the current suggestion was supposed
   to make its icon pop and fade as it left, telling it apart from the rotation simply changing its
   mind. It slid like any other change instead: the cast was noted and then thrown away on the very

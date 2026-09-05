@@ -314,6 +314,34 @@ describe("Display.Glow", function()
       ns.db.profile.glow.secondaryAlpha = nil
     end)
 
+    -- Shape, not just brightness: two glows of the same style are hard to tell apart however dim
+    -- one is, and Proc drives its own alpha so dimming does not read there at all.
+    it("draws the hint in its own style when one is chosen", function()
+      assert.equal("PIXEL", Glow.styleFor(false))
+      assert.equal("PIXEL", Glow.styleFor(true))
+      ns.db.profile.glow.style = "AUTOCAST"
+      assert.equal("AUTOCAST", Glow.styleFor(true), "unset means the same as the main glow")
+      ns.db.profile.glow.secondaryStyle = "PROC"
+      assert.equal("AUTOCAST", Glow.styleFor(false), "the main glow must not follow the hint")
+      assert.equal("PROC", Glow.styleFor(true))
+      -- A style the loaded library does not have falls back rather than drawing nothing.
+      ns.db.profile.glow.secondaryStyle = "NONSENSE"
+      assert.equal("AUTOCAST", Glow.styleFor(true))
+      ns.db.profile.glow.secondaryStyle = nil
+      ns.db.profile.glow.style = "PIXEL"
+    end)
+
+    it("lights the hint with the style that was chosen for it", function()
+      ns.db.profile.glow.secondary = true
+      ns.db.profile.glow.secondaryStyle = "BUTTON"
+      Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
+      local second
+      for _, c in ipairs(calls) do if c.r == later then second = c end end
+      assert.is_not_nil(second, "the hint was never lit")
+      assert.equal("ButtonGlow_Start", second.fn)
+      ns.db.profile.glow.secondaryStyle = nil
+    end)
+
     it("lights the second button under its own key, dimmed", function()
       ns.db.profile.glow.secondary = true
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })

@@ -131,6 +131,44 @@ end
 -- Is a preview still lit? Only this file knows: a previewed frame is deliberately outside the
 -- render loop's set, so nothing else can see it. `restyle` needs the answer to relight it with new
 -- settings, because no render ever will.
+-- The styles the loaded library can actually draw, named for humans. Shared by the main picker and
+-- the hint's, so the two can never offer different lists. Only what is loadable: Proc arrived in
+-- LibCustomGlow minor 25, and offering it against an older copy is a menu entry that does nothing.
+local GLOW_STYLE_NAMES = { PIXEL = "Pixel", BUTTON = "Button", AUTOCAST = "Autocast", PROC = "Proc" }
+
+function Options.glowStyleNames()
+  local out = {}
+  for key in pairs((ns.Glow and ns.Glow.available()) or {}) do
+    out[key] = L[GLOW_STYLE_NAMES[key] or key]
+  end
+  return out
+end
+
+-- Put every glow setting back the way it shipped. Asked for because the settings are worth playing
+-- with and there was no way back: the colour picker's own Default button belongs to Blizzard's
+-- frame and does not touch what we stored.
+function Options.resetGlow()
+  local p = profile()
+  if not p then return false end
+  local shipped = ns.DB and ns.DB.defaults.profile.glow
+  if not shipped then return false end
+  local fresh = {}
+  for k, v in pairs(shipped) do
+    -- Colour is the one table in here; copied rather than shared, or a later edit would write
+    -- straight into the defaults every future profile is built from.
+    if type(v) == "table" then
+      local copy = {}
+      for ck, cv in pairs(v) do copy[ck] = cv end
+      fresh[k] = copy
+    else
+      fresh[k] = v
+    end
+  end
+  p.glow = fresh
+  restyle()
+  return true
+end
+
 function Options.previewRunning()
   return previewFrame ~= nil
 end
@@ -758,15 +796,7 @@ function Options.table()
             type = "select", order = 3, name = L["Style"],
             -- Derived from Glow.STYLES rather than repeated: a literal here silently drifts the
             -- moment a style is added, offering a choice the renderer does not have.
-            values = function()
-              local names = { PIXEL = L["Pixel"], BUTTON = L["Button"], AUTOCAST = L["Autocast"],
-                              PROC = L["Proc"] }
-              -- Only what the loaded library can actually draw. Proc arrived in LibCustomGlow
-              -- minor 25; offering it against an older copy is a menu entry that does nothing.
-              local out = {}
-              for key in pairs((ns.Glow and ns.Glow.available()) or {}) do out[key] = names[key] or key end
-              return out
-            end,
+            values = function() return Options.glowStyleNames() end,
             get = function() return profile().glow.style end,
             set = function(_, v)
               profile().glow.style = v
@@ -796,34 +826,68 @@ function Options.table()
             L["How heavy the outline is."]),
           speed = numberRow(8, L["Pulse length"], "speed", 0.2, 3, 0.1,
             L["How long one pulse of the proc animation lasts, in seconds."]),
+          preview = {
+            type = "execute", order = 9, name = L["Preview glow"],
+            desc = L["Flashes your current suggestion's button with these settings."],
+            func = function() Options.previewGlow() end,
+          },
+          reset = {
+            type = "execute", order = 10, name = L["Reset these to defaults"],
+            desc = L["Puts every glow setting on this page back the way it shipped, including the "
+                  .. "colour."],
+            confirm = true,
+            confirmText = L["Put every glow setting back to its default?"],
+            func = function() Options.resetGlow() end,
+          },
+
+          -- The hint sits at the BOTTOM, after everything that describes the main glow, because it
+          -- is a separate signal rather than another property of that one (owner, 2026-09-05).
+          hintHeader = { type = "header", order = 20, name = L["The cast after next"] },
           secondary = {
-            type = "toggle", order = 9, name = L["Also hint the cast after next"],
-            desc = L["A dim glow on the second suggestion. Off by default: two lit buttons compete "
-                  .. "for the same glance, which is the reason the queue itself stopped glowing."],
+            type = "toggle", order = 21, width = "full",
+            name = L["Also hint the cast after next"],
+            desc = L["A second, quieter glow on the suggestion after the current one. Off by "
+                  .. "default: two lit buttons compete for the same glance, which is the reason "
+                  .. "the queue itself stopped glowing."],
             get = function() return profile().glow.secondary == true end,
             set = function(_, v) profile().glow.secondary = v; restyle() end,
           },
+          -- Its own style, not just its own brightness. Two glows of the same shape are hard to
+          -- tell apart however dim one is -- and on Proc, which drives its own alpha animation,
+          -- dimming alone does not read at all.
+          secondaryStyle = {
+            type = "select", order = 22, name = L["Hint style"],
+            desc = L["Use a different shape for the hint so it cannot be mistaken for the real "
+                  .. "suggestion. 'Same as above' uses the main style, told apart by brightness "
+                  .. "alone, which some styles do not show well."],
+            hidden = function() return profile().glow.secondary ~= true end,
+            values = function()
+              local out = { [""] = L["Same as above"] }
+              for key, label in pairs(Options.glowStyleNames()) do out[key] = label end
+              return out
+            end,
+            get = function() return profile().glow.secondaryStyle or "" end,
+            set = function(_, v)
+              profile().glow.secondaryStyle = (v ~= "" and v) or false
+              restyle()
+            end,
+          },
           secondaryAlpha = {
-            type = "range", order = 9.5, name = L["How dim the hint is"],
+            type = "range", order = 23, name = L["How dim the hint is"],
             desc = L["A fraction of the main glow. Some styles drive their own brightness, so a "
                   .. "value that looks clearly dimmer on one can look identical on another -- "
-                  .. "compare them with the two preview buttons below."],
+                  .. "compare them with the two preview buttons."],
             min = 0.05, max = 1, step = 0.05,
             hidden = function() return profile().glow.secondary ~= true end,
             get = function() return ns.Glow and ns.Glow.secondaryAlpha() or 0.35 end,
             set = function(_, v) profile().glow.secondaryAlpha = v; restyle() end,
           },
-          preview = {
-            type = "execute", order = 10, name = L["Preview glow"],
-            desc = L["Flashes your current suggestion's button with these settings."],
-            func = function() Options.previewGlow() end,
-          },
-          -- The same button, so the two are directly comparable. Two different buttons would put
-          -- the comparison at the mercy of where they sit and what is behind them.
+          -- The same button as the ordinary preview, so the two are directly comparable. Two
+          -- different buttons would put the comparison at the mercy of where they sit.
           previewDim = {
-            type = "execute", order = 11, name = L["Preview the dim hint"],
-            desc = L["Flashes the SAME button with the dim hint's brightness, so you can compare "
-                  .. "the two without waiting for a fight."],
+            type = "execute", order = 24, name = L["Preview the hint"],
+            desc = L["Flashes the SAME button as the preview above, with the hint's style and "
+                  .. "brightness, so you can compare the two without waiting for a fight."],
             hidden = function() return profile().glow.secondary ~= true end,
             func = function() Options.previewGlow(true) end,
           },

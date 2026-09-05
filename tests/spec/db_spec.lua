@@ -30,6 +30,10 @@ describe("Core.DB", function()
     -- The Builder's item palette ships showing trinkets only: most characters have nothing on-use
     -- in the other slots, and a palette of empty rows teaches you to stop reading it.
     assert.is_false(DB.defaults.profile.paletteAllSlots)
+    -- The hint's brightness and shape. `secondaryStyle = false` means "the same as the main glow";
+    -- the fraction is pinned to a number so deleting it cannot silently fall back to the constant.
+    assert.equal(0.35, DB.defaults.profile.glow.secondaryAlpha)
+    assert.is_false(DB.defaults.profile.glow.secondaryStyle)
   end)
 
   -- Every glow number ships as `false`, meaning "whatever LibCustomGlow would do on its own", so a

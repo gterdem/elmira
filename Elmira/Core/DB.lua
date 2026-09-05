@@ -49,7 +49,10 @@ DB.defaults = {
              -- rather than a constant because how dim "dim" needs to be depends on the style: Proc
              -- drives its own alpha animation (SetToFinalAlpha, from 1 to 1), so a value that reads
              -- clearly dimmer on Pixel can look identical there. Reported from a client, 2026-09-05.
-             secondaryAlpha = 0.35 },
+             secondaryAlpha = 0.35,
+             -- nil means "the same style as the main glow". A separate one is offered because two
+             -- glows of the same shape are hard to tell apart however dim one of them is.
+             secondaryStyle = false },
     -- ADR-0009: the overlay has no global "on" switch. `cues` maps a cue id to the user's settings
     -- for it, so an empty table is a quiet default install, and a cue only ever exists because the
     -- user opted it in. Reshaped at M1 with no dbVersion migration: the previous

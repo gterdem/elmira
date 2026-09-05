@@ -60,6 +60,20 @@ Glow.STYLES = STYLES
 -- ADR exists because two things were competing for one glance, and a second glow is that again.
 Glow.SECONDARY_ALPHA = 0.35
 
+-- Which style to draw with. The hint may use a DIFFERENT one from the real suggestion, because
+-- two glows in the same style are the confusion this option was meant to remove -- telling them
+-- apart by brightness alone works on some styles and not others (Proc drives its own alpha), so
+-- shape is the more reliable difference. Unset means "the same as the main one".
+function Glow.styleFor(secondary)
+  local p = (ns.db and ns.db.profile) or ns.DB.defaults.profile
+  local g = (p and p.glow) or {}
+  if secondary then
+    local chosen = g.secondaryStyle
+    if chosen and STYLES[chosen] then return chosen end
+  end
+  return (g.style and STYLES[g.style]) and g.style or "PIXEL"
+end
+
 -- The user's dimness, or the shipped default. Read through here so the render path and the preview
 -- cannot disagree about how dim the hint is.
 function Glow.secondaryAlpha()
@@ -217,12 +231,11 @@ function Glow.SetNowSlot(slot, nextSlot)
     -- the other key, so stopping it twice would only be noise.
     if not wantNext[frame] then Glow.Stop(frame) end
   end
-  local style = g.style or "PIXEL"
   for frame in pairs(wantNow) do
-    if not nowFrames[frame] then Glow.Start(frame, style, false) end
+    if not nowFrames[frame] then Glow.Start(frame, Glow.styleFor(false), false) end
   end
   for frame in pairs(wantNext) do
-    if not nextFrames[frame] then Glow.Start(frame, style, true) end
+    if not nextFrames[frame] then Glow.Start(frame, Glow.styleFor(true), true) end
   end
   nowFrames, nextFrames = wantNow, wantNext
 end

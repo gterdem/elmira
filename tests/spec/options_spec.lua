@@ -166,6 +166,58 @@ describe("Options (overlay/peripheral cues)", function()
 
       -- The SAME button, so the two brightnesses are directly comparable rather than at the mercy
       -- of where two different buttons sit.
+      -- The owner's design, not just a brightness knob: two glows of the SAME shape are hard to
+      -- tell apart however dim one is, and on Proc dimming does not read at all.
+      it("offers the hint its own style, defaulting to the main one", function()
+        helper.load("Elmira/Display/Glow.lua")
+        ns.Glow.available = function() return { PIXEL = true, PROC = true } end
+        ns.db.profile.glow.secondary = true
+        local row = glowArgs().secondaryStyle
+        assert.equal("select", row.type)
+        assert.equal("Same as above", row.values()[""])
+        assert.equal("Proc", row.values().PROC)
+        assert.equal("", row.get(), "unset means the same style as the main glow")
+        -- Changing the hint's shape has to tear the running glows down, or the button keeps the
+        -- old shape until the suggestion happens to change.
+        local stopped = 0
+        ns.Glow.StopAll = function() stopped = stopped + 1 end
+        ns.Queue = { Layout = function() end }
+        row.set(nil, "PROC")
+        assert.equal(1, stopped, "the running glow was not restarted in the new style")
+        assert.equal("PROC", ns.db.profile.glow.secondaryStyle)
+        assert.equal("PROC", row.get())
+        -- Back to "same as above" stores a falsey value, not the empty string.
+        row.set(nil, "")
+        assert.is_false(ns.db.profile.glow.secondaryStyle)
+        assert.equal("", row.get())
+      end)
+
+      it("names the hint section and says why it ships off", function()
+        assert.equal("The cast after next", glowArgs().hintHeader.name)
+        assert.equal("header", glowArgs().hintHeader.type)
+        local row = glowArgs().secondary
+        assert.is_truthy(row.desc:find("compete for the same glance", 1, true))
+        assert.is_truthy(glowArgs().secondaryStyle.desc:find("Same as above", 1, true))
+      end)
+
+      it("hides the hint's controls until the hint is on", function()
+        ns.db.profile.glow.secondary = false
+        assert.is_true(glowArgs().secondaryStyle.hidden())
+        assert.is_true(glowArgs().previewDim.hidden())
+        ns.db.profile.glow.secondary = true
+        assert.is_false(glowArgs().secondaryStyle.hidden())
+      end)
+
+      -- Both pickers read one list, so they can never offer styles the other does not.
+      it("offers the same styles for the hint as for the main glow", function()
+        helper.load("Elmira/Display/Glow.lua")
+        ns.Glow.available = function() return { PIXEL = true } end
+        ns.db.profile.glow.secondary = true
+        assert.is_nil(glowArgs().style.values().PROC)
+        assert.is_nil(glowArgs().secondaryStyle.values().PROC)
+        assert.equal("Pixel", glowArgs().secondaryStyle.values().PIXEL)
+      end)
+
       it("previews the dim hint, and only when there is a hint to preview", function()
         ns.db.profile.glow.secondary = false
         local row = glowArgs().previewDim
@@ -183,6 +235,76 @@ describe("Options (overlay/peripheral cues)", function()
         assert.is_true(lit, "the dim preview lit the bright glow")
         glowArgs().preview.func()
         assert.is_false(lit, "the ordinary preview should not be dim")
+      end)
+    end)
+
+    -- The settings are worth playing with, and there was no way back: the colour picker's Default
+    -- button belongs to Blizzard's frame and never touched what we stored.
+    describe("resetting the section", function()
+      it("puts every glow setting back the way it shipped", function()
+        helper.load("Elmira/Core/DB.lua")
+        ns.db.profile.glow.style = "PROC"
+        ns.db.profile.glow.color = { r = 1, g = 0, b = 0 }
+        ns.db.profile.glow.secondary = true
+        ns.db.profile.glow.particles = 19
+        assert.is_true(Options.resetGlow())
+        local shipped = ns.DB.defaults.profile.glow
+        assert.equal(shipped.style, ns.db.profile.glow.style)
+        assert.equal(shipped.particles, ns.db.profile.glow.particles)
+        assert.equal(shipped.secondary, ns.db.profile.glow.secondary)
+        assert.equal(shipped.color, ns.db.profile.glow.color)
+      end)
+
+      -- The defaults table is what every future profile is copied from: writing through a shared
+      -- reference would change the shipped default for everyone made afterwards.
+      it("never hands out the defaults table itself", function()
+        helper.load("Elmira/Core/DB.lua")
+        ns.DB.defaults.profile.glow.color = { r = 0.1, g = 0.2, b = 0.3 }
+        Options.resetGlow()
+        assert.is_not.equal(ns.DB.defaults.profile.glow, ns.db.profile.glow)
+        assert.is_not.equal(ns.DB.defaults.profile.glow.color, ns.db.profile.glow.color)
+        -- and the copy actually carries the values, rather than being an empty table that merely
+        -- happens not to be the same object.
+        assert.equal(0.1, ns.db.profile.glow.color.r)
+        assert.equal(0.2, ns.db.profile.glow.color.g)
+        assert.equal(0.3, ns.db.profile.glow.color.b)
+        ns.db.profile.glow.color.r = 0.9
+        assert.equal(0.1, ns.DB.defaults.profile.glow.color.r)
+      end)
+
+      it("asks before throwing the settings away", function()
+        local row = glowArgs().reset
+        assert.equal("execute", row.type)
+        assert.is_true(row.confirm)
+        assert.is_truthy(row.confirmText)
+      end)
+
+      it("says so rather than erroring with no profile", function()
+        -- DB loaded, so the defaults exist and the PROFILE guard is the one that has to fire.
+        helper.load("Elmira/Core/DB.lua")
+        ns.db = nil
+        assert.is_false(Options.resetGlow())
+      end)
+
+      it("says so rather than erroring before the defaults are loaded", function()
+        ns.DB = nil
+        assert.is_false(Options.resetGlow())
+      end)
+
+      it("repaints, or the buttons keep the glow you just reset away from", function()
+        helper.load("Elmira/Core/DB.lua")
+        local stopped = 0
+        ns.Glow = { StopAll = function() stopped = stopped + 1 end }
+        ns.Queue = { Layout = function() end }
+        Options.resetGlow()
+        assert.equal(1, stopped)
+      end)
+
+      it("is reachable from the panel", function()
+        helper.load("Elmira/Core/DB.lua")
+        ns.db.profile.glow.particles = 19
+        glowArgs().reset.func()
+        assert.equal(ns.DB.defaults.profile.glow.particles, ns.db.profile.glow.particles)
       end)
     end)
 
