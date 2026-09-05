@@ -71,6 +71,9 @@ DB.defaults = {
       sound = "None",
       screen = { font = "Friz Quadrata TT", size = 18, duration = 4,
                  anchor = { point = "TOP", relPoint = "TOP", x = 0, y = -140 } },
+      -- Only cooldowns at least this long are announced. Shorter ones would be a line every global
+      -- cooldown -- noise in your own chat, and worse in a group's.
+      cooldownFloor = 120,
       routes = {},
     },
     dbVersion = 0,

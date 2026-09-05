@@ -34,6 +34,9 @@ describe("Core.DB", function()
     -- the fraction is pinned to a number so deleting it cannot silently fall back to the constant.
     assert.equal(0.35, DB.defaults.profile.glow.secondaryAlpha)
     assert.is_false(DB.defaults.profile.glow.secondaryStyle)
+    -- The only category that can reach party chat, so the bar for what counts is pinned: 120s
+    -- takes Avenging Wrath and Aura Mastery and leaves Crusader Strike's 6s alone.
+    assert.equal(120, DB.defaults.profile.announce.cooldownFloor)
   end)
 
   -- Every glow number ships as `false`, meaning "whatever LibCustomGlow would do on its own", so a

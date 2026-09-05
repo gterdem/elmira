@@ -148,6 +148,35 @@ function Display.itemIcon(slot)
   return GetInventoryItemTexture("player", slot)
 end
 
+-- The player cast something. Two things care: the strip, which pops the icon, and the
+-- announcement, which says a long cooldown went out.
+--
+-- Both live here rather than in Queue because the strip's half is skipped when the strip is hidden
+-- or still, and an announcement must not inherit that: someone who hides the queue and watches only
+-- the bar glow still wants to be told a cooldown was used.
+function Display.noteCast(spellID)
+  local key = ns.Queue and ns.Queue.keyForSpellID and ns.Queue.keyForSpellID(spellID)
+  if key then Display.announceCooldown(key) end
+  if ns.Queue and ns.Queue.noteCast then ns.Queue.noteCast(spellID) end
+  return key
+end
+
+-- "Avenging Wrath used." -- the only category that may reach party chat, so the bar for what counts
+-- is deliberately high (Core/Announce.cooldownFloor). Nothing emitted this category at all until
+-- now: it had routing, a colour and the one party toggle, and no code path that fired it.
+function Display.announceCooldown(key)
+  if not (ns.Announce and ns.Announce.worthAnnouncing) then return false end
+  local pack = Display.currentPack()
+  local data = pack and pack.spells and pack.spells[key]
+  if not (data and ns.Announce.worthAnnouncing(data.cooldown)) then return false end
+  local name = (data.id and ns.BarGlow and ns.BarGlow.spellName and ns.BarGlow.spellName(data.id))
+    or (ns.Detect and ns.Detect.readableName and ns.Detect.readableName(key, data))
+    or key
+  ns.Announce.emit("cooldown", string.format("%s used.", name),
+                   { icon = Display.spellIcon(key) })
+  return true
+end
+
 -- Reads the live state, hands Core/Visibility booleans, returns show/hide plus the reason. The
 -- reason is carried so `/elm debug perf` can say why the screen is empty — "the addon is broken" and
 -- "you are standing in Ironforge with no target" look identical otherwise.

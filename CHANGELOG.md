@@ -1,5 +1,14 @@
 # Changelog
 ## Unreleased
+- **Fixed: "Cooldowns used" never said anything.** The category had its own colour, its own routing
+  and the only party/raid switch in the addon — and nothing anywhere ever produced a message for it,
+  so switching it on and using a cooldown was silent. Using a long cooldown is now announced, with
+  the ability's icon: *"Avenging Wrath used."*
+- **New: Only cooldowns longer than…** — a setting for what counts, since the panel could not say.
+  It ships at two minutes, which for a paladin means Avenging Wrath and Aura Mastery and nothing
+  else; below that it would be a line almost every fight, and Crusader Strike would announce itself
+  every six seconds. This is the one kind of message that can reach party chat, so the bar is high
+  on purpose.
 - **Fixed: `/elm debug perf` said the bar map was empty when it was not.** It reported
   *"bar map: 0 spells, built=false"* while `/elm debug bars` showed a bar addon holding 43 mapped
   spells in the same install — a diagnostic saying the display was broken when it was working. Both

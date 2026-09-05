@@ -668,6 +668,17 @@ local function announceGroup()
     get = function() return ns.Announcers and ns.Announcers.isMoving() or false end,
     set = function(_, v) if ns.Announcers then ns.Announcers.SetMoving(v) end end,
   }
+  args.cooldownFloor = {
+    type = "range", order = 68, name = L["Only cooldowns longer than"],
+    -- Answers "what counts as a cooldown", which was unanswerable from the panel: the category
+    -- existed, could be routed to party, and nothing said what would ever appear in it.
+    desc = L["Cooldowns used is only said for abilities with at least this long a cooldown. Below "
+          .. "about two minutes it is a line almost every fight -- Crusader Strike would announce "
+          .. "itself every six seconds."],
+    min = 0, max = 600, step = 15,
+    get = function() return ns.Announce and ns.Announce.cooldownFloor() or 120 end,
+    set = function(_, v) profile().announce.cooldownFloor = v end,
+  }
   args.test = {
     type = "execute", order = 67, name = L["Test each kind"],
     desc = L["Sends one message of every kind, through whatever you have switched on above."],

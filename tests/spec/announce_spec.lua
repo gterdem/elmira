@@ -22,6 +22,40 @@ describe("Core.Announce", function()
     A.use{ now = function() return 100 end, inCombat = function() return false end }
   end)
 
+  -- "Cooldowns used" is the only category that may reach party chat, so what counts as a cooldown
+  -- matters: Crusader Strike at 6s would be a line every global cooldown, in someone else's chat.
+  describe("what counts as a cooldown worth announcing", function()
+    it("takes the shipped floor when nothing is set", function()
+      assert.equal(120, A.COOLDOWN_FLOOR)
+      assert.equal(120, A.cooldownFloor())
+      assert.is_true(A.worthAnnouncing(180))
+      assert.is_true(A.worthAnnouncing(120))
+      assert.is_false(A.worthAnnouncing(30))
+      assert.is_false(A.worthAnnouncing(6))
+    end)
+
+    it("follows the floor the player chose", function()
+      ns.db.profile.announce.cooldownFloor = 20
+      assert.equal(20, A.cooldownFloor())
+      assert.is_true(A.worthAnnouncing(30))
+      ns.db.profile.announce.cooldownFloor = 600
+      assert.is_false(A.worthAnnouncing(180))
+    end)
+
+    it("ignores a floor that is not a usable number", function()
+      ns.db.profile.announce.cooldownFloor = "soon"
+      assert.equal(120, A.cooldownFloor())
+      ns.db.profile.announce.cooldownFloor = -5
+      assert.equal(120, A.cooldownFloor())
+    end)
+
+    -- A spell with no cooldown recorded is not a cooldown, and must not be announced as one.
+    it("says no for a spell with no cooldown at all", function()
+      assert.is_false(A.worthAnnouncing(nil))
+      assert.is_false(A.worthAnnouncing("lots"))
+    end)
+  end)
+
   -- Each row is a design decision, so each row is asserted rather than counted.
   describe("the kinds of thing it says", function()
     it("names six categories in the order the panel lists them", function()

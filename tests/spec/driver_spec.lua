@@ -286,6 +286,91 @@ describe("Display.Driver", function()
       assert.is_nil(Display.itemIcon(13))
     end)
 
+    -- "Cooldowns used" shipped with routing, a colour and the ONLY party/raid toggle, and nothing
+    -- anywhere emitted it: the owner switched it on, used Avenging Wrath and got silence. Reported
+    -- from a client 2026-09-05.
+    describe("announcing a cooldown that was used", function()
+      local told
+      before_each(function()
+        told = {}
+        ns.Announce = {
+          worthAnnouncing = function(cd) return ns.Announce.floor and cd and cd >= ns.Announce.floor end,
+          floor = 120,
+          emit = function(cat, text, opts) told[#told + 1] = { cat = cat, text = text, opts = opts } end,
+        }
+        ns.BarGlow = { spellName = function(id) return id == 407788 and "Avenging Wrath" or nil end }
+        -- Real cooldown values, so the threshold is tested against the numbers a paladin has:
+        -- Avenging Wrath 180s is announced, Crusader Strike 6s is not.
+        ns.Display.currentPack = function()
+          return { spells = { AVENGING_WRATH = { id = 407788, cooldown = 180 },
+                              CRUSADER_STRIKE = { id = 407676, cooldown = 6 } } }
+        end
+      end)
+
+      it("says a long cooldown went out, in its own category", function()
+        assert.is_true(Display.announceCooldown("AVENGING_WRATH"))
+        assert.equal(1, #told)
+        assert.equal("cooldown", told[1].cat)
+        assert.equal("Avenging Wrath used.", told[1].text)
+      end)
+
+      -- The bar is deliberately high: this is the one category that may reach party chat, and
+      -- Crusader Strike at 6s would be a line every global cooldown.
+      it("says nothing about a short one", function()
+        assert.is_false(Display.announceCooldown("CRUSADER_STRIKE"))
+        assert.equal(0, #told)
+      end)
+
+      it("says nothing for a spell the pack does not carry", function()
+        assert.is_false(Display.announceCooldown("NOT_IN_THE_PACK"))
+        assert.equal(0, #told)
+      end)
+
+      it("falls back to a readable name when the client cannot resolve the id", function()
+        ns.BarGlow = { spellName = function() return nil end }
+        ns.Detect = { readableName = function(key) return "readable:" .. key end }
+        Display.announceCooldown("AVENGING_WRATH")
+        assert.equal("readable:AVENGING_WRATH used.", told[1].text)
+      end)
+
+      -- The key itself is the last resort. A blank line saying " used." is worse than an ugly one.
+      it("falls back to the raw key when nothing can name it", function()
+        ns.BarGlow, ns.Detect = nil, nil
+        Display.announceCooldown("AVENGING_WRATH")
+        assert.equal("AVENGING_WRATH used.", told[1].text)
+      end)
+
+      it("carries the spell's icon, so the on-screen line shows what went out", function()
+        Display.announceCooldown("AVENGING_WRATH")
+        assert.is_truthy(told[1].opts.icon)
+      end)
+
+      it("does not error before the announcer is loaded", function()
+        ns.Announce = nil
+        assert.is_false(Display.announceCooldown("AVENGING_WRATH"))
+      end)
+
+      -- Both halves, and the announcement must NOT inherit the strip's guards: someone who hides
+      -- the queue and watches only the bar glow still wants to be told a cooldown went out.
+      it("tells the strip and announces, from one call", function()
+        local passed
+        ns.Queue = { keyForSpellID = function(id) return id == 407788 and "AVENGING_WRATH" or nil end,
+                     noteCast = function(id) passed = id end }
+        assert.equal("AVENGING_WRATH", Display.noteCast(407788))
+        assert.equal(407788, passed)
+        assert.equal(1, #told)
+      end)
+
+      it("still tells the strip when the cast is nothing worth announcing", function()
+        local passed
+        ns.Queue = { keyForSpellID = function() return "CRUSADER_STRIKE" end,
+                     noteCast = function(id) passed = id end }
+        Display.noteCast(407676)
+        assert.equal(407676, passed)
+        assert.equal(0, #told)
+      end)
+    end)
+
     it("forgets what it knew on request, so the next look starts again", function()
       Display.checkGates()
       setBonus(true)

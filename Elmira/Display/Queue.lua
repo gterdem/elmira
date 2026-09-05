@@ -376,7 +376,7 @@ function Queue.isLocked() return profile().locked and true or false end
 -- the pack ships one id per ability, so the id the client reports for a cast usually is NOT the
 -- pack's id -- the same rank mismatch that stopped the bar glow finding buttons. Names have no rank.
 local castKeys, castNames, castPack -- mutants: equivalent deletion only makes these globals
-local function keyForSpellID(id)
+function Queue.keyForSpellID(id)
   local pack = ns.Display and ns.Display.currentPack()
   if not (pack and id) then return nil end
   if castPack ~= pack then
@@ -404,7 +404,7 @@ function Queue.noteCast(spellID)
   -- below forces a recompute -- once per global cooldown, for nothing.
   local p = profile()
   if p.showQueue == false or p.animate == false then return false end
-  local key = keyForSpellID(spellID)
+  local key = Queue.keyForSpellID(spellID)
   if not key then return false end
   pendingCast = key
   local st = ns.API and ns.API.GetState and ns.API.GetState()

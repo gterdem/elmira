@@ -155,6 +155,30 @@ local function dispatch(cat, row, routes)
   end
 end
 
+-- The shortest cooldown worth saying out loud, in seconds.
+--
+-- "Cooldowns used" is the one category that can reach party chat, so what counts matters: Crusader
+-- Strike at 6s and Divine Storm at 10s would be a line every global cooldown, which is noise in
+-- your own chat and unforgivable in anyone else's. 120s is the owner's line (2026-09-05) and for a
+-- paladin it is a clean one -- it takes Avenging Wrath (180s) and Aura Mastery (120s) and leaves
+-- Holy Shock (30s) and everything below alone.
+Announce.COOLDOWN_FLOOR = 120
+
+function Announce.cooldownFloor()
+  local d = db()
+  local stored = d and d.profile and d.profile.announce and d.profile.announce.cooldownFloor
+  local n = tonumber(stored)
+  if not n or n < 0 then return Announce.COOLDOWN_FLOOR end
+  return n
+end
+
+-- Is this worth announcing as a cooldown? Pure, so the rule is testable without a client and lives
+-- next to the category it decides for.
+function Announce.worthAnnouncing(cooldown)
+  local n = tonumber(cooldown)
+  return n ~= nil and n >= Announce.cooldownFloor()
+end
+
 -- Announce.emit(category, text, opts) -> the logged row, or nil
 --
 -- opts.icon      a texture path, drawn inline by the sinks that can draw one

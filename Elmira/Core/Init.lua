@@ -251,7 +251,9 @@ function NA:OnCastSucceeded(_, unit, _, spellID)
   -- The strip needs this whether or not anything is recording: it is how a CAST is told apart from
   -- a PROMOTION on the next queue change (ADR-0015 §3). It used to sit below the recorder guard,
   -- so outside a recording session the event was observed and thrown away.
-  if ns.Queue and ns.Queue.noteCast then ns.Queue.noteCast(spellID) end
+  -- Through Display, which tells the strip AND announces a long cooldown. Calling Queue directly
+  -- skipped the announcement for anyone who had hidden the strip.
+  if ns.Display and ns.Display.noteCast then ns.Display.noteCast(spellID) end
   if not (ns.Recorder and ns.Recorder.isRecording()) then return end
   if type(spellID) ~= "number" then return end
   local packs = ns.API.GetProviders("dataPacks")

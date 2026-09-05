@@ -871,6 +871,32 @@ describe("Options (overlay/peripheral cues)", function()
   -- The WIDGET moved to Options/Rotation.lua's Share tab (ADR-0015 SS2); the state stayed here.
   -- This block drives that state through the accessors the tab reads, so it keeps testing the
   -- behaviour rather than the layout. The tab's own wiring is rotation_spec's job.
+  -- The category shipped routable to party with nothing ever emitting it, so "what will appear
+  -- here" was unanswerable from the panel. The slider is the answer, and its description is the
+  -- explanation the owner asked for.
+  describe("what counts as a cooldown worth announcing", function()
+    local function row()
+      return Options.table().args.notifications.args.announce.args.cooldownFloor
+    end
+
+    it("offers a floor, and says what it means in abilities the player knows", function()
+      helper.load("Elmira/Core/Announce.lua")
+      assert.equal("range", row().type)
+      assert.equal(0, row().min)
+      assert.is_truthy(row().desc:find("Crusader Strike", 1, true))
+      assert.is_truthy(row().desc:find("two minutes", 1, true))
+    end)
+
+    it("reads through Announce, so the panel and the rule agree", function()
+      helper.load("Elmira/Core/Announce.lua")
+      ns.db.profile.announce = ns.db.profile.announce or {}
+      assert.equal(ns.Announce.cooldownFloor(), row().get())
+      row().set(nil, 45)
+      assert.equal(45, ns.db.profile.announce.cooldownFloor)
+      assert.equal(45, row().get())
+    end)
+  end)
+
   describe("Import / Export box", function()
     local function box()
       return {

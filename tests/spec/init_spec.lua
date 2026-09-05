@@ -86,6 +86,7 @@ describe("Core.Init", function()
       Enable = function() order[#order + 1] = "Display.Enable" end,
       invalidate = function() order[#order + 1] = "Display.invalidate" end,
       refresh = function() order[#order + 1] = "Display.refresh" end,
+      noteCast = function(id) order[#order + 1] = "Display.noteCast:" .. tostring(id) end,
     }
   end
 
@@ -481,12 +482,15 @@ describe("Core.Init", function()
   end)
 
   describe("the player's own casts reach the strip", function()
-    it("tells the queue about a cast with nothing recording", function()
+    -- Through Display, not Queue directly: Display tells the strip AND announces a long cooldown,
+    -- and Queue's half is skipped when the strip is hidden. Routed here, hiding the strip silenced
+    -- the cooldown announcement with it.
+    it("tells the display about a cast with nothing recording", function()
       NA:OnInitialize()
       NA:OnEnable()
       order = {}
       NA:OnCastSucceeded(nil, "player", nil, 415073)
-      assert.same({ "Queue.noteCast:415073" }, order)
+      assert.same({ "Display.noteCast:415073" }, order)
     end)
 
     it("ignores casts by anyone else", function()
