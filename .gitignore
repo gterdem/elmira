@@ -15,3 +15,6 @@ docs/
 research/
 README-WORKSPACE.md
 *.private.*
+
+# WSL/Windows download-provenance stubs, created beside any file copied in from Windows.
+*:Zone.Identifier
