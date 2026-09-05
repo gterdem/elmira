@@ -110,6 +110,177 @@ describe("Options (overlay/peripheral cues)", function()
     end)
   end)
 
+  -- ADR-0015 §3 makes the bar glow the single attention signal, so it gets the range of control
+  -- that deserves. Every row below could be present and do nothing; these check it does something.
+  describe("Glow appearance", function()
+    local function glowArgs() return Options.table().args.glow.args end
+
+    before_each(function()
+      ns.db.profile.glow = { enabled = true, style = "PIXEL", barGlow = true, color = false,
+                             particles = false, frequency = false, thickness = false,
+                             speed = false, secondary = false }
+      helper.load("Elmira/Display/Glow.lua")
+      ns.Queue = { Layout = function() end }
+    end)
+
+    it("offers Proc alongside the three older styles", function()
+      ns.Glow.available = function() return { PIXEL = true, PROC = true } end
+      local values = glowArgs().style.values()
+      assert.equal("Proc", values.PROC)
+      assert.equal("Pixel", values.PIXEL)
+    end)
+
+    -- Proc arrived in LibCustomGlow minor 25. Offering it against an older copy that won LibStub
+    -- is a menu entry that silently draws nothing.
+    it("does not offer a style the loaded library cannot draw", function()
+      ns.Glow.available = function() return { PIXEL = true } end
+      local values = glowArgs().style.values()
+      assert.is_nil(values.PROC)
+      assert.equal("Pixel", values.PIXEL)
+    end)
+
+    it("shows the brand highlight as the colour until one is picked", function()
+      local r, g, b = glowArgs().color.get()
+      assert.equal(ns.Colors.HIGHLIGHT.r, r)
+      assert.equal(ns.Colors.HIGHLIGHT.g, g)
+      assert.equal(ns.Colors.HIGHLIGHT.b, b)
+      glowArgs().color.set(nil, 0.1, 0.2, 0.3)
+      assert.same({ r = 0.1, g = 0.2, b = 0.3 }, ns.db.profile.glow.color)
+    end)
+
+    -- A row the current style cannot use would let the user move a slider and watch nothing happen.
+    it("hides the rows the chosen style has no use for", function()
+      assert.is_false(glowArgs().particles.hidden())
+      assert.is_false(glowArgs().thickness.hidden())
+      assert.is_true(glowArgs().speed.hidden())          -- Proc only
+      ns.db.profile.glow.style = "AUTOCAST"
+      assert.is_true(glowArgs().thickness.hidden())      -- Pixel only
+      assert.is_false(glowArgs().particles.hidden())
+      ns.db.profile.glow.style = "BUTTON"
+      assert.is_true(glowArgs().particles.hidden())
+      assert.is_false(glowArgs().frequency.hidden())
+      ns.db.profile.glow.style = "PROC"
+      assert.is_false(glowArgs().speed.hidden())
+      assert.is_true(glowArgs().frequency.hidden())
+    end)
+
+    it("shows the library's default in the slider, not zero", function()
+      assert.equal(8, glowArgs().particles.get())
+      assert.equal(1, glowArgs().thickness.get())
+      ns.db.profile.glow.style = "AUTOCAST"
+      assert.equal(4, glowArgs().particles.get())
+    end)
+
+    it("writes a real number once the slider moves", function()
+      glowArgs().particles.set(nil, 14)
+      assert.equal(14, ns.db.profile.glow.particles)
+      assert.equal(14, glowArgs().particles.get())
+    end)
+
+    it("offers the dim second-suggestion hint, off, and says why", function()
+      local row = glowArgs().secondary
+      assert.is_false(row.get())
+      assert.is_truthy(row.desc:find("queue itself stopped glowing"))
+      row.set(nil, true)
+      assert.is_true(ns.db.profile.glow.secondary)
+    end)
+
+    it("builds each number row as a real slider with real bounds", function()
+      local row = glowArgs().particles
+      assert.equal("range", row.type)
+      assert.equal(5, row.order)
+      assert.equal("Particles", row.name)
+      assert.equal(1, row.min)
+      assert.equal(20, row.max)
+      assert.equal(1, row.step)
+      assert.is_truthy(row.desc)
+      local speed = glowArgs().speed
+      assert.equal(0.2, speed.min)
+      assert.equal(3, speed.max)
+      assert.equal(0.1, speed.step)
+      -- Autocast's own default is 0.125: a coarser step cannot land on it, so the first nudge
+      -- would change the look for no reason the user asked for.
+      local step = glowArgs().frequency.step
+      assert.equal(0.025, step)
+      assert.is_true(math.abs(0.125 / step - 5) < 1e-9, "Autocast's default is not on a step")
+    end)
+
+    it("builds the colour, hint and preview rows as the controls they claim to be", function()
+      assert.equal("color", glowArgs().color.type)
+      assert.equal("Colour", glowArgs().color.name)
+      assert.is_falsy(glowArgs().color.hasAlpha)
+      assert.is_truthy(glowArgs().color.desc)
+      assert.equal("toggle", glowArgs().secondary.type)
+      assert.equal("Also hint the cast after next", glowArgs().secondary.name)
+      assert.equal("execute", glowArgs().preview.type)
+      assert.equal("Preview glow", glowArgs().preview.name)
+      assert.is_truthy(glowArgs().preview.desc)
+    end)
+
+    -- The driver only repaints when the queue changes, so a colour change would otherwise not
+    -- appear until the rotation happened to move on.
+    it("repaints after an appearance change", function()
+      local redraws = 0
+      ns.Glow.StopAll = function() end
+      ns.Display.refresh = function() redraws = redraws + 1 end
+      glowArgs().color.set(nil, 1, 1, 1)
+      assert.equal(1, redraws)
+    end)
+
+    it("knows whether a preview is actually running", function()
+      assert.is_false(Options.previewRunning())
+      ns.BarGlow = { buttonsFor = function() return { { name = "bar" } }, "ElvUI" end }
+      ns.Glow.Start = function() return true end
+      Options.checkSpell = function() return "EXORCISM" end
+      Options.previewGlow()
+      assert.is_true(Options.previewRunning())
+    end)
+
+    it("previews from the Glow page too, not only from Action bars", function()
+      local fired = 0
+      Options.previewGlow = function() fired = fired + 1 end
+      glowArgs().preview.func()
+      assert.equal(1, fired)
+    end)
+
+    -- LibCustomGlow builds its frames from the arguments it was started with: a running glow cannot
+    -- be restyled, only replaced. Without the teardown the panel changes and the button does not.
+    it("tears down every running glow when an appearance setting changes", function()
+      local stopped = 0
+      ns.Glow.StopAll = function() stopped = stopped + 1 end
+      glowArgs().color.set(nil, 1, 1, 1)
+      glowArgs().particles.set(nil, 10)
+      glowArgs().frequency.set(nil, 0.5)
+      glowArgs().thickness.set(nil, 2)
+      ns.db.profile.glow.style = "PROC"
+      glowArgs().speed.set(nil, 2)
+      glowArgs().secondary.set(nil, true)
+      assert.equal(6, stopped)
+      -- The style picker has always done its own teardown; it must keep doing it.
+      glowArgs().style.set(nil, "BUTTON")
+      assert.equal(7, stopped)
+    end)
+
+    -- The preview is the one glow no render will ever redraw, so it has to be relit by hand.
+    it("relights a preview that was running, so it shows the new settings", function()
+      local previews = 0
+      ns.Glow.StopAll = function() end
+      Options.previewRunning = function() return true end
+      Options.previewGlow = function() previews = previews + 1 end
+      glowArgs().particles.set(nil, 10)
+      assert.equal(1, previews)
+    end)
+
+    it("does not start a preview that was not running", function()
+      local previews = 0
+      ns.Glow.StopAll = function() end
+      Options.previewRunning = function() return false end
+      Options.previewGlow = function() previews = previews + 1 end
+      glowArgs().particles.set(nil, 10)
+      assert.equal(0, previews)
+    end)
+  end)
+
   -- PRD F9: the Import/Export box. The import itself is Core/UserBuilds' job and is tested there;
   -- here the box must route text in and out and report the outcome under it.
   describe("Import / Export box", function()

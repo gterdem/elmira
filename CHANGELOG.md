@@ -1,5 +1,15 @@
 # Changelog
 ## Unreleased
+- **The action-bar glow is yours to style now.** A fourth style, **Proc** — the modern burst-then-
+  pulse animation — joins Pixel, Autocast and Button, and every one of them takes a colour, with
+  sliders for however many particles travel around the button, how fast they go, how heavy the
+  outline is and how long a Proc pulse lasts. Rows a style has no use for are hidden rather than
+  left there doing nothing. **Preview glow** now sits on the Glow page as well, and re-fires as you
+  change settings, so you can tune the look standing still instead of guessing mid-fight. Untouched
+  settings keep the library's own defaults, so nothing changes until you change it.
+- **New, off by default: a dim hint on the cast after next.** A second, fainter glow on the
+  following suggestion's button. It ships off, for the same reason the queue strip stopped
+  glowing — two lit buttons compete for one glance.
 - **The queue strip no longer glows, and it moves instead.** The suggested spell used to light up
   twice at once — on the strip and on your action bar — for the same cast. The strip's half was the
   one you cannot press, so it is gone: the current suggestion is simply the biggest icon, the ones

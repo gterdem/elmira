@@ -43,6 +43,16 @@ local function redraw()
   if ns.Display then ns.Display.refresh() end
 end
 
+-- An appearance change cannot be applied to a glow that is already RUNNING: LibCustomGlow builds
+-- its frames from the arguments it was started with. Tearing them down is what makes the next
+-- render rebuild with the new settings; without it the panel changes and the button does not.
+-- A preview in flight is restarted for the same reason -- it is the one glow no render will redraw.
+local function restyle()
+  if ns.Glow then ns.Glow.StopAll() end
+  if Options.previewRunning() then Options.previewGlow() end
+  redraw()
+end
+
 
 -- ============================================================ Action Bars
 -- The section that answers "why is nothing glowing" without the player having to type a slash
@@ -110,11 +120,19 @@ local function stopPreview()
   if timer and ns.addon and ns.addon.CancelTimer then pcall(ns.addon.CancelTimer, ns.addon, timer) end
   if not (frame and ns.Glow) then return end
   -- Between lighting this button and getting here, the rotation may have moved on and the render
-  -- loop may have taken the same frame for the REAL suggestion. Stopping it then darkens a button
-  -- that should be lit, and SetNowSlot still believes it is lit, so it stays dark until the
-  -- suggestion changes away and back.
-  if ns.Glow.isNowFrame and ns.Glow.isNowFrame(frame) then return end
+  -- loop may have taken the same frame -- as the real suggestion, or as the dim hint on the one
+  -- after it. Stopping it then darkens a button that should be lit, and SetNowSlot still believes
+  -- it is lit, so it stays dark until that suggestion changes away and back. Asking only about the
+  -- NOW set was this bug with the second key added underneath it.
+  if ns.Glow.isRendererFrame and ns.Glow.isRendererFrame(frame) then return end
   ns.Glow.Stop(frame)
+end
+
+-- Is a preview still lit? Only this file knows: a previewed frame is deliberately outside the
+-- render loop's set, so nothing else can see it. `restyle` needs the answer to relight it with new
+-- settings, because no render ever will.
+function Options.previewRunning()
+  return previewFrame ~= nil
 end
 
 -- Fires the real glow, on demand, with no combat and no rotation state. This is the single most
@@ -474,6 +492,22 @@ local function exchangeGroup()
   }
 end
 
+-- A glow setting that is a NUMBER. `hidden` is driven by the style's own argument table rather
+-- than by a list repeated here: a row the current style cannot use would let the user move a
+-- slider and watch nothing happen, which is a panel telling a lie.
+--
+-- `get` shows the library's default until the user chooses, so the sliders read as what is on
+-- screen rather than as zero. `set` writes a real number, which is what stops passing nil.
+local function numberRow(order, name, key, minimum, maximum, step, desc)
+  return {
+    type = "range", order = order, name = name, desc = desc,
+    min = minimum, max = maximum, step = step,
+    hidden = function() return not (ns.Glow and ns.Glow.applies(profile().glow.style, key)) end,
+    get = function() return ns.Glow and ns.Glow.effective(profile().glow.style, key) or minimum end,
+    set = function(_, v) profile().glow[key] = v; restyle() end,
+  }
+end
+
 function Options.table()
   return {
     type = "group",
@@ -594,9 +628,12 @@ function Options.table()
             -- Derived from Glow.STYLES rather than repeated: a literal here silently drifts the
             -- moment a style is added, offering a choice the renderer does not have.
             values = function()
-              local names = { PIXEL = L["Pixel"], BUTTON = L["Button"], AUTOCAST = L["Autocast"] }
+              local names = { PIXEL = L["Pixel"], BUTTON = L["Button"], AUTOCAST = L["Autocast"],
+                              PROC = L["Proc"] }
+              -- Only what the loaded library can actually draw. Proc arrived in LibCustomGlow
+              -- minor 25; offering it against an older copy is a menu entry that does nothing.
               local out = {}
-              for key in pairs((ns.Glow and ns.Glow.STYLES) or {}) do out[key] = names[key] or key end
+              for key in pairs((ns.Glow and ns.Glow.available()) or {}) do out[key] = names[key] or key end
               return out
             end,
             get = function() return profile().glow.style end,
@@ -605,6 +642,40 @@ function Options.table()
               if ns.Glow then ns.Glow.StopAll() end   -- restart in the new style, don't layer them
               redraw()
             end,
+          },
+          color = {
+            type = "color", order = 4, name = L["Colour"], hasAlpha = false,
+            desc = L["The colour of the glow on your action bar."],
+            get = function()
+              local c = profile().glow.color or ns.Colors.HIGHLIGHT
+              return c.r, c.g, c.b
+            end,
+            set = function(_, r, g, b)
+              profile().glow.color = { r = r, g = g, b = b }
+              restyle()
+            end,
+          },
+          particles = numberRow(5, L["Particles"], "particles", 1, 20, 1,
+            L["How many dots or sparks travel around the button."]),
+          -- 0.025 rather than 0.05 so Autocast's own default of 0.125 is a step the slider can
+          -- land on; otherwise the first nudge jumps it to 0.15 and the look changes for no reason.
+          frequency = numberRow(6, L["Speed"], "frequency", 0.025, 2, 0.025,
+            L["How fast they travel."]),
+          thickness = numberRow(7, L["Thickness"], "thickness", 1, 6, 1,
+            L["How heavy the outline is."]),
+          speed = numberRow(8, L["Pulse length"], "speed", 0.2, 3, 0.1,
+            L["How long one pulse of the proc animation lasts, in seconds."]),
+          secondary = {
+            type = "toggle", order = 9, name = L["Also hint the cast after next"],
+            desc = L["A dim glow on the second suggestion. Off by default: two lit buttons compete "
+                  .. "for the same glance, which is the reason the queue itself stopped glowing."],
+            get = function() return profile().glow.secondary == true end,
+            set = function(_, v) profile().glow.secondary = v; restyle() end,
+          },
+          preview = {
+            type = "execute", order = 10, name = L["Preview glow"],
+            desc = L["Flashes your current suggestion's button with these settings."],
+            func = function() Options.previewGlow() end,
           },
         },
       },

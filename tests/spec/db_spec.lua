@@ -29,6 +29,22 @@ describe("Core.DB", function()
     assert.is_true(DB.defaults.profile.animate)
   end)
 
+  -- Every glow number ships as `false`, meaning "whatever LibCustomGlow would do on its own", so a
+  -- default install renders exactly as it did before the controls existed. A number here would
+  -- silently restyle every existing user's glow on upgrade.
+  it("leaves every glow appearance setting to the library", function()
+    local g = DB.defaults.profile.glow
+    assert.is_false(g.color)
+    assert.is_false(g.particles)
+    assert.is_false(g.frequency)
+    assert.is_false(g.thickness)
+    assert.is_false(g.speed)
+  end)
+
+  it("ships the second-suggestion hint off", function()
+    assert.is_false(DB.defaults.profile.glow.secondary)
+  end)
+
   it("defaults.profile.depth is 3", function()
     assert.equal(3, DB.defaults.profile.depth)
   end)

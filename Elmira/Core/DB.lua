@@ -33,7 +33,13 @@ DB.defaults = {
     animate = true,
     activeBuild = false,
     anchor = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },
-    glow = { enabled = true, style = "PIXEL", barGlow = true },
+    -- Every numeric here is `false`, meaning "whatever LibCustomGlow would do on its own". That is
+    -- what makes a default install render exactly as it did before these controls existed; the
+    -- moment the user moves a slider it becomes a real number. `color = false` means the brand's
+    -- highlight. `secondary` ships off: ADR-0015 exists because two things competed for one glance.
+    glow = { enabled = true, style = "PIXEL", barGlow = true, color = false,
+             particles = false, frequency = false, thickness = false, speed = false,
+             secondary = false },
     -- ADR-0009: the overlay has no global "on" switch. `cues` maps a cue id to the user's settings
     -- for it, so an empty table is a quiet default install, and a cue only ever exists because the
     -- user opted it in. Reshaped at M1 with no dbVersion migration: the previous

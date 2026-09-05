@@ -206,16 +206,18 @@ describe("Options (action bars)", function()
     end)
   end)
 
-  -- The style list is derived from Glow.STYLES rather than repeated. A literal drifts the moment a
-  -- style is added, offering the player a choice the renderer does not have.
+  -- The style list is derived from what the LOADED library can draw rather than repeated. A literal
+  -- drifts the moment a style is added, offering the player a choice the renderer does not have --
+  -- and a style the library is too old for draws nothing at all.
   it("offers exactly the glow styles the renderer implements", function()
+    ns.Glow.available = function() return { PIXEL = true, BUTTON = true, AUTOCAST = true } end
     local values = Options.table().args.glow.args.style.values()
     local names = {}
     for key in pairs(values) do names[#names + 1] = key end
     table.sort(names)
     assert.same({ "AUTOCAST", "BUTTON", "PIXEL" }, names)
 
-    ns.Glow.STYLES.PROC = {}
+    ns.Glow.available = function() return { PIXEL = true, PROC = true } end
     local widened = Options.table().args.glow.args.style.values()
     assert.is_not_nil(widened.PROC)
   end)
@@ -303,15 +305,17 @@ describe("Options (action bars)", function()
     end)
 
     -- Between lighting a button and the timer firing, the rotation can move on and the render loop
-    -- can take that same frame for the REAL suggestion. Stopping it then darkens a button that
-    -- should be lit, and SetNowSlot still believes it is lit, so it stays dark until the suggestion
-    -- changes away and back. Found by probing, not by mutation: the bug was in absent code.
+    -- can take that same frame -- as the real suggestion, or as the dim hint on the one after it.
+    -- Stopping it then darkens a button that should be lit, and SetNowSlot still believes it is
+    -- lit, so it stays dark until that suggestion changes away and back. Found by probing, not by
+    -- mutation: the bug was in absent code, twice -- once for the now glow and again when the dim
+    -- second glow arrived and the guard still asked only about the first.
     it("does not put out a real glow that has taken over its frame", function()
       local frame, stopped = { "button" }, false
       ns.BarGlow = { buttonsFor = function() return { frame } end }
       ns.Glow.Start = function() return true end
       ns.Glow.Stop = function() stopped = true end
-      ns.Glow.isNowFrame = function(f) return f == frame end   -- the render loop took it
+      ns.Glow.isRendererFrame = function(f) return f == frame end   -- the render loop took it
       local fire
       ns.addon = { ScheduleTimer = function(_, fn) fire = fn; return "t" end, CancelTimer = function() end }
       Options.previewGlow()
@@ -324,7 +328,7 @@ describe("Options (action bars)", function()
       ns.BarGlow = { buttonsFor = function() return { frame } end }
       ns.Glow.Start = function() return true end
       ns.Glow.Stop = function() stopped = true end
-      ns.Glow.isNowFrame = function() return false end
+      ns.Glow.isRendererFrame = function() return false end
       local fire
       ns.addon = { ScheduleTimer = function(_, fn) fire = fn; return "t" end, CancelTimer = function() end }
       Options.previewGlow()
