@@ -4,7 +4,14 @@
   settings window: what you are running, the templates that ship for your class, and your own
   rotations listed separately. If you are running one of your own, it says which template it came
   from and tells you when that template has been updated since you copied it. Import / Export moved
-  here as the **Share** tab; the **Builder** tab is the editor and arrives next.
+  here as the **Share** tab.
+- **New: the Builder tab shows everything your rotation can use.** The abilities your class data
+  covers, with their
+  icons, searchable, and your trinkets — with every other equipment slot behind a toggle, since
+  almost nothing else is ever on-use. Abilities you cannot cast yet are still listed, dimmed, with
+  the reason beside them: a rune-granted one names the rune to engrave rather than just saying you
+  have not learned it, because that is the thing you can go and do. Putting them in an order is the
+  next step.
 - **Fixed: closing the settings window could leave the Escape key dead.** Elmira replaced the
   settings window's own close handler instead of adding to it, so the window was never released
   when it closed. Anything you had clicked into — the import box, a slider's number — kept the

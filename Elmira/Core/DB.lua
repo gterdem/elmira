@@ -33,6 +33,9 @@ DB.defaults = {
     -- (ADR-0015 §3), which the single switch could not express.
     showQueue = true,
     animate = true,
+    -- The Builder's item palette lists trinkets only until this is on. Most characters have nothing
+    -- on-use in the other slots, and a palette of empty rows teaches you to stop reading it.
+    paletteAllSlots = false,
     activeBuild = false,
     anchor = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },
     -- Every numeric here is `false`, meaning "whatever LibCustomGlow would do on its own". That is

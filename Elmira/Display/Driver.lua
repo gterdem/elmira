@@ -140,6 +140,14 @@ function Display.spellIcon(spellKey)
   return GetSpellTexture(data.id)
 end
 
+-- The texture in an inventory SLOT, for the Builder's item palette. Slot-based, not item-based,
+-- because that is what a build entry binds to (`entry.item = 13`) -- the icon follows the trinket
+-- you swap in without the rotation changing.
+function Display.itemIcon(slot)
+  if not (slot and GetInventoryItemTexture) then return nil end
+  return GetInventoryItemTexture("player", slot)
+end
+
 -- Reads the live state, hands Core/Visibility booleans, returns show/hide plus the reason. The
 -- reason is carried so `/elm debug perf` can say why the screen is empty — "the addon is broken" and
 -- "you are standing in Ironforge with no target" look identical otherwise.

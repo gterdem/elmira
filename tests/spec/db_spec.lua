@@ -27,6 +27,9 @@ describe("Core.DB", function()
   it("ships the strip and its animations on", function()
     assert.is_true(DB.defaults.profile.showQueue)
     assert.is_true(DB.defaults.profile.animate)
+    -- The Builder's item palette ships showing trinkets only: most characters have nothing on-use
+    -- in the other slots, and a palette of empty rows teaches you to stop reading it.
+    assert.is_false(DB.defaults.profile.paletteAllSlots)
   end)
 
   -- Every glow number ships as `false`, meaning "whatever LibCustomGlow would do on its own", so a

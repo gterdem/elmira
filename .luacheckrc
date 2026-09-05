@@ -50,6 +50,9 @@ files["Elmira/Display/"] = { read_globals = { "CreateFrame", "UIParent", "GameTo
   -- Ranks: the id on a bar and the id in the data pack can be different ranks of one ability, so the
   -- bar map is keyed by the rank-free name as well. Presentation-side lookup, not state.
   "GetSpellInfo",
+  -- The texture in a slot, for the Builder's item palette. Presentation, like GetItemIcon beside
+  -- it: a build entry binds to the SLOT, so the icon has to be read from the slot too.
+  "GetInventoryItemTexture",
   "GetInventoryItemID", "RANGE_INDICATOR",
   -- F37 announcements (Display/Announcers.lua). LibStub is here rather than at the top level so it
   -- stays out of Core/, and SendChatMessage is the ONE global in this addon that talks to other

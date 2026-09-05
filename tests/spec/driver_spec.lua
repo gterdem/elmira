@@ -273,6 +273,19 @@ describe("Display.Driver", function()
       assert.is_nil(Display.spellIcon("DIVINE_STORM"))
     end)
 
+    -- Slot-based, not item-based: a build entry binds to the SLOT (`entry.item = 13`), so the
+    -- Builder's item palette has to read the icon from the slot too.
+    it("reads an item icon out of the inventory slot, and copes when it cannot", function()
+      _G.GetInventoryItemTexture = function(unit, slot)
+        return (unit == "player" and slot == 13) and "Interface\\Icons\\INV_Trinket" or nil
+      end
+      assert.equal("Interface\\Icons\\INV_Trinket", Display.itemIcon(13))
+      assert.is_nil(Display.itemIcon(14))
+      assert.is_nil(Display.itemIcon(nil))
+      _G.GetInventoryItemTexture = nil
+      assert.is_nil(Display.itemIcon(13))
+    end)
+
     it("forgets what it knew on request, so the next look starts again", function()
       Display.checkGates()
       setBonus(true)

@@ -35,6 +35,7 @@ Core\Advisor.lua
 Core\Visibility.lua
 Core\Ticker.lua
 Core\Transition.lua
+Core\Palette.lua
 Core\Recorder.lua
 Core\Slash.lua
 

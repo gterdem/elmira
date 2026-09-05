@@ -196,6 +196,173 @@ local function forkArgs()
   return args
 end
 
+-- ---------------------------------------------------------------- Builder tab: the palette
+
+-- Inventory slots, named for humans. Here rather than in Core/Palette for the reason Options.lua
+-- gives about Core/Visibility's modes: Core decides what a slot IS, Options decides what it is
+-- called, and only this side goes through AceLocale.
+local SLOT_LABELS = {
+  [1] = "Head", [2] = "Neck", [3] = "Shoulder", [5] = "Chest", [6] = "Waist", [7] = "Legs",
+  [8] = "Feet", [9] = "Wrist", [10] = "Hands", [11] = "Ring 1", [12] = "Ring 2",
+  [13] = "Trinket 1", [14] = "Trinket 2", [15] = "Back", [16] = "Main hand",
+  [17] = "Off hand", [18] = "Ranged",
+}
+
+-- Transient, like Options.lua's exchange box: what you typed to filter is about this visit to the
+-- panel, not a setting worth carrying between sessions. `paletteAllSlots` IS a setting, so it lives
+-- in the profile instead.
+local paletteSearch = "" -- mutants: equivalent deletion only makes it a global
+
+function Rotation.setSearch(text)
+  paletteSearch = tostring(text or "")
+end
+
+function Rotation.search() return paletteSearch end
+
+-- READING falls back to the shipped defaults, so the panel renders correctly if it is ever built
+-- before AceDB has handed over a profile.
+local function profile()
+  return (ns.db and ns.db.profile) or (ns.DB and ns.DB.defaults.profile) or {}
+end
+
+-- WRITING must never fall back. `DB.defaults.profile` is one shared table that every future profile
+-- is copied from, so a setter reaching it would not lose the click -- it would silently change the
+-- default for every character made afterwards, for the rest of the session.
+local function writableProfile()
+  return ns.db and ns.db.profile
+end
+
+-- The name a person reads for a pack spell key. Client-aware when the client can answer, and
+-- Detect.readableName otherwise -- which is also the only one reachable headlessly, so the palette
+-- is never blank in a spec or on a client that cannot resolve an id.
+function Rotation.spellLabel(key)
+  local p = pack()
+  local data = p and p.spells and p.spells[key]
+  local name = data and data.id and ns.BarGlow and ns.BarGlow.spellName
+    and ns.BarGlow.spellName(data.id)
+  if name then return name end
+  if ns.Detect and ns.Detect.readableName then return ns.Detect.readableName(key, data) end
+  return key
+end
+
+-- Palette.spells is pure and takes the client-shaped parts as arguments; this is where they come
+-- from. `known` is tri-state and stays that way: nil means the client cannot tell, and rendering
+-- that as "you do not have it" would grey the whole palette on a flavour without engraving.
+function Rotation.paletteSpells()
+  if not ns.Palette then return {} end
+  local state = ns.API and ns.API.GetState and ns.API.GetState()
+  local rows = ns.Palette.spells(pack(), {
+    label = Rotation.spellLabel,
+    known = state and state.known and function(key) return state:known(key) end or nil,
+  })
+  return Rotation.filtered(rows, function(row) return row.label end)
+end
+
+function Rotation.paletteItems()
+  if not ns.Palette then return {} end
+  local rows = ns.Palette.items{
+    allSlots = profile().paletteAllSlots and true or false,
+    -- Guard the METHOD, not just the module: a Display without itemIcon errors here, which is the
+    -- same asymmetry an audit already caught once in this file.
+    filled = function(slot)
+      if not (ns.Display and ns.Display.itemIcon) then return false end
+      return ns.Display.itemIcon(slot) ~= nil
+    end,
+  }
+  for _, row in ipairs(rows) do row.label = L[SLOT_LABELS[row.slot] or ("Slot " .. row.slot)] end
+  return Rotation.filtered(rows, function(row) return row.label end)
+end
+
+-- One filter for both lists. Case-insensitive and plain-text: a palette search box that treats
+-- what you typed as a Lua pattern errors on a bracket, which is not a thing a search box may do.
+function Rotation.filtered(rows, textOf)
+  if paletteSearch == "" then return rows end
+  local needle = paletteSearch:lower()
+  local out = {}
+  for _, row in ipairs(rows) do
+    if tostring(textOf(row)):lower():find(needle, 1, true) then out[#out + 1] = row end
+  end
+  return out
+end
+
+-- Core/Palette answers WHY a row is unavailable as a token; the sentence is written here, because
+-- every user-facing string on this screen goes through AceLocale and Core has no business holding
+-- English (the same split Options.lua states for Core/Visibility's mode names).
+function Rotation.reasonText(row)
+  if row.reason == "rune" and row.reasonKey then
+    return string.format(L["engrave %s"], Rotation.spellLabel(row.reasonKey))
+  end
+  return L["not learned yet"]
+end
+
+local function spellPaletteArgs()
+  local rows = Rotation.paletteSpells()
+  if #rows == 0 then
+    return { none = { type = "description", order = 1, width = "full",
+                      name = L["Nothing matches."] } }
+  end
+  local args = {}
+  for i, row in ipairs(rows) do
+    local icon = ns.Display and ns.Display.spellIcon and ns.Display.spellIcon(row.key)
+    local prefix = icon and ("|T" .. tostring(icon) .. ":0|t ") or ""
+    -- Un-known rows are dimmed and carry the reason rather than being hidden: "why can I not add
+    -- Divine Storm" is the question, and "engrave Divine Storm" is the answer to it. A nil `known`
+    -- means the client cannot tell, which must not read as "you do not have it".
+    local body -- mutants: equivalent deleting the declaration only makes it a global; luacheck catches it
+    if row.known == false then
+      body = string.format("|cff9AA0A6%s|r  |cff9AA0A6(%s)|r", row.label, Rotation.reasonText(row))
+    else
+      body = string.format("|cffFFFFFF%s|r", row.label)
+    end
+    args["s" .. i] = { type = "description", order = i, width = "full", name = prefix .. body }
+  end
+  return args
+end
+
+local function itemPaletteArgs()
+  local rows = Rotation.paletteItems()
+  local args = {
+    all = {
+      type = "toggle", order = 0, width = "full", name = L["Show every equipment slot"],
+      desc = L["Off lists your trinkets only, which is what nearly every rotation uses."],
+      get = function() return profile().paletteAllSlots and true or false end,
+      set = function(_, v)
+        local p = writableProfile()
+        if p then p.paletteAllSlots = v and true or false end
+      end,
+    },
+  }
+  for i, row in ipairs(rows) do
+    local icon = ns.Display and ns.Display.itemIcon and ns.Display.itemIcon(row.slot)
+    local prefix = icon and ("|T" .. tostring(icon) .. ":0|t ") or ""
+    -- An empty slot is still listed: a rotation may name a slot you have not filled yet, exactly as
+    -- it may name a rune you have not engraved, and `item_ready` gates it at runtime either way.
+    local body = row.filled
+      and string.format("|cffFFFFFF%s|r", row.label)
+      or string.format("|cff9AA0A6%s|r  |cff9AA0A6(%s)|r", row.label, L["empty"])
+    args["i" .. i] = { type = "description", order = i, width = "full", name = prefix .. body }
+  end
+  return args
+end
+
+local function builderArgs()
+  return {
+    intro = {
+      type = "description", order = 1, width = "full", fontSize = "medium",
+      name = L["What your rotation can use. Putting these in an order is the next step."],
+    },
+    search = {
+      type = "input", order = 2, width = "full", name = L["Search"],
+      get = function() return Rotation.search() end,
+      set = function(_, v) Rotation.setSearch(v) end,
+    },
+    spells = { type = "group", inline = true, order = 3, name = L["Spells"],
+               args = spellPaletteArgs() },
+    items = { type = "group", inline = true, order = 4, name = L["Items"],
+              args = itemPaletteArgs() },
+  }
+end
+
 -- ---------------------------------------------------------------- Share tab
 
 -- The state lives in Options.lua, where it already was; this reads it through the accessors rather
@@ -237,19 +404,7 @@ function Rotation.group()
                    args = forkArgs() },
         },
       },
-      builder = {
-        type = "group", order = 2, name = L["Builder"],
-        args = {
-          soon = {
-            type = "description", order = 1, width = "full", fontSize = "medium",
-            -- Says what it will do and that it does not do it yet. The alternative -- an empty tab,
-            -- or one that looks interactive and is not -- is the failure this codebase keeps
-            -- producing: something that looks right and does nothing.
-            name = L["The rotation editor arrives in the next step. Until then, edit a rotation by "
-                  .. "exporting it from Share, changing it, and importing it back."],
-          },
-        },
-      },
+      builder = { type = "group", order = 2, name = L["Builder"], args = builderArgs() },
       share = { type = "group", order = 3, name = L["Share"], args = shareArgs() },
     },
   }

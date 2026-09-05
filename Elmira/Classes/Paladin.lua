@@ -60,7 +60,7 @@ ns.RegisterBuiltinPack("PALADIN", function()
     --   /dump AuraUtil.FindAuraByName("Swift Judgement", "player")
     SWIFT_JUDGEMENT_BUFF = { id = 467530, src = "wowsims sod sim/paladin/item_sets_pve.go (2026-09-01)",
                              verify = "in-game",
-                             note = "+1% Holy damage per stack, max 5, 8s; refreshed by each Judgement" },
+                             note = "+1% Holy damage per stack, max 5, 8s; refreshed by each Judgement", aura = true },
     -- REFUTED 2026-09-01, kept as a comment so nobody re-derives it. Research claimed each shoulder
     -- soul applies a permanent hidden aura reusing the matching set bonus's id (Exile 468431,
     -- Retributor 1213397, Judicator 467526, Sealbearer 456533) and that these were readable via
@@ -73,21 +73,21 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- from WoWSims, and stacks are not an id. The rotation guidance is unchanged: this boosts the next
     -- Exorcism, it is NOT a reason to hold Exorcism.
     EXCOMMUNICATION_BUFF = { id = 1217927, src = "https://www.wowhead.com/classic/spell=1217927",
-                             note = "+36% Exorcism damage, 20s, max 3 stacks (stack cap per wowsims)" },
+                             note = "+36% Exorcism damage, 20s, max 3 stacks (stack cap per wowsims)", aura = true },
     -- Applied by the T3.5 6-set when Holy Power is consumed. Same situation as SWIFT_JUDGEMENT_BUFF:
     -- server-side scripted, so no Wowhead page shows it. NOT related to SOUL_OF_THE_TEMPLAR, which is
     -- a shoulder soul that merely shares the word.
     TEMPLAR_BUFF        = { id = 1226464, src = "wowsims sod sim/paladin/item_sets_pve_phase_8.go (2026-09-01)",
                             verify = "in-game",
-                            note = "+15% attack power per Holy Power consumed, max 3 stacks, 10s" },
-    HOLY_POWER_BUFF     = { id = 1226461, src = "https://www.wowhead.com/classic/spell=1226461" }, -- T3.5 Ret 2-set stack
-    JUDGEMENT_OF_COMMAND = { id = 20966, src = "https://www.wowhead.com/classic/spell=20966" },
-    JUDGEMENT_OF_LIGHT   = { id = 20343, src = "https://www.wowhead.com/classic/spell=20343" },
-    JUDGEMENT_OF_WISDOM  = { id = 20354, src = "https://www.wowhead.com/classic/spell=20354" },
-    JUDGEMENT_OF_THE_CRUSADER = { id = 20303, src = "https://www.wowhead.com/classic/spell=20303" },
+                            note = "+15% attack power per Holy Power consumed, max 3 stacks, 10s", aura = true },
+    HOLY_POWER_BUFF     = { id = 1226461, src = "https://www.wowhead.com/classic/spell=1226461", aura = true }, -- T3.5 Ret 2-set stack
+    JUDGEMENT_OF_COMMAND = { id = 20966, src = "https://www.wowhead.com/classic/spell=20966", aura = true },
+    JUDGEMENT_OF_LIGHT   = { id = 20343, src = "https://www.wowhead.com/classic/spell=20343", aura = true },
+    JUDGEMENT_OF_WISDOM  = { id = 20354, src = "https://www.wowhead.com/classic/spell=20354", aura = true },
+    JUDGEMENT_OF_THE_CRUSADER = { id = 20303, src = "https://www.wowhead.com/classic/spell=20303", aura = true },
     -- Read from the live client 2026-09-01 (docs/07 §9.12): the applied aura's spellId IS the ability's
     -- id, confirming the staged guess. Duration 20 s, dispel type Magic.
-    AVENGING_WRATH_BUFF  = { id = 407788, src = "https://www.wowhead.com/classic/spell=407788" },
+    AVENGING_WRATH_BUFF  = { id = 407788, src = "https://www.wowhead.com/classic/spell=407788", aura = true },
     -- Cooldowns as printed on the pages ("Cooldown: 3 minutes" / "Cooldown: 2 minutes", read 2026-09-03).
     -- Fallbacks only -- the client's answer wins at runtime -- but without them the headless preview
     -- treated both as one-GCD spells and every fixture had to hand in a `baseCooldown` stand-in.
@@ -96,10 +96,10 @@ ns.RegisterBuiltinPack("PALADIN", function()
     REBUKE               = { id = 425609, src = "https://www.wowhead.com/classic/spell=425609" },
     HORN_OF_LORDAERON    = { id = 425600, src = "https://www.wowhead.com/classic/spell=425600" },
     VENGEANCE_BUFF       = { id = 20049,  src = "https://www.wowhead.com/classic/spell=20049", proc = true },
-    VINDICATION_DEBUFF   = { id = 26021,  src = "https://www.wowhead.com/classic/spell=26021" },
+    VINDICATION_DEBUFF   = { id = 26021,  src = "https://www.wowhead.com/classic/spell=26021", aura = true },
     THE_ART_OF_WAR       = { id = 426157, src = "https://www.wowhead.com/classic/spell=426157",
-                             note = "Passive cooldown/mana reduction on Exorcism, not a proc aura (verified in M2)" },
-    PURIFYING_POWER      = { id = 429144, src = "https://www.wowhead.com/classic/spell=429144" },
+                             note = "Passive cooldown/mana reduction on Exorcism, not a proc aura (verified in M2)", passive = true },
+    PURIFYING_POWER      = { id = 429144, src = "https://www.wowhead.com/classic/spell=429144", passive = true },
 
     -- Rune entries. **These must hold the ABILITY spell id, not the teach-spell id.** Detection reads
     -- `C_Engraving.GetRuneForEquipmentSlot(slot).learnedAbilitySpellIDs`, which returns the ability the

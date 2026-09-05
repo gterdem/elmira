@@ -69,16 +69,16 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal(3, g.args.share.order)
     end)
 
-    -- An empty Builder tab, or one that looks interactive and is not, is the failure this codebase
-    -- keeps producing. It has to say it is not ready and what to do instead.
-    it("says the Builder is not here yet, and what to do meanwhile", function()
-      local row = Rotation.group().args.builder.args.soon
-      assert.equal("description", row.type)
-      assert.equal(1, row.order)
-      assert.equal("full", row.width)
-      assert.equal("medium", row.fontSize)
-      assert.is_truthy(row.name:find("next step", 1, true))
-      assert.is_truthy(row.name:find("Share", 1, true))
+    it("gives the Builder a search box and a list of spells and items", function()
+      local args = Rotation.group().args.builder.args
+      assert.equal("input", args.search.type)
+      assert.equal("group", args.spells.type)
+      assert.equal("group", args.items.type)
+      assert.is_true(args.spells.inline)
+      assert.equal(3, args.spells.order)
+      assert.equal(4, args.items.order)
+      -- Honest about what it cannot do yet: ordering arrives in the next step.
+      assert.is_truthy(args.intro.name:find("next step", 1, true))
     end)
   end)
 
@@ -123,6 +123,262 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal("", box().text.get())
       assert.equal("", box().note.name())
       box().text.set(nil, "ELM1:ignored")
+    end)
+  end)
+
+  -- The Builder's palette (step 2). Core/Palette is pure and tested on its own; this is the wiring
+  -- that hands it the client-shaped parts and renders what comes back.
+  describe("Builder palette", function()
+    local PACK_SPELLS = {
+      EXORCISM = { id = 415073 },
+      DIVINE_STORM = { id = 407778 },
+      RUNE_DIVINE_STORM = { id = 407778, rune = "chest" },
+    }
+
+    local function installPalette(known)
+      helper.load("Elmira/Core/Palette.lua")
+      ns.Display.currentPack = function()
+        return { class = "PALADIN", catalog = { PALADIN = CATALOG }, spells = PACK_SPELLS }
+      end
+      ns.Detect = { readableName = function(key) return key end }
+      ns.API = { GetState = function()
+        return { known = function(_, key) return known and known(key) end }
+      end }
+      ns.db = { profile = { paletteAllSlots = false } }
+      Rotation.setSearch("")
+    end
+
+    it("lists the pack's abilities and not its rune records", function()
+      installPalette(function() return true end)
+      local args = Rotation.group().args.builder.args.spells.args
+      local names = {}
+      for _, row in pairs(args) do names[#names + 1] = row.name end
+      assert.equal(2, #names, "expected Exorcism and Divine Storm, no rune record")
+    end)
+
+    -- The whole point of the owner's "show everything, grey the rest" choice: the row you cannot
+    -- use yet has to say what to do about it.
+    it("dims an un-known ability and names the rune that grants it", function()
+      installPalette(function() return false end)
+      local args = Rotation.group().args.builder.args.spells.args
+      local text = ""
+      for _, row in pairs(args) do
+        if row.name:find("DIVINE_STORM", 1, true) then text = row.name end
+      end
+      assert.is_truthy(text:find("engrave", 1, true), "no reason on the greyed row")
+      assert.is_truthy(text:find("|cff9AA0A6", 1, true), "the un-known row is not dimmed")
+    end)
+
+    it("does not dim anything when the client cannot tell what is known", function()
+      installPalette(function() return nil end)
+      for _, row in pairs(Rotation.group().args.builder.args.spells.args) do
+        assert.is_nil(row.name:find("engrave", 1, true))
+      end
+    end)
+
+    it("filters both lists on what you typed, ignoring case", function()
+      installPalette(function() return true end)
+      Rotation.setSearch("exorc")
+      assert.equal(1, #Rotation.paletteSpells())
+      Rotation.setSearch("EXORC")
+      assert.equal(1, #Rotation.paletteSpells())
+      Rotation.setSearch("")
+      assert.equal(2, #Rotation.paletteSpells())
+    end)
+
+    -- A search box that treats what you typed as a Lua pattern errors on a bracket, which is not a
+    -- thing a search box may do.
+    it("treats the search as plain text, not a Lua pattern", function()
+      installPalette(function() return true end)
+      Rotation.setSearch("[")
+      assert.same({}, Rotation.paletteSpells())
+      assert.same({}, Rotation.paletteItems())
+    end)
+
+    it("says so when nothing matches, rather than rendering an empty box", function()
+      installPalette(function() return true end)
+      Rotation.setSearch("zzzz")
+      assert.is_truthy(Rotation.group().args.builder.args.spells.args.none.name
+        :find("Nothing matches", 1, true))
+    end)
+
+    it("routes the search box through the accessor", function()
+      installPalette(function() return true end)
+      local row = Rotation.group().args.builder.args.search
+      row.set(nil, "judge")
+      assert.equal("judge", Rotation.search())
+      assert.equal("judge", row.get())
+    end)
+
+    it("lists trinkets only until the toggle is on, and remembers the choice", function()
+      installPalette(function() return true end)
+      assert.equal(2, #Rotation.paletteItems())
+      local toggle = Rotation.group().args.builder.args.items.args.all
+      assert.is_false(toggle.get())
+      toggle.set(nil, true)
+      assert.is_true(ns.db.profile.paletteAllSlots)
+      assert.is_true(#Rotation.paletteItems() > 2)
+    end)
+
+    it("names each slot for a person, and marks the empty ones", function()
+      installPalette(function() return true end)
+      ns.Display.itemIcon = function(slot) return slot == 13 and "tex" or nil end
+      local args = Rotation.group().args.builder.args.items.args
+      assert.is_truthy(args.i1.name:find("Trinket 1", 1, true))
+      assert.is_truthy(args.i2.name:find("Trinket 2", 1, true))
+      assert.is_nil(args.i1.name:find("empty", 1, true))
+      assert.is_truthy(args.i2.name:find("empty", 1, true))
+    end)
+
+    -- spellLabel walks three sources in order; each needs its own case, or the fallbacks are
+    -- untested code that only runs on the clients we cannot reach.
+    describe("spellLabel()", function()
+      it("prefers the name the client resolves from the spell id", function()
+        installPalette(function() return true end)
+        ns.BarGlow = { spellName = function(id) return id == 415073 and "Exorcism" or nil end }
+        assert.equal("Exorcism", Rotation.spellLabel("EXORCISM"))
+      end)
+
+      it("falls back to the readable key when the client cannot resolve the id", function()
+        installPalette(function() return true end)
+        ns.BarGlow = { spellName = function() return nil end }
+        ns.Detect = { readableName = function(key) return "readable:" .. key end }
+        assert.equal("readable:EXORCISM", Rotation.spellLabel("EXORCISM"))
+      end)
+
+      it("falls back to the raw key when nothing can name it at all", function()
+        installPalette(function() return true end)
+        ns.BarGlow, ns.Detect = nil, nil
+        assert.equal("EXORCISM", Rotation.spellLabel("EXORCISM"))
+      end)
+
+      it("answers for a key the pack does not carry", function()
+        installPalette(function() return true end)
+        ns.BarGlow, ns.Detect = nil, nil
+        assert.equal("NOT_IN_PACK", Rotation.spellLabel("NOT_IN_PACK"))
+      end)
+
+      it("answers before a pack is loaded", function()
+        ns.BarGlow, ns.Detect = nil, nil
+        assert.equal("EXORCISM", Rotation.spellLabel("EXORCISM"))
+      end)
+
+      -- The palette must be labelled by THIS function, not by the raw key: without it every row
+      -- reads as EXORCISM rather than Exorcism, and the search box matches the wrong text.
+      it("is what the palette labels its rows with", function()
+        installPalette(function() return true end)
+        ns.BarGlow = { spellName = function(id) return id == 415073 and "Exorcism" or nil end }
+        local rows = Rotation.paletteSpells()
+        local seen = {}
+        for _, row in ipairs(rows) do seen[row.key] = row.label end
+        assert.equal("Exorcism", seen.EXORCISM)
+      end)
+    end)
+
+    it("names every slot it offers, with no raw numbers left over", function()
+      installPalette(function() return true end)
+      ns.db.profile.paletteAllSlots = true
+      for _, row in ipairs(Rotation.paletteItems()) do
+        assert.is_string(row.label)
+        assert.is_nil(row.label:find("Slot ", 1, true),
+          "slot " .. row.slot .. " has no name of its own")
+      end
+    end)
+
+    it("names the slots a person actually recognises", function()
+      installPalette(function() return true end)
+      ns.db.profile.paletteAllSlots = true
+      local byName = {}
+      for _, row in ipairs(Rotation.paletteItems()) do byName[row.slot] = row.label end
+      assert.equal("Head", byName[1])
+      assert.equal("Neck", byName[2])
+      assert.equal("Hands", byName[10])
+      assert.equal("Ring 2", byName[12])
+      assert.equal("Trinket 1", byName[13])
+      assert.equal("Back", byName[15])
+      assert.equal("Main hand", byName[16])
+      assert.equal("Off hand", byName[17])
+      assert.equal("Ranged", byName[18])
+    end)
+
+    it("describes the all-slots toggle it offers", function()
+      installPalette(function() return true end)
+      local toggle = Rotation.group().args.builder.args.items.args.all
+      assert.equal("toggle", toggle.type)
+      assert.equal(0, toggle.order)
+      assert.equal("Show every equipment slot", toggle.name)
+      assert.is_truthy(toggle.desc:find("trinkets", 1, true))
+    end)
+
+    it("puts each spell's icon on its row", function()
+      installPalette(function() return true end)
+      ns.Display.spellIcon = function(key) return key == "EXORCISM" and "tex:ex" or nil end
+      local args = Rotation.group().args.builder.args.spells.args
+      local withIcon = 0
+      for _, row in pairs(args) do
+        if row.name:find("|Ttex:ex:0|t", 1, true) then withIcon = withIcon + 1 end
+      end
+      assert.equal(1, withIcon)
+    end)
+
+    it("puts each slot's icon on its row", function()
+      installPalette(function() return true end)
+      ns.Display.itemIcon = function(slot) return slot == 13 and "tex:tr" or nil end
+      assert.is_truthy(Rotation.group().args.builder.args.items.args.i1.name
+        :find("|Ttex:tr:0|t", 1, true))
+    end)
+
+    it("introduces the tab as a list, at reading size", function()
+      installPalette(function() return true end)
+      local row = Rotation.group().args.builder.args.intro
+      assert.equal("description", row.type)
+      assert.equal(1, row.order)
+      assert.equal("full", row.width)
+      assert.equal("medium", row.fontSize)
+    end)
+
+    -- An empty search must hand back the SAME table, not a copy: the short-circuit is the only
+    -- thing keeping a filter off every row on every repaint at 10 Hz.
+    it("returns the list untouched when nothing is typed", function()
+      installPalette(function() return true end)
+      local rows = { { label = "one" }, { label = "two" } }
+      assert.equal(rows, Rotation.filtered(rows, function(r) return r.label end))
+      Rotation.setSearch("o")
+      assert.is_not.equal(rows, Rotation.filtered(rows, function(r) return r.label end))
+    end)
+
+    -- Options.table() is built on open, which can happen before AceDB has a profile -- the panel
+    -- must fall back to the shipped defaults rather than erroring on a nil profile.
+    -- Discriminating on purpose: the shipped default is `false`, so an empty-table fallback reads
+    -- identically and a spec asserting "false" proves nothing. Flip the default and watch it follow.
+    it("reads the shipped defaults before a profile exists", function()
+      installPalette(function() return true end)
+      local DB = helper.load("Elmira/Core/DB.lua")
+      ns.db = nil
+      DB.defaults.profile.paletteAllSlots = true
+      assert.is_true(Rotation.group().args.builder.args.items.args.all.get())
+      assert.is_true(#Rotation.paletteItems() > 2, "should follow the default, not an empty table")
+      DB.defaults.profile.paletteAllSlots = false
+      assert.is_false(Rotation.group().args.builder.args.items.args.all.get())
+      assert.equal(2, #Rotation.paletteItems())
+    end)
+
+    -- The defaults table is shared: every profile made afterwards is copied from it. A setter that
+    -- fell back to it would not lose the click, it would change the default for everyone.
+    it("never writes into the shipped defaults when there is no profile", function()
+      installPalette(function() return true end)
+      local DB = helper.load("Elmira/Core/DB.lua")
+      ns.db = nil
+      DB.defaults.profile.paletteAllSlots = false
+      Rotation.group().args.builder.args.items.args.all.set(nil, true)
+      assert.is_false(DB.defaults.profile.paletteAllSlots,
+        "the toggle wrote into the shipped defaults")
+    end)
+
+    it("renders without Core/Palette loaded rather than erroring", function()
+      ns.Palette = nil
+      assert.same({}, Rotation.paletteSpells())
+      assert.same({}, Rotation.paletteItems())
     end)
   end)
 
