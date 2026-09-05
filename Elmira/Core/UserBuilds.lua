@@ -107,6 +107,87 @@ function UserBuilds.importString(str, pack, opts)
   return key
 end
 
+-- A fork is a COPY, all the way down. `Classes/<Class>.lua` builds are one shared table per
+-- session: a fork holding a reference into one would edit the shipped template for every character
+-- on the account, and the edit would vanish on reload with no sign it had ever been made.
+-- Cycles are tracked because a hand-written build could contain one, and a stack overflow at login
+-- is a worse bug than any it would be guarding against.
+local function deepCopy(v, seen)
+  if type(v) ~= "table" then return v end
+  seen = seen or {}
+  if seen[v] then return seen[v] end
+  local out = {}
+  seen[v] = out
+  for k, x in pairs(v) do out[deepCopy(k, seen)] = deepCopy(x, seen) end
+  return out
+end
+
+-- UserBuilds.fork(pack, templateKey, opts) -> key | nil, reason
+--
+-- ADR-0015 §2: Customize forks the template AND activates the fork in the same click. Hekili's
+-- copy-then-forget -- where the copy must be separately activated and users keep playing the
+-- original -- is the failure this is designed against, so the two halves must not come apart.
+-- Functions survive the copy on purpose: a shipped build gated by a `custom` condition keeps
+-- working when forked. Export is where `custom` gets dropped, and Schema.exportable owns that rule.
+function UserBuilds.fork(pack, templateKey, opts)
+  opts = opts or {}
+  local s = store()
+  if not s then return nil, "no saved variables" end
+  local source = pack and pack.builds and pack.builds[templateKey]
+  if not source then return nil, "unknown template " .. tostring(templateKey) end
+
+  local name = opts.name or ((source.name or templateKey) .. " (mine)")
+  local key = uniqueKey(s, UserBuilds.slug(name))
+  local build = deepCopy(source)
+  build.key, build.name = key, name
+  s[key] = {
+    build = build, class = pack.class, name = name,
+    -- ADR-0010: provenance is the whole point of a fork over a copy. `derivedAt` records WHICH
+    -- version of the parent this came from, so a later release can be noticed and offered as a diff.
+    derivedFrom = templateKey, derivedAt = catalogUpdated(pack, templateKey),
+    importedAt = opts.today,
+  }
+  return key
+end
+
+-- The two edits the Builder's list makes. Both refuse anything that is not one of the user's own
+-- rotations: a template is read-only (ADR-0005, hard rule 7), and the panel must not be the one
+-- place that can quietly write to one.
+-- Through `find`, which is the one lookup that knows a fork belongs to a CLASS. db.global is shared
+-- across every character on the account, so without that check these would happily reorder a
+-- paladin's rotation from a mage. Templates are refused as a consequence: `find` reports them as
+-- origin "pack", and a template is read-only (ADR-0005, hard rule 7).
+local function entriesOf(pack, key)
+  local build, origin = UserBuilds.find(pack, key)
+  if origin ~= "fork" then return nil, "not one of your rotations" end
+  if not (build and build.entries) then return nil, "that rotation has no lines" end
+  return build.entries, nil
+end
+
+-- UserBuilds.moveEntry(pack, key, index, delta) -> true | false, reason
+-- Priority order IS the rotation (F1: the first passing entry is the suggestion), so moving a row
+-- is the single most consequential edit the Builder offers.
+function UserBuilds.moveEntry(pack, key, index, delta)
+  local entries, err = entriesOf(pack, key)
+  if not entries then return false, err end
+  local to = (tonumber(index) or 0) + (tonumber(delta) or 0)
+  if not entries[index] or not entries[to] then return false, "out of range" end
+  entries[index], entries[to] = entries[to], entries[index]
+  return true
+end
+
+-- UserBuilds.setEntryDisabled(pack, key, index, disabled) -> true | false, reason
+-- Cleared to nil rather than stored as false: `Schema.compile` and `Schema.exportable` both test
+-- truthiness, and an exported build carrying `disabled = false` on every line is noise that would
+-- travel to whoever imports it.
+function UserBuilds.setEntryDisabled(pack, key, index, disabled)
+  local entries, err = entriesOf(pack, key)
+  if not entries then return false, err end
+  if not entries[index] then return false, "out of range" end
+  entries[index].disabled = disabled and true or nil
+  return true
+end
+
 -- UserBuilds.exportKey(pack, key) -> string | nil, reason
 function UserBuilds.exportKey(pack, key)
   local build = UserBuilds.find(pack, key)

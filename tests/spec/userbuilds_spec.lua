@@ -29,6 +29,234 @@ describe("Core.UserBuilds", function()
 
   local function exodinString() return Serialize.encode(pack.builds.PALADIN_EXODIN) end
 
+  -- ADR-0015 §2: Customize forks the template AND activates the fork in the same click. These test
+  -- the forking half; Options/Rotation.customize wires the two together.
+  describe("fork()", function()
+    it("copies a shipped template into the user's own rotations", function()
+      local key = UserBuilds.fork(pack, "PALADIN_EXODIN", {})
+      assert.is_truthy(key)
+      assert.is_true(UserBuilds.isForkKey(key))
+      local build, origin = UserBuilds.find(pack, key)
+      assert.equal("fork", origin)
+      assert.equal(#pack.builds.PALADIN_EXODIN.entries, #build.entries)
+    end)
+
+    -- ADR-0010: provenance is the whole point of a fork over a copy, and `derivedAt` is what lets a
+    -- later release of the parent be noticed instead of silently diverging.
+    it("records which template it came from, and which version of it", function()
+      local key = UserBuilds.fork(pack, "PALADIN_EXODIN", { today = "2026-09-05" })
+      local _, _, fork = UserBuilds.find(pack, key)
+      assert.equal("PALADIN_EXODIN", fork.derivedFrom)
+      assert.equal(UserBuilds.catalogUpdated(pack, "PALADIN_EXODIN"), fork.derivedAt)
+      assert.equal("2026-09-05", fork.importedAt)
+      assert.equal(pack.class, fork.class)
+    end)
+
+    -- The defect this guards is invisible and account-wide: Classes/<Class>.lua is one shared table
+    -- per session, so a fork holding a reference into it would edit the SHIPPED template for every
+    -- character, and the edit would vanish on reload with no sign it was ever made.
+    it("deep-copies, so editing the fork cannot touch the shipped template", function()
+      local key = UserBuilds.fork(pack, "PALADIN_EXODIN", {})
+      local build = UserBuilds.find(pack, key)
+      local template = pack.builds.PALADIN_EXODIN
+      assert.is_not.equal(template, build)
+      assert.is_not.equal(template.entries, build.entries)
+      assert.is_not.equal(template.entries[1], build.entries[1])
+      build.entries[1].spell = "MUTATED"
+      build.entries[1].disabled = true
+      assert.is_not.equal("MUTATED", template.entries[1].spell)
+      assert.is_nil(template.entries[1].disabled)
+      -- Nested `when` lists too: a shared condition table is the same defect one level down.
+      for i, entry in ipairs(template.entries) do
+        if entry.when then assert.is_not.equal(entry.when, build.entries[i].when) end
+      end
+    end)
+
+    -- A hand-written or imported build could contain a cycle. A stack overflow at login is a worse
+    -- bug than anything the copy is guarding against.
+    it("copes with a build that refers to itself", function()
+      local loop = { key = "PALADIN_LOOP", entries = { { spell = "EXORCISM" } } }
+      loop.self = loop
+      loop.entries[1].parent = loop.entries
+      pack.builds.PALADIN_LOOP = loop
+      local key = UserBuilds.fork(pack, "PALADIN_LOOP", {})
+      assert.is_truthy(key)
+      local build = UserBuilds.find(pack, key)
+      -- The cycle is preserved as a cycle, pointing at the COPY, never back at the shipped table.
+      assert.equal(build, build.self)
+      assert.is_not.equal(loop, build.self)
+      assert.equal(build.entries, build.entries[1].parent)
+      pack.builds.PALADIN_LOOP = nil
+    end)
+
+    it("names the fork after the template, and takes a name when given one", function()
+      local key = UserBuilds.fork(pack, "PALADIN_EXODIN", {})
+      local _, _, fork = UserBuilds.find(pack, key)
+      assert.is_truthy(fork.name:find("(mine)", 1, true))
+      local named = UserBuilds.fork(pack, "PALADIN_EXODIN", { name = "Raid night" })
+      assert.equal("USER_RAID_NIGHT", named)
+      assert.equal("Raid night", select(3, UserBuilds.find(pack, named)).name)
+    end)
+
+    it("gives a second fork of the same template its own key", function()
+      local a = UserBuilds.fork(pack, "PALADIN_EXODIN", {})
+      local b = UserBuilds.fork(pack, "PALADIN_EXODIN", {})
+      assert.is_not.equal(a, b)
+      assert.equal(2, #UserBuilds.list(pack))
+    end)
+
+    it("carries the fork's own key and name into the build itself", function()
+      local key = UserBuilds.fork(pack, "PALADIN_EXODIN", {})
+      local build = UserBuilds.find(pack, key)
+      assert.equal(key, build.key)
+      assert.is_truthy(build.name:find("(mine)", 1, true))
+    end)
+
+    it("refuses a template the pack does not ship, and says so", function()
+      local key, err = UserBuilds.fork(pack, "PALADIN_NOPE", {})
+      assert.is_nil(key)
+      assert.is_truthy(err:find("PALADIN_NOPE", 1, true))
+      assert.equal(0, #UserBuilds.list(pack))
+    end)
+
+    -- A fork of a fork would have the wrong provenance: `derivedFrom` must name a TEMPLATE.
+    it("refuses to fork one of the user's own rotations", function()
+      local key = UserBuilds.fork(pack, "PALADIN_EXODIN", {})
+      assert.is_nil(UserBuilds.fork(pack, key, {}))
+    end)
+
+    it("answers rather than erroring with no saved variables", function()
+      ns.db = nil
+      assert.is_nil(UserBuilds.fork(pack, "PALADIN_EXODIN", {}))
+      ns.db = db
+    end)
+
+    it("works when handed no options", function()
+      assert.is_truthy(UserBuilds.fork(pack, "PALADIN_EXODIN"))
+    end)
+  end)
+
+  -- Priority order IS the rotation (F1: the first passing entry is the suggestion), so these are the
+  -- most consequential edits the Builder offers.
+  describe("moveEntry() and setEntryDisabled()", function()
+    local key
+    before_each(function() key = UserBuilds.fork(pack, "PALADIN_EXODIN", {}) end)
+
+    -- `e.spell or item:N`, never `e.spell` alone: an entry that binds to an inventory slot has no
+    -- spell, and appending nil silently shortens the list -- which made this helper disagree with
+    -- the real entry count and the off-the-end assertions pass for the wrong reason.
+    local function spellsOf()
+      local out = {}
+      for _, e in ipairs(UserBuilds.find(pack, key).entries) do
+        out[#out + 1] = e.spell or ("item:" .. tostring(e.item))
+      end
+      return out
+    end
+
+    it("swaps a line with the one above it", function()
+      local before = spellsOf()
+      assert.is_true(UserBuilds.moveEntry(pack, key, 2, -1))
+      local after = spellsOf()
+      assert.equal(before[2], after[1])
+      assert.equal(before[1], after[2])
+      assert.equal(#before, #after)
+    end)
+
+    it("swaps a line with the one below it", function()
+      local before = spellsOf()
+      assert.is_true(UserBuilds.moveEntry(pack, key, 1, 1))
+      assert.equal(before[1], spellsOf()[2])
+    end)
+
+    it("refuses to move off either end rather than dropping the line", function()
+      local before = spellsOf()
+      assert.is_false(UserBuilds.moveEntry(pack, key, 1, -1))
+      assert.is_false(UserBuilds.moveEntry(pack, key, #before, 1))
+      assert.is_false(UserBuilds.moveEntry(pack, key, 0, 1))
+      assert.is_false(UserBuilds.moveEntry(pack, key, #before + 1, -1))
+      assert.same(before, spellsOf())
+    end)
+
+    -- A template is read-only (ADR-0005, hard rule 7). The Builder must not be the one place that
+    -- can quietly write to one.
+    it("refuses to edit a shipped template, and says why", function()
+      local ok, why = UserBuilds.moveEntry(pack, "PALADIN_EXODIN", 1, 1)
+      assert.is_false(ok)
+      assert.equal("not one of your rotations", why)
+      ok, why = UserBuilds.setEntryDisabled(pack, "PALADIN_EXODIN", 1, true)
+      assert.is_false(ok)
+      assert.equal("not one of your rotations", why)
+      assert.is_false(UserBuilds.moveEntry(pack, "USER_NOT_A_THING", 1, 1))
+      -- The template itself is untouched, which is the point (ADR-0005, hard rule 7).
+      assert.is_nil(pack.builds.PALADIN_EXODIN.entries[1].disabled)
+    end)
+
+    -- Structural, not incidental: a template key is refused because it is not a USER_ key, rather
+    -- than because templates happen not to live in db.global.userBuilds.
+    -- db.global is shared across every character on the account, so the class check is what stops
+    -- a mage reordering a paladin's rotation. The key prefix alone cannot tell them apart.
+    it("refuses a fork belonging to another class", function()
+      db.global.userBuilds.USER_MAGE_THING =
+        { build = { entries = { { spell = "FIREBALL" } } }, class = "MAGE", name = "Mage" }
+      local ok, why = UserBuilds.moveEntry(pack, "USER_MAGE_THING", 1, 1)
+      assert.is_false(ok)
+      assert.equal("not one of your rotations", why)
+      assert.is_false(UserBuilds.setEntryDisabled(pack, "USER_MAGE_THING", 1, true))
+    end)
+
+    it("refuses any key that is not one of the user's own", function()
+      assert.is_false(UserBuilds.moveEntry(pack, "PALADIN_EXODIN", 1, 1))
+      assert.is_false(UserBuilds.moveEntry(pack, nil, 1, 1))
+      assert.is_false(UserBuilds.moveEntry(pack, 42, 1, 1))
+      assert.is_false(UserBuilds.setEntryDisabled(pack, "NOT_PREFIXED", 1, true))
+    end)
+
+    -- A fork whose build survived import with no entries -- possible for a hand-edited or truncated
+    -- string. It is still YOURS, so the refusal has to say something different from "not one of
+    -- your rotations", or the panel would tell you a rotation you are looking at is not yours.
+    it("distinguishes an empty rotation from one that is not yours", function()
+      db.global.userBuilds.USER_EMPTY = { build = { key = "USER_EMPTY" }, class = pack.class,
+                                          name = "Empty" }
+      local ok, why = UserBuilds.moveEntry(pack, "USER_EMPTY", 1, 1)
+      assert.is_false(ok)
+      assert.equal("that rotation has no lines", why)
+      assert.is_false(UserBuilds.setEntryDisabled(pack, "USER_EMPTY", 1, true))
+    end)
+
+    it("says why when a line is out of range", function()
+      local ok, why = UserBuilds.moveEntry(pack, key, 1, -1)
+      assert.is_false(ok)
+      assert.equal("out of range", why)
+      ok, why = UserBuilds.setEntryDisabled(pack, key, 99, true)
+      assert.is_false(ok)
+      assert.equal("out of range", why)
+    end)
+
+    it("turns a line off and on again", function()
+      assert.is_true(UserBuilds.setEntryDisabled(pack, key, 1, true))
+      assert.is_true(UserBuilds.find(pack, key).entries[1].disabled)
+      assert.is_true(UserBuilds.setEntryDisabled(pack, key, 1, false))
+      -- nil, not false: Schema.compile and Schema.exportable both test truthiness, and an exported
+      -- build carrying `disabled = false` on every line is noise that travels to whoever imports it.
+      assert.is_nil(UserBuilds.find(pack, key).entries[1].disabled)
+    end)
+
+    it("refuses a line that is not there", function()
+      assert.is_false(UserBuilds.setEntryDisabled(pack, key, 99, true))
+    end)
+
+    -- The point of the checkbox: a disabled line must actually leave the rotation.
+    it("a disabled line is skipped when the build compiles", function()
+      local build = UserBuilds.find(pack, key)
+      local before = #ns.Schema.compile(build, { spells = pack.spells, sets = pack.sets,
+        souls = pack.souls, bonuses = pack.bonuses }).entries
+      UserBuilds.setEntryDisabled(pack, key, 1, true)
+      local after = #ns.Schema.compile(build, { spells = pack.spells, sets = pack.sets,
+        souls = pack.souls, bonuses = pack.bonuses }).entries
+      assert.equal(before - 1, after)
+    end)
+  end)
+
   describe("slug()", function()
     it("namespaces, upper-cases, and collapses punctuation", function()
       assert.equal("USER_MY_EXODIN_V2", UserBuilds.slug("My exodin (v2)"))

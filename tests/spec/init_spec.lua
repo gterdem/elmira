@@ -432,6 +432,31 @@ describe("Core.Init", function()
       assert.equal(1, looks)
     end)
 
+    -- The adapter caches the spellbook, which is what answers "have you learned this" rank-free.
+    -- SPELLS_CHANGED fires when a RANK is learned -- the case the cache exists for -- so a stale
+    -- book would keep reporting the ability you just trained as not learned, in the palette and in
+    -- every gated row at once.
+    it("drops the adapter's cached spellbook when spells change", function()
+      withAnnounce()
+      local forgotten = 0
+      ns.Adapter = ns.Adapter or {}
+      ns.Adapter.forgetSpellbook = function() forgotten = forgotten + 1; return true end
+      NA.ScheduleTimer = function(_, fn) return "t" end
+      NA.CancelTimer = function() end
+      NA:OnInitialize()
+      NA:OnGearOrCharacterChanged()
+      assert.equal(1, forgotten)
+    end)
+
+    it("copes with an adapter that cannot forget its spellbook", function()
+      withAnnounce()
+      ns.Adapter = { }
+      NA.ScheduleTimer = function(_, fn) return "t" end
+      NA.CancelTimer = function() end
+      NA:OnInitialize()
+      NA:OnGearOrCharacterChanged()
+    end)
+
     -- Combat is the worst moment to be left with a mouse-enabled frame across screen centre.
     it("leaves move mode when a fight starts", function()
       withAnnounce()

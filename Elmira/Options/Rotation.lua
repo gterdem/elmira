@@ -153,6 +153,26 @@ end
 -- One row per template. ASCII marks, never glyphs: the client's font has no U+25CF/U+2714 and draws
 -- every one of them as the same empty box, which is how the Action Bars panel first shipped a column
 -- of identical squares (Options.lua's barRows carries the same note).
+-- Customize: fork the template AND activate the fork, in one click (ADR-0015 §2). The two halves
+-- must not come apart -- Hekili's copy-then-forget, where the copy has to be separately activated
+-- and people carry on playing the original, is the failure this is designed against.
+function Rotation.customize(templateKey)
+  local p = pack()
+  if not (ns.UserBuilds and ns.UserBuilds.fork) then return false, "builds module is not loaded" end
+  local key, err = ns.UserBuilds.fork(p, templateKey, {
+    today = ns.Adapter and ns.Adapter.today and ns.Adapter.today() or nil,
+  })
+  if not key then return false, err end
+  -- If activation fails the fork still exists, and saying so is better than a click that appears
+  -- to do nothing: the copy is on the Rotations tab either way.
+  if ns.Wizard and ns.Wizard.apply then
+    local ok, applyErr = ns.Wizard.apply(key)
+    if not ok then return false, applyErr end
+  end
+  if ns.Display and ns.Display.refresh then ns.Display.refresh() end
+  return true, key
+end
+
 local function templateArgs()
   local rows = Rotation.templateRows()
   if #rows == 0 then
@@ -167,10 +187,21 @@ local function templateArgs()
     if row.updated then tags[#tags + 1] = tostring(row.updated) end
     if row.experimental then tags[#tags + 1] = L["experimental"] end
     if not row.fits then tags[#tags + 1] = L["needs gear or runes you do not have"] end
+    local build = row.build
     args["t" .. i] = {
-      type = "description", order = i, width = "full",
-      name = string.format("%s |cffFFFFFF%s|r  |cff9AA0A6%s|r", mark, row.playstyle,
-                           table.concat(tags, " · ")),
+      type = "group", inline = true, order = i, name = "",
+      args = {
+        what = {
+          type = "description", order = 1, width = 1.7,
+          name = string.format("%s |cffFFFFFF%s|r  |cff9AA0A6%s|r", mark, row.playstyle,
+                               table.concat(tags, " · ")),
+        },
+        customize = {
+          type = "execute", order = 2, width = 0.7, name = L["Customize"],
+          desc = L["Makes your own editable copy of this template and switches to it."],
+          func = function() Rotation.customize(build) end,
+        },
+      },
     }
   end
   return args
@@ -345,20 +376,116 @@ local function itemPaletteArgs()
   return args
 end
 
+-- ---------------------------------------------------------------- Builder tab: the rotation list
+
+-- The rows of the rotation you are editing, in priority order -- which IS the rotation: the first
+-- entry that passes is the suggestion (F1), so the order is the thing being edited, not decoration.
+--
+-- Returns rows plus the key they came from and whether they can be edited. A template is read-only
+-- (ADR-0005, hard rule 7), so its rows render without arrows and with the Customize banner instead.
+function Rotation.listRows()
+  local key = activeKey()
+  local p = pack()
+  local build, origin = findBuild(p, key)
+  if not (build and build.entries) then return {}, key, false end
+  local rows = {}
+  for i, entry in ipairs(build.entries) do
+    rows[#rows + 1] = {
+      index = i,
+      spell = entry.spell,
+      item = entry.item,
+      label = entry.spell and Rotation.spellLabel(entry.spell)
+        or (entry.item and (L[SLOT_LABELS[entry.item] or ("Slot " .. entry.item)])) or "?",
+      note = entry.label,
+      disabled = entry.disabled and true or false,
+      first = i == 1,
+      last = i == #build.entries,
+    }
+  end
+  return rows, key, origin == "fork"
+end
+
+-- One line saying what an entry waits for. The compiled condition labels are the authority --
+-- Schema already builds one per top-level condition for the hover-why -- but the STORED build is
+-- what the list shows, so this reads the raw `when` and says how many gates there are rather than
+-- inventing a second description language that would drift from Schema's.
+function Rotation.conditionSummary(entry)
+  local n = #((entry and entry.when) or {})
+  if n == 0 then return L["always"] end
+  if n == 1 then return L["1 condition"] end
+  return string.format(L["%d conditions"], n)
+end
+
+local function refresh()
+  if ns.Display and ns.Display.refresh then ns.Display.refresh() end
+end
+
+local function listArgs()
+  local rows, key, editable = Rotation.listRows()
+  if #rows == 0 then
+    return { none = { type = "description", order = 1, width = "full",
+                      name = L["This rotation has no lines yet."] } }
+  end
+
+  local p = pack()
+  local build = findBuild(p, key)
+  local args = {}
+  for _, row in ipairs(rows) do
+    local i = row.index
+    local group = { type = "group", inline = true, order = i, name = "", args = {} }
+    local icon = row.spell and ns.Display and ns.Display.spellIcon
+      and ns.Display.spellIcon(row.spell)
+    local prefix = icon and ("|T" .. tostring(icon) .. ":0|t ") or ""
+    local colour = row.disabled and "|cff9AA0A6" or "|cffFFFFFF"
+
+    group.args.what = {
+      type = "description", order = 1, width = 1.6,
+      name = string.format("%s%s%s|r  |cff9AA0A6%s|r", prefix, colour, row.label,
+                           row.note or Rotation.conditionSummary(build and build.entries[i])),
+    }
+    -- Enable, arrows: only on a fork. On a template they are absent rather than present-and-dead,
+    -- because a control that silently does nothing is worse than one that is not offered.
+    if editable then
+      group.args.on = {
+        type = "toggle", order = 2, width = 0.5, name = L["On"],
+        get = function() return not row.disabled end,
+        set = function(_, v)
+          ns.UserBuilds.setEntryDisabled(pack(), key, i, not v)
+          refresh()
+        end,
+      }
+      group.args.up = {
+        type = "execute", order = 3, width = 0.35, name = L["Up"], disabled = row.first,
+        func = function() ns.UserBuilds.moveEntry(pack(), key, i, -1); refresh() end,
+      }
+      group.args.down = {
+        type = "execute", order = 4, width = 0.35, name = L["Down"], disabled = row.last,
+        func = function() ns.UserBuilds.moveEntry(pack(), key, i, 1); refresh() end,
+      }
+    end
+    args["r" .. i] = group
+  end
+  return args
+end
+
 local function builderArgs()
+  local _, _, editable = Rotation.listRows()
   return {
     intro = {
       type = "description", order = 1, width = "full", fontSize = "medium",
-      name = L["What your rotation can use. Putting these in an order is the next step."],
+      name = editable
+        and L["Your rotation, top to bottom: the first line that can fire is the one suggested."]
+        or L["This is a template, so it cannot be edited. Customize it on the Rotations tab to get a copy that can."],
     },
+    list = { type = "group", inline = true, order = 2, name = L["Rotation"], args = listArgs() },
     search = {
-      type = "input", order = 2, width = "full", name = L["Search"],
+      type = "input", order = 5, width = "full", name = L["Search"],
       get = function() return Rotation.search() end,
       set = function(_, v) Rotation.setSearch(v) end,
     },
-    spells = { type = "group", inline = true, order = 3, name = L["Spells"],
+    spells = { type = "group", inline = true, order = 6, name = L["Spells"],
                args = spellPaletteArgs() },
-    items = { type = "group", inline = true, order = 4, name = L["Items"],
+    items = { type = "group", inline = true, order = 7, name = L["Items"],
               args = itemPaletteArgs() },
   }
 end

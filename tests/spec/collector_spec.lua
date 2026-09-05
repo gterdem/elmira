@@ -9,11 +9,11 @@ local helper = require("tests.helper")
 local mock = require("tests.wow_mock")
 
 describe("Adapters.Collector (docs/01 §4a)", function()
-  local Collector
+  local Collector, ns
 
   before_each(function()
     mock.reset()
-    helper.reset()
+    ns = helper.reset()
     Collector = helper.load("Elmira/Adapters/Collector.lua")
   end)
 
@@ -32,6 +32,18 @@ describe("Adapters.Collector (docs/01 §4a)", function()
       local readings = Collector.readSpells(spells)
       assert.is_false(readings.EXORCISM.known,
         "known must be false for an unlearned spell; nil makes the NOT KNOWN branch unreachable")
+    end)
+
+    -- The dump a player sends must say what the ADDON believes. It asked IsPlayerSpell directly
+    -- while the addon resolved ranks through the spellbook, so a dump taken to diagnose "why is
+    -- this greyed" would have reported the greying as correct.
+    it("asks the adapter, so the dump agrees with what the addon uses", function()
+      local asked = {}
+      ns.Adapter = { knownById = function(id) asked[#asked + 1] = id; return true end }
+      local readings = Collector.readSpells({ EXORCISM = { id = 415073 } })
+      assert.same({ 415073 }, asked)
+      assert.is_true(readings.EXORCISM.known)
+      ns.Adapter = nil
     end)
 
     it("renders that as NOT KNOWN", function()

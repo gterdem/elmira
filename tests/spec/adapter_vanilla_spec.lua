@@ -457,6 +457,180 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.is_false(state:known("EXORCISM"))
     end)
 
+    -- RANKS. Classic gives every rank its own spell id and the pack ships one -- the max rank. A
+    -- paladin with Exorcism at rank 5 has a different id from the pack's 415073, so IsPlayerSpell
+    -- says no and the Builder greyed abilities the player had, as "not learned yet". Reported from
+    -- a live client 2026-09-05. Display/BarGlow.lua had already learned this: names have no rank.
+    --
+    -- `knownSpells[id] = false` rather than nil is the mock's way of saying "a real spell you do
+    -- not have": GetSpellInfo still resolves its NAME, exactly as the client does, while
+    -- IsPlayerSpell answers false.
+    local function withBook(book)
+      mock.knownSpells = { [415073] = false }
+      mock.spellNames = { [415073] = "Exorcism" }
+      -- Answers ONLY for the right booktype. A stub that ignores its arguments cannot tell
+      -- `"spell"` from `"pet"`, and the booktype is the one value in this fix that decides whether
+      -- the whole spellbook fallback reads anything at all.
+      _G.GetSpellBookItemName = function(i, booktype)
+        if booktype ~= "spell" then return nil end
+        return book[i]
+      end
+      Vanilla.forgetSpellbook()
+      return Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+    end
+
+    after_each(function()
+      _G.GetSpellBookItemName, _G.GetSpellBookItemInfo = nil, nil
+      Vanilla.forgetSpellbook()
+    end)
+
+    it("finds a lower rank through the spellbook when the id is the max rank", function()
+      assert.is_true(withBook({ "Exorcism", "Holy Wrath" }):known("EXORCISM"))
+    end)
+
+    it("still says no for a spell that is in neither", function()
+      assert.is_false(withBook({ "Holy Wrath" }):known("EXORCISM"))
+    end)
+
+    -- An empty read is the client refusing to answer, not an empty spellbook: reporting false there
+    -- would grey every row in the build at once.
+    it("answers nil when the spellbook cannot be read at all", function()
+      local realIs = _G.IsPlayerSpell
+      _G.IsPlayerSpell = nil
+      local state = withBook({})
+      assert.is_nil(state:known("EXORCISM"))
+      _G.IsPlayerSpell = realIs
+    end)
+
+    it("answers from the id alone on a client with no spellbook API", function()
+      mock.knownSpells = { [415073] = true }
+      _G.GetSpellBookItemName = nil
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_true(state:known("EXORCISM"))
+      mock.knownSpells = { [415073] = false }
+      assert.is_false(state:known("EXORCISM"))
+    end)
+
+    -- Both sources silent: "cannot tell", never "you have learned nothing", which would grey the
+    -- whole palette and every gated row at once.
+    it("answers nil when neither the id nor the spellbook can be read", function()
+      local realIs = _G.IsPlayerSpell
+      mock.knownSpells = { [415073] = false }
+      _G.IsPlayerSpell, _G.GetSpellBookItemName = nil, nil
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_nil(state:known("EXORCISM"))
+      _G.IsPlayerSpell = realIs
+    end)
+
+    it("answers nil when the spellbook reads but the id cannot be named", function()
+      local realIs, realInfo = _G.IsPlayerSpell, _G.GetSpellInfo
+      mock.knownSpells = { [415073] = false }
+      _G.IsPlayerSpell = nil
+      _G.GetSpellBookItemName = function(i) return ({ "Holy Wrath" })[i] end
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      _G.GetSpellInfo = nil
+      assert.is_nil(state:known("EXORCISM"), "no way to name the id, so no way to search the book")
+      _G.GetSpellInfo = function() return nil end
+      assert.is_nil(state:known("EXORCISM"))
+      _G.IsPlayerSpell, _G.GetSpellInfo = realIs, realInfo
+    end)
+
+    it("says no once the id has answered, even if it cannot be named", function()
+      local realInfo = _G.GetSpellInfo
+      mock.knownSpells = { [415073] = false }
+      _G.GetSpellBookItemName = function(i) return ({ "Holy Wrath" })[i] end
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      _G.GetSpellInfo = nil
+      assert.is_false(state:known("EXORCISM"))
+      _G.GetSpellInfo = realInfo
+    end)
+
+    -- A client that answered a name for every index would hang the login without a bound.
+    it("stops reading a spellbook that never ends", function()
+      mock.knownSpells = { [415073] = false }
+      mock.spellNames = { [415073] = "Exorcism" }
+      local reads = 0
+      _G.GetSpellBookItemName = function() reads = reads + 1; return "Endless" end
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_false(state:known("EXORCISM"))
+      assert.is_true(reads <= 1024, "the scan did not stop: " .. reads .. " reads")
+    end)
+
+    -- A scan that DIED partway is not the whole spellbook. Caching a truncated read would report
+    -- every spell past the failure as unlearned until the next SPELLS_CHANGED or a /reload.
+    it("never caches a spellbook read that failed partway through", function()
+      mock.knownSpells = { [415073] = false }
+      mock.spellNames = { [415073] = "Exorcism" }
+      local calls = 0
+      _G.GetSpellBookItemName = function(i, booktype)
+        if booktype ~= "spell" then return nil end
+        calls = calls + 1
+        if i == 1 then return "Holy Wrath" end
+        error("the client gave up")
+      end
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_false(state:known("EXORCISM"))
+      local afterFirst = calls
+      -- Asked again, it re-reads rather than trusting the truncated set it built.
+      state:known("EXORCISM")
+      assert.is_true(calls > afterFirst, "the partial read was cached")
+    end)
+
+    -- A rank the trainer will sell you is listed but not learnable. Counting it as known ungreys
+    -- an ability you cannot cast -- the opposite failure to the one being fixed.
+    it("does not count a spell that is listed but not learnable yet", function()
+      mock.knownSpells = { [415073] = false }
+      mock.spellNames = { [415073] = "Exorcism" }
+      _G.GetSpellBookItemName = function(i, booktype)
+        if booktype ~= "spell" then return nil end
+        return ({ "Exorcism" })[i]
+      end
+      _G.GetSpellBookItemInfo = function(i, booktype)
+        if booktype ~= "spell" then return nil end
+        return "FUTURESPELL"
+      end
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_false(state:known("EXORCISM"))
+      _G.GetSpellBookItemInfo = nil
+      Vanilla.forgetSpellbook()
+      assert.is_true(state:known("EXORCISM"), "without the filter it is simply known")
+    end)
+
+    -- One answer to "do you know this", so the state contract, the requirement checks and the
+    -- /elm debug dump cannot disagree. They did, and only the first had been fixed.
+    it("answers the same for knownSpells() as for known()", function()
+      mock.knownSpells = { [415073] = false }
+      mock.spellNames = { [415073] = "Exorcism" }
+      _G.GetSpellBookItemName = function(i, booktype)
+        if booktype ~= "spell" then return nil end
+        return ({ "Exorcism" })[i]
+      end
+      Vanilla.forgetSpellbook()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_true(state:known("EXORCISM"))
+      assert.is_true(Vanilla.knownSpells({ EXORCISM = { id = 415073 } }).EXORCISM)
+    end)
+
+    -- The scan is cached, so learning a rank must drop it or the palette keeps saying "not learned"
+    -- about the ability you just trained.
+    it("forgets the spellbook on request, and re-reads it", function()
+      -- Starts with a readable book, because a read that returned NOTHING is not cached: that is
+      -- "the client would not answer", and caching it would make one bad moment permanent.
+      local state = withBook({ "Holy Wrath" })
+      assert.is_false(state:known("EXORCISM"))
+      _G.GetSpellBookItemName = function(i) return ({ "Holy Wrath", "Exorcism" })[i] end
+      assert.is_false(state:known("EXORCISM"), "the cache should still be in force")
+      assert.is_true(Vanilla.forgetSpellbook())
+      assert.is_true(state:known("EXORCISM"))
+    end)
+
     -- nil, not false: Gates dims a row on false, and "this client will not answer" must not dim
     -- every row in the build.
     it("answers nil for a key the pack does not have", function()

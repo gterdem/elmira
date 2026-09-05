@@ -186,7 +186,13 @@ function Collector.readSpells(spells)
       -- collapses "not known" into "unknown" and the NOT KNOWN branch of formatSpells becomes
       -- unreachable — an unlearned spell dumps as though it were known. Explicit branch instead.
       local reading = {}
-      if IsPlayerSpell then reading.known = IsPlayerSpell(id) == true end
+      -- Through the adapter's shared reader, not IsPlayerSpell directly: the dump a player sends
+      -- you must say what the ADDON believes, and the addon resolves ranks through the spellbook.
+      if ns.Adapter and ns.Adapter.knownById then
+        reading.known = ns.Adapter.knownById(id)
+      elseif IsPlayerSpell then
+        reading.known = IsPlayerSpell(id) == true
+      end
       if GetSpellCooldown then
         local _, duration = GetSpellCooldown(id)
         if duration and duration > GCD_CEILING then reading.cooldown = duration end

@@ -1,5 +1,18 @@
 # Changelog
 ## Unreleased
+- **Fixed: abilities you had learned were shown as "not learned yet".** Classic gives every rank of
+  a spell its own id and Elmira's data records one of them, so asking the game about that exact id
+  answered "no" for anyone holding a different rank — Exorcism and Holy Wrath both showed greyed for
+  a paladin who had them. It now asks your spellbook by name as well, which has no ranks. This
+  affected more than the display: rotation lines using those abilities were being reported as
+  unavailable, so `/elm debug gates` listed lines that were in fact perfectly able to fire.
+- **New: the Builder lists your rotation, and you can reorder it.** Every line in priority order
+  with its icon and what it waits for, and on a rotation of your own each line has an on/off switch
+  and arrows to move it. The order is the rotation: the first line that can fire is the one you are
+  told to press. Templates show the same list, read-only.
+- **New: Customize.** On the Rotations tab, Customize makes your own editable copy of a template
+  **and switches to it in one click**, so you are never left editing a copy while still playing the
+  original. The copy remembers which template it came from and which version of it.
 - **New: a Rotation section, and `/elm rotation` to open it.** It is now the first thing in the
   settings window: what you are running, the templates that ship for your class, and your own
   rotations listed separately. If you are running one of your own, it says which template it came

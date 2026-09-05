@@ -233,6 +233,40 @@ describe("Setup.Wizard", function()
       assert.equal(3, ns.db.char.setupDone)
     end)
 
+    -- ADR-0015 §2's Customize forks a template and activates the fork in the same click. This
+    -- validated against `p.builds` -- the SHIPPED builds only -- so it refused every USER_ key and
+    -- the second half of that click failed silently. Display/Driver.lua had always resolved a
+    -- pinned key through UserBuilds.find; this is the same lookup, in the one place that lacked it.
+    it("pins one of the user's own rotations, not just a shipped template", function()
+      install(packWith({ { build = "PALADIN_EXODIN", available = true } }, { catalogVersion = 3 }))
+      ns.UserBuilds = { find = function(_, key)
+        return key == "USER_MINE" and { key = "USER_MINE", entries = {} } or nil
+      end }
+      assert.is_true(Wizard.apply("USER_MINE"))
+      assert.equal("USER_MINE", ns.db.profile.activeBuild)
+    end)
+
+    it("still refuses a key that is neither a template nor one of your rotations", function()
+      install(packWith{ { build = "PALADIN_EXODIN", available = true } })
+      ns.UserBuilds = { find = function() return nil end }
+      local ok, why = Wizard.apply("USER_GHOST")
+      assert.is_false(ok)
+      assert.truthy(why:find("unknown build", 1, true))
+      assert.is_false(ns.db.profile.activeBuild)
+    end)
+
+    -- UserBuilds.find skips its class check when handed a nil pack, so without a guard a class
+    -- with no data pack would pin a paladin's fork.
+    it("refuses everything when the class has no data pack", function()
+      install(packWith{ { build = "PALADIN_EXODIN", available = true } })
+      ns.Display = { currentPack = function() return nil end }
+      ns.UserBuilds = { find = function() return { key = "USER_MINE" } end }
+      local ok, why = Wizard.apply("USER_MINE")
+      assert.is_false(ok)
+      assert.truthy(why:find("unknown build", 1, true))
+      assert.is_false(ns.db.profile.activeBuild)
+    end)
+
     it("refuses a build that is not in the pack rather than writing a dead key", function()
       install(packWith{ { build = "PALADIN_EXODIN", available = true } })
       local ok, why = Wizard.apply("PALADIN_NONSENSE")

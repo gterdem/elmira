@@ -153,8 +153,8 @@ function Vanilla.knownSpells(spells)
       -- A failed call leaves the key ABSENT, not false. Folding it to false would say "you do not
       -- know this" on the strength of a call that did not answer — the same conflation this whole
       -- record exists to avoid, just at per-key granularity instead of per-table.
-      local ok, known = pcall(IsPlayerSpell, id)
-      if ok then out[key] = known == true end
+      local answer = Vanilla.knownById(id)
+      if answer ~= nil then out[key] = answer end
     end
   end
   return out
@@ -233,6 +233,95 @@ end
 
 -- Builds a fresh State over a data pack. Returning a new table rather than mutating a singleton
 -- keeps specs independent and means a profile/class switch cannot leave stale cached ids behind.
+-- The spell NAMES in the player's spellbook, rank-free, cached until something changes them.
+--
+-- Cached because `S:known` is asked once per palette row and once per gated entry, and the scan
+-- walks the whole book. Invalidated from Core/Init on SPELLS_CHANGED, which is already watched --
+-- and which fires when a RANK is learned, the case this exists for.
+local spellbookCache = nil -- mutants: equivalent deletion only makes it a global
+
+-- The booktype the scan asks for. Named rather than inlined because it is the one value in this
+-- fix that no headless test can prove: a wrong constant reads an empty book, `known` falls back to
+-- the id alone, and the rank defect returns silently. Verified in-client before shipping.
+local BOOKTYPE = "spell"
+
+-- A spell listed but not yet learnable (a higher rank the trainer will sell you) must not count as
+-- known, or the palette ungreys abilities you cannot cast. Guarded: on a client with no
+-- GetSpellBookItemInfo the filter is simply absent, which is the behaviour before this existed.
+local function futureSpell(index)
+  -- No guard on the function existing: the pcall answers for a missing one by failing, which is
+  -- the same "no filter" outcome.
+  local ok, kind = pcall(GetSpellBookItemInfo, index, BOOKTYPE)
+  return ok and kind == "FUTURESPELL"
+end
+
+local function spellbookNames()
+  if spellbookCache ~= nil then return spellbookCache end
+  -- No guard on GetSpellBookItemName existing: the pcall below answers for a missing function by
+  -- failing on the first index, which is the same "read nothing" case as an unreadable book.
+  local names, i, partial = {}, 1, false
+  while true do
+    local ok, name = pcall(GetSpellBookItemName, i, BOOKTYPE)
+    -- A THROW is not the end of the book, and neither is a blank name. Telling the two apart is
+    -- what stops a scan that died at index 40 from being cached as the whole spellbook: everything
+    -- past 40 would then read "not learned" until the next SPELLS_CHANGED or a /reload.
+    if not ok then partial = true break end
+    if not name or name == "" then break end
+    if not futureSpell(i) then names[name] = true end
+    i = i + 1
+    -- A spellbook cannot be this long. Without a bound, a client that answers a name for every
+    -- index would hang the login rather than degrade.
+    if i > 1024 then partial = true break end
+  end
+  -- Nothing read at all is "the client would not answer", not "an empty spellbook".
+  if i == 1 then return nil end
+  -- Usable right now, but never latched: the next call tries again for the part that was missed.
+  if partial then return names end
+  spellbookCache = names
+  return names
+end
+
+-- "Do you know this spell", rank-free, for ANY caller that has an id.
+--
+-- Exists so `S:known`, `Vanilla.knownSpells` and the `/elm debug` dump cannot answer the same
+-- question differently. They did: the state contract got the rank fix and the other two kept asking
+-- IsPlayerSpell about a max-rank id, so the Rotations tab's "needs gear or runes you do not have"
+-- tag and the dump the player sends you would both still be wrong.
+--
+-- Returns true / false / nil, and nil means "neither source answered" -- never "no".
+function Vanilla.knownById(id)
+  if type(id) ~= "number" then return nil end
+
+  local answered = false
+  if IsPlayerSpell then
+    local ok, known = pcall(IsPlayerSpell, id)
+    if ok then
+      if known == true then return true end
+      answered = true
+    end
+  end
+
+  -- Ranks: the client reports whichever rank the player owns, the pack ships one id (the max rank),
+  -- and names have no rank. Display/BarGlow.lua says the same thing about bar buttons.
+  local names = spellbookNames()
+  local name
+  if names and GetSpellInfo then
+    local ok, resolved = pcall(GetSpellInfo, id)
+    if ok then name = resolved end
+  end
+  if name then return names[name] == true end
+
+  if answered then return false end
+  return nil -- mutants: equivalent Lua returns nil implicitly at the end of a function
+end
+
+-- Called from Core/Init when spells change. The upvalue starts nil, so a fresh session has no
+-- book to forget and nothing calls this at load.
+function Vanilla.forgetSpellbook()
+  spellbookCache = nil
+  return true
+end
+
 function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   spells, sets, souls = spells or {}, sets or {}, souls or {}
 
@@ -511,12 +600,14 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   -- Is the spell in the spellbook at all? Deliberately NOT `usable`, which is IsUsableSpell and
   -- reads false when you are merely out of mana. Returns nil rather than false when the client
   -- will not answer, so "cannot tell" stays distinguishable from "not learned".
+  --
+  -- RANKS. Classic gives every rank of an ability its own spell id, and the data pack ships exactly
+  -- one -- the max rank. `IsPlayerSpell(415073)` is therefore FALSE for a paladin who has Exorcism
+  -- at rank 5, and the Builder greyed learned abilities as "not learned yet". Display/BarGlow.lua
+  -- learned this same lesson for bar buttons and says it plainly: names have no rank. So the id is
+  -- asked first, and the spellbook -- which lists whatever rank you actually own -- answers second.
   function S:known(spellKey)
-    local id = resolve(spellKey)
-    if not (id and IsPlayerSpell) then return nil end
-    local ok, known = pcall(IsPlayerSpell, id)
-    if not ok then return nil end
-    return known == true
+    return Vanilla.knownById(resolve(spellKey))
   end
 
   -- Matches the ABILITY ids the client reports in learnedAbilitySpellIDs. Storing a teach-spell id

@@ -141,8 +141,16 @@ end
 function Wizard.apply(buildKey)
   local p, prof, char = pack(), profile(), charDB()
   if not (prof and char) then return false, "no profile" end
-  if not (p and p.builds and p.builds[buildKey]) then
-    return false, "unknown build " .. tostring(buildKey)
+  -- UserBuilds.find, not `p.builds`, because a pinned key may name one of the user's own forks
+  -- (ADR-0010) -- Display/Driver.lua has always resolved it that way, and this refusing to was why
+  -- Customize could fork a template and then fail to activate the fork it had just made.
+  -- `p` must be present before either lookup: UserBuilds.find skips its class check when handed a
+  -- nil pack, so without this a class with no data pack would pin another class's fork.
+  if not p then return false, "unknown build " .. tostring(buildKey) end
+  if not (ns.UserBuilds and ns.UserBuilds.find(p, buildKey)) then
+    if not (p.builds and p.builds[buildKey]) then
+      return false, "unknown build " .. tostring(buildKey)
+    end
   end
   prof.activeBuild = buildKey
   char.setupDone = Wizard.catalogVersion(p)

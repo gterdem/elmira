@@ -75,10 +75,11 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal("group", args.spells.type)
       assert.equal("group", args.items.type)
       assert.is_true(args.spells.inline)
-      assert.equal(3, args.spells.order)
-      assert.equal(4, args.items.order)
-      -- Honest about what it cannot do yet: ordering arrives in the next step.
-      assert.is_truthy(args.intro.name:find("next step", 1, true))
+      assert.equal(6, args.spells.order)
+      assert.equal(7, args.items.order)
+      assert.equal("group", args.list.type)
+      assert.equal(2, args.list.order)
+      assert.is_truthy(args.intro.name)
     end)
   end)
 
@@ -382,6 +383,270 @@ describe("Options/Rotation (the Rotation section)", function()
     end)
   end)
 
+  -- The Builder's rotation list (step 3): the rows being edited, above the palette they come from.
+  describe("Builder rotation list", function()
+    local BUILD = { key = "PALADIN_EXODIN", entries = {
+      { spell = "EXORCISM" },
+      { spell = "DIVINE_STORM", label = "3 HP", when = { { "buff", "HOLY_POWER_BUFF", min = 3 } } },
+      { item = 13, when = { { "item_ready", 13 } } },
+    } }
+
+    local function install(origin)
+      helper.load("Elmira/Core/Palette.lua")
+      ns.Display.currentPack = function()
+        return { class = "PALADIN", catalog = { PALADIN = CATALOG }, spells = {}, builds = {} }
+      end
+      ns.Display.activeBuild = function() return {}, "THE_KEY", nil end
+      ns.Display.refresh = function() end
+      ns.Detect = { readableName = function(key) return key end }
+      ns.db = { profile = { paletteAllSlots = false } }
+      installUserBuilds{
+        -- Answers on the KEY, like the real find: a fake that hands back a build for a nil key
+        -- makes "nothing is active" untestable and hides the guard that handles it.
+        find = function(_, k)
+          if not k then return nil end
+          return BUILD, origin, { name = "Mine" }
+        end,
+        list = function() return {} end,
+      }
+    end
+
+    it("lists the rotation in priority order, naming each line", function()
+      install("fork")
+      local rows = Rotation.listRows()
+      assert.equal(3, #rows)
+      assert.equal("EXORCISM", rows[1].label)
+      assert.equal(1, rows[1].index)
+      -- An item line binds to the SLOT and is named for it, not for whatever is in it today.
+      assert.equal("Trinket 1", rows[3].label)
+      assert.equal(13, rows[3].item)
+    end)
+
+    it("carries each line's spell, and its icon, onto the row", function()
+      install("fork")
+      ns.Display.spellIcon = function(key) return key == "EXORCISM" and "tex:ex" or nil end
+      assert.equal("EXORCISM", Rotation.listRows()[1].spell)
+      local row = Rotation.group().args.builder.args.list.args.r1.args.what
+      assert.equal("description", row.type)
+      assert.equal(1, row.order)
+      assert.equal(1.6, row.width)
+      assert.is_truthy(row.name:find("|Ttex:ex:0|t", 1, true))
+    end)
+
+    -- Class-scoped, like every other fork lookup: db.global is shared across characters.
+    it("hands the class pack to the lookup", function()
+      install("fork")
+      local classes = {}
+      ns.UserBuilds.find = function(pk, k)
+        classes[#classes + 1] = (pk and pk.class) or "<no pack>"
+        if not k then return nil end
+        return BUILD, "fork", { name = "Mine" }
+      end
+      Rotation.listRows()
+      -- The rendered list looks it up again for the condition summary; both must be class-scoped.
+      Rotation.group()
+      assert.is_true(#classes > 0)
+      for _, c in ipairs(classes) do assert.equal("PALADIN", c) end
+    end)
+
+    it("says the rotation is yours to edit when it is", function()
+      install("fork")
+      assert.is_truthy(Rotation.group().args.builder.args.intro.name
+        :find("top to bottom", 1, true))
+    end)
+
+    it("marks the ends, so the arrows can be greyed rather than doing nothing", function()
+      install("fork")
+      local rows = Rotation.listRows()
+      assert.is_true(rows[1].first); assert.is_false(rows[1].last)
+      assert.is_false(rows[2].first); assert.is_false(rows[2].last)
+      assert.is_true(rows[3].last)
+    end)
+
+    it("is empty, not an error, when no rotation is active", function()
+      install("fork")
+      ns.Display.activeBuild = function() return nil, nil, nil end
+      local rows, _, editable = Rotation.listRows()
+      assert.same({}, rows)
+      assert.is_false(editable)
+      assert.is_truthy(Rotation.group().args.builder.args.list.args.none.name
+        :find("no lines yet", 1, true))
+    end)
+
+    -- A template is read-only (ADR-0005, hard rule 7). The controls are ABSENT rather than present
+    -- and dead: a control that silently does nothing is worse than one not offered.
+    it("offers no arrows or checkbox on a template, and says why", function()
+      install("pack")
+      local args = Rotation.group().args.builder.args.list.args
+      assert.is_truthy(args.r1.args.what)
+      assert.is_nil(args.r1.args.on)
+      assert.is_nil(args.r1.args.up)
+      assert.is_nil(args.r1.args.down)
+      assert.is_truthy(Rotation.group().args.builder.args.intro.name
+        :find("cannot be edited", 1, true))
+    end)
+
+    it("offers all three on a rotation of your own", function()
+      install("fork")
+      local args = Rotation.group().args.builder.args.list.args
+      assert.equal("toggle", args.r1.args.on.type)
+      assert.equal("execute", args.r1.args.up.type)
+      assert.equal("execute", args.r1.args.down.type)
+      assert.is_true(args.r1.args.up.disabled, "the first line cannot move up")
+      assert.is_false(args.r1.args.down.disabled)
+      assert.is_true(args.r3.args.down.disabled, "the last line cannot move down")
+    end)
+
+    it("moves a line through UserBuilds and repaints", function()
+      install("fork")
+      local moved, repaints = nil, 0
+      ns.UserBuilds.moveEntry = function(pk, k, i, d) moved = { pk and pk.class, k, i, d }; return true end
+      ns.Display.refresh = function() repaints = repaints + 1 end
+      local args = Rotation.group().args.builder.args.list.args
+      args.r2.args.up.func()
+      assert.same({ "PALADIN", "THE_KEY", 2, -1 }, moved)
+      args.r2.args.down.func()
+      assert.same({ "PALADIN", "THE_KEY", 2, 1 }, moved)
+      -- Without the repaint the strip keeps showing the old order until something else moves it.
+      assert.equal(2, repaints)
+    end)
+
+    it("turns a line off through UserBuilds and repaints", function()
+      install("fork")
+      local off, repaints = nil, 0
+      ns.UserBuilds.setEntryDisabled = function(pk, k, i, v) off = { pk and pk.class, k, i, v }; return true end
+      ns.Display.refresh = function() repaints = repaints + 1 end
+      local row = Rotation.group().args.builder.args.list.args.r1.args.on
+      assert.is_true(row.get())
+      row.set(nil, false)
+      assert.same({ "PALADIN", "THE_KEY", 1, true }, off)
+      assert.equal(1, repaints)
+    end)
+
+    it("dims a line that is switched off", function()
+      install("fork")
+      BUILD.entries[1].disabled = true
+      local args = Rotation.group().args.builder.args.list.args
+      assert.is_truthy(args.r1.args.what.name:find("|cff9AA0A6", 1, true))
+      assert.is_false(args.r1.args.on.get())
+      BUILD.entries[1].disabled = nil
+    end)
+
+    -- The author's own note is more use than a count, so it wins when there is one.
+    it("summarises what a line waits for, preferring the author's note", function()
+      install("fork")
+      local args = Rotation.group().args.builder.args.list.args
+      assert.is_truthy(args.r2.args.what.name:find("3 HP", 1, true))
+      assert.is_truthy(args.r1.args.what.name:find("always", 1, true))
+    end)
+
+    -- The summary falls back to the STORED build's `when` list, so the row still says something
+    -- when the author left no note.
+    it("falls back to counting the stored line's conditions", function()
+      install("fork")
+      BUILD.entries[2].label = nil
+      local args = Rotation.group().args.builder.args.list.args
+      assert.is_truthy(args.r2.args.what.name:find("1 condition", 1, true))
+      BUILD.entries[2].label = "3 HP"
+    end)
+
+    it("counts conditions when a line has no note", function()
+      install("fork")
+      assert.equal("always", Rotation.conditionSummary({ }))
+      assert.equal("always", Rotation.conditionSummary(nil))
+      assert.equal("1 condition", Rotation.conditionSummary({ when = { { "buff", "X" } } }))
+      assert.equal("2 conditions",
+        Rotation.conditionSummary({ when = { { "buff", "X" }, { "buff", "Y" } } }))
+    end)
+  end)
+
+  -- ADR-0015 §2: Customize forks the template AND activates the fork in the same click. The two
+  -- halves must not come apart -- Hekili's copy-then-forget, where the copy must be separately
+  -- activated and people carry on playing the original, is the failure this is designed against.
+  describe("customize()", function()
+    local function install()
+      ns.Display.currentPack = function()
+        return { class = "PALADIN", catalog = { PALADIN = CATALOG }, builds = {} }
+      end
+      ns.Display.refresh = function() end
+      ns.Adapter = { today = function() return "2026-09-05" end }
+    end
+
+    it("forks the template and activates the fork, in one call", function()
+      install()
+      local forked, applied, repaints = nil, nil, 0
+      installUserBuilds{ fork = function(_, k, o) forked = { k, o.today }; return "USER_MINE" end }
+      ns.Wizard = { apply = function(k) applied = k; return true end }
+      ns.Display.refresh = function() repaints = repaints + 1 end
+
+      local ok, key = Rotation.customize("PALADIN_EXODIN")
+      assert.is_true(ok)
+      assert.equal("USER_MINE", key)
+      assert.same({ "PALADIN_EXODIN", "2026-09-05" }, forked)
+      assert.equal("USER_MINE", applied, "the fork was made but never activated")
+      assert.equal(1, repaints)
+    end)
+
+    it("is what the Customize button on a template row does", function()
+      install()
+      local forked
+      installUserBuilds{ fork = function(_, k) forked = k; return "USER_MINE" end }
+      ns.Wizard = { apply = function() return true end }
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      local button = Rotation.group().args.rotations.args.templates.args.t1.args.customize
+      assert.equal("execute", button.type)
+      assert.equal("Customize", button.name)
+      button.func()
+      assert.equal("PALADIN_EXODIN", forked)
+    end)
+
+    it("describes what the button will do before it is pressed", function()
+      install()
+      installUserBuilds{ fork = function() return "USER_MINE" end }
+      ns.Wizard = { apply = function() return true end }
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      local button = Rotation.group().args.rotations.args.templates.args.t1.args.customize
+      assert.is_truthy(button.desc:find("editable copy", 1, true))
+      assert.is_truthy(button.desc:find("switches to it", 1, true))
+    end)
+
+    it("hands the class pack to the fork", function()
+      install()
+      local gotClass
+      installUserBuilds{ fork = function(pk) gotClass = pk and pk.class; return "USER_MINE" end }
+      ns.Wizard = { apply = function() return true end }
+      Rotation.customize("PALADIN_EXODIN")
+      assert.equal("PALADIN", gotClass)
+    end)
+
+    it("reports the reason when the fork cannot be made", function()
+      install()
+      installUserBuilds{ fork = function() return nil, "unknown template" end }
+      local ok, err = Rotation.customize("PALADIN_NOPE")
+      assert.is_false(ok)
+      assert.equal("unknown template", err)
+    end)
+
+    -- The fork still exists in that case, and is on the Rotations tab: saying so beats a click that
+    -- appears to have done nothing.
+    it("reports when the fork was made but could not be activated", function()
+      install()
+      installUserBuilds{ fork = function() return "USER_MINE" end }
+      ns.Wizard = { apply = function() return false, "no profile" end }
+      local ok, err = Rotation.customize("PALADIN_EXODIN")
+      assert.is_false(ok)
+      assert.equal("no profile", err)
+    end)
+
+    it("says so rather than erroring when the builds module is absent", function()
+      install()
+      ns.UserBuilds = nil
+      local ok, err = Rotation.customize("PALADIN_EXODIN")
+      assert.is_false(ok)
+      assert.is_truthy(err:find("not loaded", 1, true))
+    end)
+  end)
+
   describe("statusLines()", function()
     it("says so plainly when nothing is active", function()
       ns.Display.activeBuild = function() return nil, nil end
@@ -527,10 +792,11 @@ describe("Options/Rotation (the Rotation section)", function()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", difficulty = "medium",
                        updated = "2026-08-01", fits = true } }
       local row = Rotation.group().args.rotations.args.templates.args.t1
-      assert.equal("description", row.type)
-      assert.is_nil(row.set)
-      assert.is_truthy(row.name:find("Exodin", 1, true))
-      assert.is_truthy(row.name:find("2026-08-01", 1, true))
+      assert.equal("group", row.type)
+      assert.equal("description", row.args.what.type)
+      assert.is_nil(row.args.what.set)
+      assert.is_truthy(row.args.what.name:find("Exodin", 1, true))
+      assert.is_truthy(row.args.what.name:find("2026-08-01", 1, true))
     end)
 
     -- The row model carries `active`; the marker is what the player actually sees. Testing only the
@@ -540,16 +806,16 @@ describe("Options/Rotation (the Rotation section)", function()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
                      { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
       local args = Rotation.group().args.rotations.args.templates.args
-      assert.is_truthy(args.t1.name:find(">>", 1, true))
-      assert.is_nil(args.t2.name:find(">>", 1, true))
-      assert.is_truthy(args.t2.name:find("--", 1, true))
+      assert.is_truthy(args.t1.args.what.name:find(">>", 1, true))
+      assert.is_nil(args.t2.args.what.name:find(">>", 1, true))
+      assert.is_truthy(args.t2.args.what.name:find("--", 1, true))
     end)
 
     it("says on the row when a template needs gear or runes you do not have", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = false } }
       local row = Rotation.group().args.rotations.args.templates.args.t1
-      assert.is_truthy(row.name:find("needs gear or runes", 1, true))
+      assert.is_truthy(row.args.what.name:find("needs gear or runes", 1, true))
     end)
 
     -- Wizard.choices reaches the catalog and Detect; an error there must not take the whole panel
@@ -564,7 +830,7 @@ describe("Options/Rotation (the Rotation section)", function()
       installPack()
       installWizard{ { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", difficulty = "hard",
                        experimental = true, fits = true } }
-      local name = Rotation.group().args.rotations.args.templates.args.t1.name
+      local name = Rotation.group().args.rotations.args.templates.args.t1.args.what.name
       assert.is_truthy(name:find("hard", 1, true))
       assert.is_truthy(name:find("experimental", 1, true))
     end)

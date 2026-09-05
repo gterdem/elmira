@@ -109,6 +109,7 @@ function NA:OnInitialize()
   -- The other two things that move a static gate. SPELLS_CHANGED also covers learning a rank, which
   -- is how a levelling character's rotation grows.
   self:RegisterEvent("PLAYER_LEVEL_UP", "OnGearOrCharacterChanged")
+  -- Learning a rank changes which spells `known` can see, and the adapter caches the spellbook.
   self:RegisterEvent("SPELLS_CHANGED", "OnGearOrCharacterChanged")
   -- Engraving. The event name is SoD's and exists on no other flavor, so it is registered only
   -- where the adapter says runes are readable at all -- and inside a pcall, because registering an
@@ -288,6 +289,10 @@ end
 -- as storms of events -- swapping a two-piece set fires PLAYER_EQUIPMENT_CHANGED twice -- so they
 -- share one debounce and produce at most one announcement.
 function NA:OnGearOrCharacterChanged()
+  -- The adapter caches the spellbook, and this fires when a RANK is learned -- the case the cache
+  -- exists to answer. Dropped before anything reads `known` again, or the palette and the gates
+  -- would go on reporting the ability you just trained as not learned.
+  if ns.Adapter and ns.Adapter.forgetSpellbook then ns.Adapter.forgetSpellbook() end
   if ns.Display then ns.Display.invalidate() end
   if self._equipTimer then self:CancelTimer(self._equipTimer, true) end
   self._equipTimer = self:ScheduleTimer(function()

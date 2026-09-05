@@ -19,6 +19,9 @@ read_globals = { "LibStub" }
 local WOW_API = {
   "date", -- the client's calendar/clock global (Adapters/Vanilla.lua today())
   "GetTime", "GetSpellCooldown", "IsUsableSpell", "IsPlayerSpell", "IsSpellKnown", "GetSpellInfo",
+  -- Rank-free "do I know this": the pack ships one id per ability and Classic gives every rank its
+  -- own, so the spellbook is what answers when IsPlayerSpell says no to a max-rank id.
+  "GetSpellBookItemName", "GetSpellBookItemInfo",
   "UnitAura", "UnitPower", "UnitPowerMax", "UnitCreatureType", "UnitExists", "UnitHealth",
   "UnitHealthMax", "GetUnitSpeed", "GetInventoryItemID", "GetInventoryItemLink",
   "GetInventoryItemCooldown", "IsUsableItem", "GetItemInfo", "UnitAttackSpeed", "GetTalentTabInfo",
