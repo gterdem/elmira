@@ -106,15 +106,33 @@ function NA:OnInitialize()
   self:RegisterEvent("PLAYER_REGEN_DISABLED", "OnCombatStart")
   self:RegisterEvent("PLAYER_REGEN_ENABLED", "OnCombatEnd")
   self:RegisterEvent("PLAYER_EQUIPMENT_CHANGED", "OnEquipChanged")
+  -- The other two things that move a static gate. SPELLS_CHANGED also covers learning a rank, which
+  -- is how a levelling character's rotation grows.
+  self:RegisterEvent("PLAYER_LEVEL_UP", "OnGearOrCharacterChanged")
+  self:RegisterEvent("SPELLS_CHANGED", "OnGearOrCharacterChanged")
+  -- Engraving. The event name is SoD's and exists on no other flavor, so it is registered only
+  -- where the adapter says runes are readable at all -- and inside a pcall, because registering an
+  -- event the client does not know is an error, not a no-op.
+  local caps = ns.Adapter and ns.Adapter.capabilities and ns.Adapter.capabilities()
+  if caps and caps.runes then
+    pcall(function() self:RegisterEvent("RUNE_UPDATED", "OnGearOrCharacterChanged") end)
+  end
   self:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED", "OnCastSucceeded")
   self:RegisterEvent("PLAYER_LOGOUT", function() ns.flushRecorder() end)
 
   -- What makes the queue stale. `Display.invalidate` only sets a flag; Core/Ticker decides when to
   -- act on it, so a spammy event cannot drag the recompute rate up with it.
+  --
+  -- PLAYER_REGEN_DISABLED/ENABLED and PLAYER_EQUIPMENT_CHANGED are NOT in this list, though they
+  -- belong in it by meaning. AceEvent registers one handler per (object, event): a second
+  -- RegisterEvent for the same event silently REPLACES the first. All three were registered above
+  -- by name and again here as a closure, so the closure won and OnCombatStart, OnCombatEnd and
+  -- OnEquipChanged never ran at all -- taking the recorder's combat sampling, its gear marks, the
+  -- announcement flush and the move-mode exit with them. Their named handlers invalidate for
+  -- themselves now, and tests/spec/init_spec.lua proves no event is registered twice again.
   for _, event in ipairs({
     "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_USABLE", "ACTIONBAR_UPDATE_USABLE",
     "UNIT_AURA", "UNIT_POWER_UPDATE", "PLAYER_TARGET_CHANGED",
-    "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "PLAYER_EQUIPMENT_CHANGED",
   }) do
     self:RegisterEvent(event, function() if ns.Display then ns.Display.invalidate() end end)
   end
@@ -175,6 +193,7 @@ local SUGGEST_POLL = 1
 -- Combat is the worst moment to be left with a mouse-enabled frame across the middle of the
 -- screen, so move mode ends whether or not the panel is still open.
 function NA:OnCombatStart()
+  if ns.Display then ns.Display.invalidate() end
   if ns.Announcers then ns.Announcers.StopMoving() end
   self:RecordAuto("combat-start")
   if not (ns.Recorder and ns.Recorder.isRecording()) then return end
@@ -250,6 +269,7 @@ function NA:OnCastSucceeded(_, unit, _, spellID)
 end
 
 function NA:OnCombatEnd()
+  if ns.Display then ns.Display.invalidate() end
   if self._combatTimer then
     self:CancelTimer(self._combatTimer, true)
     self._combatTimer = nil
@@ -264,12 +284,22 @@ function NA:OnCombatEnd()
   self:RecordAuto("combat-end")
 end
 
-function NA:OnEquipChanged()
+-- Equipment, runes and level all change which rows of the build can fire (ADR-0015). They arrive
+-- as storms of events -- swapping a two-piece set fires PLAYER_EQUIPMENT_CHANGED twice -- so they
+-- share one debounce and produce at most one announcement.
+function NA:OnGearOrCharacterChanged()
+  if ns.Display then ns.Display.invalidate() end
   if self._equipTimer then self:CancelTimer(self._equipTimer, true) end
   self._equipTimer = self:ScheduleTimer(function()
     self._equipTimer = nil
     self:RecordAuto("gear-changed")
+    if ns.Display and ns.Display.checkGates then ns.Display.checkGates() end
   end, EQUIP_DEBOUNCE)
+end
+
+-- Kept as the event handler's old name so nothing outside has to care that it grew a second job.
+function NA:OnEquipChanged()
+  self:OnGearOrCharacterChanged()
 end
 
 function NA:OnProfileChanged()

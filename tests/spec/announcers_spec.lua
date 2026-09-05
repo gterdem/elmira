@@ -244,6 +244,13 @@ describe("Display.Announcers", function()
       assert.equal("moved", Announcers.frame().messages[1].text)
     end)
 
+    -- The icon of the spell the message is about, so a glance says which ability changed before
+    -- the sentence has been read.
+    it("inlines the icon in front of the text when there is one", function()
+      Announcers.screen(cat("rotation"), row("moved", "Interface\\Icons\\X"))
+      assert.equal("|TInterface\\Icons\\X:0|t moved", Announcers.frame().messages[1].text)
+    end)
+
     it("says nothing before the frame exists", function()
       helper.reset()
       helper.load("Elmira/Core/Colors.lua")

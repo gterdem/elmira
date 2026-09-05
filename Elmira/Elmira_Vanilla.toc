@@ -25,6 +25,7 @@ Core\Packs.lua
 Core\DB.lua
 Core\Announce.lua
 Core\Schema.lua
+Core\Gates.lua
 Core\Serialize.lua
 Core\UserBuilds.lua
 Core\Engine.lua

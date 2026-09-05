@@ -126,7 +126,7 @@ function Announce.plain(text)
   return (out:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
-local function record(cat, text)
+local function record(cat, text, icon)
   local store = db() and db().global
   if not store then return nil end
   store.announceLog = store.announceLog or {}
@@ -134,6 +134,7 @@ local function record(cat, text)
     at = clock and clock.now() or 0,
     category = cat.key,
     text = text,
+    icon = icon,
   }
   store.announceLog[#store.announceLog + 1] = row
   while #store.announceLog > Announce.MAX_LOG do
@@ -156,6 +157,7 @@ end
 
 -- Announce.emit(category, text, opts) -> the logged row, or nil
 --
+-- opts.icon      a texture path, drawn inline by the sinks that can draw one
 -- opts.noShare   never route this to party, whatever the user has switched on. For the test button:
 --                a control for previewing your own settings must not put a line in a group's chat.
 function Announce.emit(key, text, opts)
@@ -165,7 +167,7 @@ function Announce.emit(key, text, opts)
 
   -- Before the database exists there is nowhere to record and no routing to read; saying it out
   -- loud is still better than swallowing it, because that is exactly when load failures happen.
-  local row = record(cat, text)
+  local row = record(cat, text, opts.icon)
   if not row then
     -- No database yet: nowhere to record, no routing to read, and nothing to hand a sink. Say it
     -- plainly instead -- this is exactly when load failures happen, and swallowing them would

@@ -1,5 +1,18 @@
 # Changelog
 ## Unreleased
+- **New: Elmira tells you when your gear changes your rotation.** Equip the fourth piece of a set,
+  engrave a rune, or hit the level a line was waiting for, and it says so once: *"Divine Storm
+  consumes Holy Power: Divine Storm is now active in PALADIN_EXODIN."* — and the reverse when you
+  take the piece off. On a client that cannot read engraving at all it says nothing about runes
+  rather than claiming they are missing. It only reports things that stay changed: a line waiting on your mana or on
+  three enemies is the rotation doing its job, not news. **`/elm debug gates`** lists every line of
+  your rotation that cannot fire for this character right now, and what each one is waiting for.
+- **Fixed: three events were registered twice, and the first handler of each was silently
+  discarded.** Entering combat, leaving combat and changing gear all had two handlers registered
+  for them, and the game keeps only one — so the combat-start and combat-end work never ran at all.
+  That took the recorder's in-combat sampling and its gear-change marks with it. Found while
+  writing a test for something else; there is now a check that fails if any event is ever
+  registered twice again.
 - **New: you decide how Elmira talks to you.** A new **Notifications → Announcements** page splits
   everything the addon says into six kinds — rotation changed, template updated, mode, warnings,
   status, cooldowns used — and lets you send each one where you want it: your chat window (any tab,

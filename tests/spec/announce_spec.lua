@@ -145,6 +145,11 @@ describe("Core.Announce", function()
       assert.equal(100, rows[1].at)
     end)
 
+    it("keeps the icon it was given, so a sink can draw it", function()
+      A.emit("rotation", "x", { icon = "Interface\\Icons\\Spell_Holy_Excorcism" })
+      assert.equal("Interface\\Icons\\Spell_Holy_Excorcism", A.log()[1].icon)
+    end)
+
     it("reads newest first, because that is the order anyone reads a log in", function()
       A.emit("status", "first")
       A.emit("status", "second")

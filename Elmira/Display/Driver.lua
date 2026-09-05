@@ -25,6 +25,9 @@ local lastQueue           -- the queue as rendered, for the change test
 local lastBuildKey
 local lastError = {}      -- renderer name -> the last error text reported, so it is said once
 local lastVisible         -- nil until the first tick decides; then true/false
+-- Which spells were statically live, and for which build (ADR-0015 amendment). One declaration:
+-- separately, deleting either only makes it a global, which no test can see.
+local gateSnapshot, gateKey
 
 -- Renderers subscribe rather than the driver naming them: the queue strip, the bar glow and the
 -- overlay all want the same queue and must never each run their own loop.
@@ -73,6 +76,68 @@ function Display.activeBuild()
     return nil, key, "build '" .. key .. "' failed to compile (" .. #(errors or {}) .. " problem(s))"
   end
   return compiled, key, reason
+end
+
+-- Which rows of the active build cannot fire for this character, and why. The Builder dims these
+-- (M5e) and `/elm debug gates` prints them; the announcement below is the same answer, said once,
+-- at the moment it changes.
+function Display.inactiveRows()
+  local compiled, key = Display.activeBuild()
+  if not (compiled and ns.Gates) then return {}, key end
+  -- A nil state needs no guard of its own: Gates.evaluate answers with no rows for one.
+  local state = ns.API and ns.API.GetState()
+  local out = {}
+  for _, row in ipairs(ns.Gates.evaluate(compiled, state, Display.gateContext())) do
+    if not row.active then out[#out + 1] = row end
+  end
+  return out, key
+end
+
+-- The pack tables Core/Gates needs to turn a condition into a sentence: a set's name, a bonus's
+-- note. Built here rather than in Gates because only Display knows which pack is loaded.
+function Display.gateContext()
+  local pack = Display.currentPack()
+  local caps = ns.Adapter and ns.Adapter.capabilities and ns.Adapter.capabilities()
+  if not pack then return { capabilities = caps } end
+  return { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses,
+           capabilities = caps }
+end
+
+-- Has this character's gear, runes or level just changed which rows of the build can fire? Called
+-- from Core/Init on the events that can move a STATIC gate -- never from the render loop, because
+-- the answer cannot change between two frames.
+--
+-- The first call after a build change records silently. There is nothing to announce about a
+-- rotation the player has only just switched to, and saying "Divine Storm is now active" because
+-- they changed profile would be a message about nothing.
+function Display.checkGates()
+  local compiled, key = Display.activeBuild()
+  local state = ns.API and ns.API.GetState()
+  if not (compiled and state and ns.Gates) then return nil end
+
+  local now = ns.Gates.snapshot(ns.Gates.evaluate(compiled, state, Display.gateContext()))
+  local before, wasKey = gateSnapshot, gateKey
+  gateSnapshot, gateKey = now, key
+  if wasKey ~= key then return nil end
+
+  local diff = ns.Gates.diff(before, now)
+  local text = ns.Gates.announcement(diff, key)
+  if not text then return nil end
+  -- The icon of the spell the message is about, so a glance at the toast says which ability
+  -- changed before the sentence has been read.
+  local first = diff.activated[1] or diff.deactivated[1]
+  if ns.Announce then ns.Announce.emit("rotation", text, { icon = Display.spellIcon(first.spell) }) end
+  return text
+end
+
+-- Presentation, so it lives here rather than on the State contract: nothing in the rotation depends
+-- on what a spell looks like. Display/Queue draws its icons through this too -- two copies of the
+-- same lookup is one that can go stale.
+function Display.spellIcon(spellKey)
+  local pack = Display.currentPack()
+  local data = pack and pack.spells and pack.spells[spellKey]
+  if not (data and data.id and GetSpellTexture) then return nil end
+  return GetSpellTexture(data.id)
 end
 
 -- Reads the live state, hands Core/Visibility booleans, returns show/hide plus the reason. The
@@ -185,8 +250,17 @@ end
 
 -- Forces the next tick to recompute AND repaint, regardless of whether the queue changed. Used by
 -- anything that alters how the queue is drawn rather than what it contains (scale, depth, a colour).
+function Display.resetGates()
+  gateSnapshot, gateKey = nil, nil
+end
+
+-- Forget everything painted AND everything known about the gates. The gate half matters because a
+-- build can change WITHOUT its key changing -- an import over the same fork, a profile copy, the
+-- M5e editor -- and the next look would then diff the new rows against the old build's and announce
+-- a gear change for an edit the player made themselves. The cost is one silent re-record.
 function Display.refresh()
   lastQueue, lastBuildKey, lastVisible = nil, nil, nil
+  Display.resetGates()
   Display.invalidate()
 end
 

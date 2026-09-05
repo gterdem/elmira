@@ -36,6 +36,11 @@ Interface.CONTRACT = {
   -- so baseCooldown is fed by observing GetSpellCooldown and caching (docs/07 §9.1, §9.4). No
   -- static fallback is safe, and a reading taken during the GCD must never be cached as a duration.
   "baseCooldown", "powerCost",
+  -- Added at M5g. "Do you know this spell at all" is a different question from `usable`, which is
+  -- IsUsableSpell and answers false when you are merely out of mana or out of range. Core/Engine
+  -- skips an unknown ability silently and correctly (ADR-0006 rule 5); Core/Gates has to be able to
+  -- SAY so, which nothing on the contract could.
+  "known",
 }
 
 -- docs/01 §2: class-specific accessors are optional members guarded by a capability flag, so Core
@@ -73,6 +78,9 @@ function Interface.newNullState()
     gcdDuration = function() return 0 end,
     cooldown = function() return 0 end,
     usable = function() return false end,
+    -- nil, not false: "this client cannot tell me" is not "you have not learned it", and Gates
+    -- would dim every row in the build on the strength of the difference.
+    known = function() return nil end,
     castTime = function() return 0 end,
     buff = function() return nil end,
     debuff = function() return nil end,

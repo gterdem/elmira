@@ -516,6 +516,42 @@ describe("Core.Slash", function()
     assert.is_true(hasLineMatching(lines, "cues"))
   end)
 
+  -- ADR-0015: the same answer the announcement gives at the moment it changes, on demand and in
+  -- full. Without it a player who missed the message has no way to ask again.
+  describe("debug gates", function()
+    it("degrades with a designed line when the display is not loaded", function()
+      assert.is_nil(helper.ns().Display)
+      assert.same({ "gates: display not loaded" }, Slash.run("debug gates"))
+    end)
+
+    -- "every row of nil is live for this character" is reassuring, and wrong, at exactly the
+    -- moment nothing is loaded.
+    it("says there is no build rather than reporting on one", function()
+      helper.ns().Display = { inactiveRows = function() return {}, nil end }
+      assert.same({ "gates: no build is active." }, Slash.run("debug gates"))
+    end)
+
+    it("says so plainly when every row is live", function()
+      helper.ns().Display = { inactiveRows = function() return {}, "PALADIN_EXODIN" end }
+      local lines = Slash.run("debug gates")
+      assert.equal(1, #lines)
+      assert.is_truthy(lines[1]:find("every row of PALADIN_EXODIN is live"))
+    end)
+
+    it("names each row that cannot fire, and why", function()
+      helper.ns().Display = { inactiveRows = function()
+        return { { index = 4, spell = "DIVINE_STORM", reasons = { "needs the 4-set", "level 60" } },
+                 { index = 7, item = 13, reasons = { "no trinket equipped" } } }, "PALADIN_EXODIN"
+      end }
+      local lines = Slash.run("debug gates")
+      assert.equal(3, #lines)
+      assert.is_truthy(lines[1]:find("2 row"))
+      assert.is_truthy(lines[2]:find("4. DIVINE_STORM"))
+      assert.is_truthy(lines[2]:find("needs the 4%-set; level 60"))
+      assert.is_truthy(lines[3]:find("7. item 13"))
+    end)
+  end)
+
   it("'debug cues' degrades with a designed line when the overlay is not loaded", function()
     local ns = helper.ns()
     assert.is_nil(ns.Overlay)

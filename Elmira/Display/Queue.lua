@@ -45,10 +45,7 @@ local function iconFor(key, item)
     local id = GetInventoryItemID and GetInventoryItemID("player", item)
     return id and GetItemIcon and GetItemIcon(id) or nil
   end
-  local pack = ns.Display and ns.Display.currentPack()
-  local data = pack and pack.spells and pack.spells[key]
-  if not (data and data.id and GetSpellTexture) then return nil end
-  return GetSpellTexture(data.id)
+  return ns.Display and ns.Display.spellIcon(key) or nil
 end
 
 local function spellIDFor(key)

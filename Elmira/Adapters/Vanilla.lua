@@ -508,6 +508,17 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
 
   function S:level() return UnitLevel("player") or 0 end
 
+  -- Is the spell in the spellbook at all? Deliberately NOT `usable`, which is IsUsableSpell and
+  -- reads false when you are merely out of mana. Returns nil rather than false when the client
+  -- will not answer, so "cannot tell" stays distinguishable from "not learned".
+  function S:known(spellKey)
+    local id = resolve(spellKey)
+    if not (id and IsPlayerSpell) then return nil end
+    local ok, known = pcall(IsPlayerSpell, id)
+    if not ok then return nil end
+    return known == true
+  end
+
   -- Matches the ABILITY ids the client reports in learnedAbilitySpellIDs. Storing a teach-spell id
   -- here compares false against every slot and reports "not engraved" for a rune the player is
   -- wearing, with no error anywhere — the bug that shipped (docs/07 §9.12).

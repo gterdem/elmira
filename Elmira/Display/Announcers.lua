@@ -154,10 +154,14 @@ function Announcers.StopMoving()
 end
 
 -- The sinks. Each is registered by name, and Core/Announce calls the ones a category is routed to.
+-- `|Tpath:size|t` inlines a texture into a font string. Size 0 means "match the line height",
+-- which is what we want and is why no number is computed here.
 function Announcers.screen(cat, row)
   if not frame then return false end
   local c = colorOf(cat)
-  frame:AddMessage(row.text, c.r, c.g, c.b, 1)
+  local text = row.text
+  if row.icon then text = "|T" .. tostring(row.icon) .. ":0|t " .. text end
+  frame:AddMessage(text, c.r, c.g, c.b, 1)
   return true
 end
 

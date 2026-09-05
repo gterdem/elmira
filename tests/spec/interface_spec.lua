@@ -19,6 +19,7 @@ describe("Adapters.Interface (State contract)", function()
       "level", "rune", "sealLinger",
       "gcdDuration",
       "baseCooldown", "powerCost",
+      "known",
     }
     assert.same(expected, Interface.CONTRACT)
   end)
@@ -58,6 +59,9 @@ describe("Adapters.Interface (State contract)", function()
     assert.equal(1, s.enemies())
     assert.equal(0, s.level())
     assert.is_false(s.rune())
+    -- nil, NOT false: Core/Gates dims a row on false, so a state that cannot answer whether a
+    -- spell is known would dim every row in the build before a pack has even loaded.
+    assert.is_nil(s.known())
     assert.is_nil(s.sealLinger())
     assert.equal(0, s.gcdDuration())
     assert.equal(0, s.baseCooldown())

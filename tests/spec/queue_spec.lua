@@ -97,6 +97,11 @@ describe("Display.Queue", function()
     ns.Display = {
       currentPack = function() return pack end,
       activeBuild = function() return { entries = entries or {} }, "PALADIN_EXODIN", "pinned" end,
+      -- The strip draws its icons through the Driver's one lookup, so the stub has to answer it.
+      spellIcon = function(key)
+        local data = pack.spells[key]
+        return data and data.id and _G.GetSpellTexture and _G.GetSpellTexture(data.id) or nil
+      end,
     }
   end
 

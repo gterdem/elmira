@@ -317,6 +317,7 @@ describe("Core.Init", function()
       ns.Announcers = {
         Create = function() registered[#registered + 1] = "create" end,
         Register = function() registered[#registered + 1] = "register" end,
+        StopMoving = function() end,
       }
       return said, registered
     end
@@ -343,6 +344,92 @@ describe("Core.Init", function()
       NA:OnInitialize()
       NA:OnEnable()
       assert.same({ "create", "register" }, registered)
+    end)
+
+    -- The three things that can move a STATIC gate. They arrive as storms -- swapping a two-piece
+    -- set fires PLAYER_EQUIPMENT_CHANGED twice -- so they share one debounce and one announcement.
+    -- Fired for real through AceEvent, so this proves the wiring rather than the registration.
+    local function firesGateCheck(event)
+      local scheduled = false
+      NA.ScheduleTimer = function(_, fn) scheduled = true; return fn end
+      NA.CancelTimer = function() end
+      LibStub("AceEvent-3.0").events:Fire(event)
+      return scheduled
+    end
+
+    it("watches gear, level and learned spells for a change to the rotation", function()
+      withAnnounce()
+      NA:OnInitialize()
+      assert.is_true(firesGateCheck("PLAYER_EQUIPMENT_CHANGED"), "gear is not watched")
+      assert.is_true(firesGateCheck("PLAYER_LEVEL_UP"), "levelling is not watched")
+      assert.is_true(firesGateCheck("SPELLS_CHANGED"), "learning a spell is not watched")
+    end)
+
+    -- SoD only. Registering an event the client does not know is an error, not a no-op, so it is
+    -- asked for only where the adapter says runes are readable at all.
+    it("watches engraving only where runes are readable", function()
+      withAnnounce()
+      ns.Adapter.capabilities = function() return { runes = false } end
+      NA:OnInitialize()
+      assert.is_false(firesGateCheck("RUNE_UPDATED"))
+    end)
+
+    it("watches engraving where they are", function()
+      withAnnounce()
+      ns.Adapter.capabilities = function() return { runes = true } end
+      NA:OnInitialize()
+      assert.is_true(firesGateCheck("RUNE_UPDATED"))
+    end)
+
+    -- AceEvent keeps ONE handler per (object, event): registering the same event twice silently
+    -- replaces the first. Three events were registered by name and again as a closure, so the
+    -- closure won and OnCombatStart, OnCombatEnd and OnEquipChanged never ran -- the recorder's
+    -- combat sampling, its gear marks, the announcement flush and the move-mode exit, all dead
+    -- code that read as wired. This is the check that stops it coming back.
+    it("registers no event twice, whatever the handler", function()
+      withAnnounce()
+      local seen, dupes = {}, {}
+      local real = NA.RegisterEvent
+      NA.RegisterEvent = function(selfRef, event, ...)
+        if seen[event] then dupes[#dupes + 1] = event end
+        seen[event] = true
+        return real(selfRef, event, ...)
+      end
+      NA:OnInitialize()
+      NA.RegisterEvent = real
+      assert.same({}, dupes,
+        "an event registered twice loses its first handler: " .. table.concat(dupes, ", "))
+    end)
+
+    it("still marks the display stale on combat and gear, now those handlers run", function()
+      withAnnounce()
+      NA.ScheduleTimer = function() return "t" end
+      NA.CancelTimer = function() end
+      NA:OnInitialize()
+      local AceEvent = LibStub("AceEvent-3.0")
+      for _, event in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
+                               "PLAYER_EQUIPMENT_CHANGED" }) do
+        order = {}
+        AceEvent.events:Fire(event)
+        local invalidated = false
+        for _, e in ipairs(order) do if e == "Display.invalidate" then invalidated = true end end
+        assert.is_true(invalidated, event .. " no longer marks the display stale")
+      end
+    end)
+
+    it("collapses a storm of gear events into one look at the gates", function()
+      withAnnounce()
+      local looks, fired = 0, nil
+      ns.Display.checkGates = function() looks = looks + 1 end
+      NA.ScheduleTimer = function(_, fn) fired = fn; return "t" end
+      NA.CancelTimer = function() end
+      NA:OnInitialize()
+      NA:OnGearOrCharacterChanged()
+      NA:OnGearOrCharacterChanged()
+      NA:OnGearOrCharacterChanged()
+      assert.equal(0, looks)     -- nothing until the debounce expires
+      fired()
+      assert.equal(1, looks)
     end)
 
     -- Combat is the worst moment to be left with a mouse-enabled frame across screen centre.

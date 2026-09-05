@@ -169,6 +169,181 @@ describe("Display.Driver", function()
     end)
   end)
 
+  -- ADR-0015 amendment. The template is one static list shipped to everybody; what makes it
+  -- personal is that its rows carry gates. A player who equips their fourth tier piece has no way
+  -- of knowing their rotation grew a line unless something says so.
+  describe("telling the player their gear changed the rotation", function()
+    local said, entries
+
+    local function withGates()
+      said = {}
+      entries = { { spell = "DIVINE_STORM", when = { { "bonus", "HOLY_POWER_CONSUME" } } } }
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Gates.lua")
+      ns.Announce = { emit = function(cat, text, opts)
+        said[#said + 1] = { cat = cat, text = text, icon = opts and opts.icon }
+      end }
+      ns.Display.activeBuild = function() return { entries = entries }, "PALADIN_EXODIN", "pinned" end
+      ns.Display.currentPack = function()
+        return { spells = { DIVINE_STORM = { id = 53385 } },
+                 bonuses = { HOLY_POWER_CONSUME = { note = "Divine Storm consumes Holy Power" } } }
+      end
+      _G.GetSpellTexture = function() return "Interface\\Icons\\Ability_Warrior_Cleave" end
+    end
+
+    local function setBonus(held)
+      ns.API = { GetState = function()
+        return { inCombat = function() return false end, targetExists = function() return false end,
+                 bonus = function(_, key) return held and key == "HOLY_POWER_CONSUME" end,
+                 known = function() return true end }
+      end }
+    end
+
+    before_each(function() withGates(); setBonus(false) end)
+    after_each(function() _G.GetSpellTexture = nil end)
+
+    -- Nothing to announce about a rotation the player has only just been shown.
+    it("says nothing on the first look", function()
+      assert.is_nil(Display.checkGates())
+      assert.equal(0, #said)
+    end)
+
+    it("says so when a set bonus makes a row live", function()
+      Display.checkGates()
+      setBonus(true)
+      local text = Display.checkGates()
+      assert.is_truthy(text)
+      assert.equal(1, #said)
+      assert.equal("rotation", said[1].cat)
+      assert.is_truthy(said[1].text:find("Divine Storm is now active"))
+      assert.is_truthy(said[1].text:find("Divine Storm consumes Holy Power"))
+      assert.is_truthy(said[1].text:find("PALADIN_EXODIN"))
+    end)
+
+    it("carries the spell's icon, so the toast reads before the sentence does", function()
+      Display.checkGates()
+      setBonus(true)
+      Display.checkGates()
+      assert.equal("Interface\\Icons\\Ability_Warrior_Cleave", said[1].icon)
+    end)
+
+    it("says the reverse when the bonus goes away", function()
+      Display.checkGates()
+      setBonus(true)
+      Display.checkGates()
+      setBonus(false)
+      Display.checkGates()
+      assert.equal(2, #said)
+      assert.is_truthy(said[2].text:find("no longer active"))
+    end)
+
+    -- An ordinary gear swap changes nothing about which rows can fire, and must be silent.
+    it("says nothing when nothing about the rotation changed", function()
+      Display.checkGates()
+      Display.checkGates()
+      Display.checkGates()
+      assert.equal(0, #said)
+    end)
+
+    -- Switching profile or fork means every row belonged to another rotation. "Divine Storm is now
+    -- active" because the player changed build is a message about nothing.
+    it("starts again silently when the build changes", function()
+      Display.checkGates()
+      ns.Display.activeBuild = function() return { entries = entries }, "PALADIN_PROT", "pinned" end
+      setBonus(true)
+      assert.is_nil(Display.checkGates())
+      assert.equal(0, #said)
+    end)
+
+    it("says nothing with no build, no state or no Gates", function()
+      ns.Display.activeBuild = function() return nil, nil, "no pack" end
+      assert.is_nil(Display.checkGates())
+      withGates(); setBonus(false)
+      ns.API = { GetState = function() return nil end }
+      assert.is_nil(Display.checkGates())
+      withGates(); setBonus(false)
+      ns.Gates = nil
+      assert.is_nil(Display.checkGates())
+    end)
+
+    it("has no icon to offer for a spell the pack does not carry", function()
+      assert.is_nil(Display.spellIcon("NOT_IN_THE_PACK"))
+      assert.equal("Interface\\Icons\\Ability_Warrior_Cleave", Display.spellIcon("DIVINE_STORM"))
+      _G.GetSpellTexture = nil
+      assert.is_nil(Display.spellIcon("DIVINE_STORM"))
+    end)
+
+    it("forgets what it knew on request, so the next look starts again", function()
+      Display.checkGates()
+      setBonus(true)
+      Display.resetGates()
+      assert.is_nil(Display.checkGates())
+      assert.equal(0, #said)
+    end)
+
+    -- A build can change WITHOUT its key changing: an import over the same fork, a profile copy,
+    -- the M5e editor. Diffing the new rows against the old build's announced a gear change for an
+    -- edit the player had just made themselves.
+    it("forgets the gates on a repaint, so an edited build is not read as a gear change", function()
+      Display.checkGates()
+      entries = { { spell = "DIVINE_STORM" } }   -- same key, the row's gate removed by hand
+      Display.refresh()
+      assert.is_nil(Display.checkGates())
+      assert.equal(0, #said)
+    end)
+
+    it("still announces a real gear change after a repaint has re-recorded", function()
+      Display.checkGates()
+      Display.refresh()
+      Display.checkGates()
+      setBonus(true)
+      assert.is_truthy(Display.checkGates())
+    end)
+
+    -- A flavour without engraving answers false for every rune, so every rune row would be
+    -- reported dead for a reason that is not true and that the player cannot act on.
+    it("passes what the client can read down to Gates", function()
+      ns.Adapter = { capabilities = function() return { runes = false } end }
+      assert.is_false(Display.gateContext().capabilities.runes)
+      ns.Display.currentPack = function() return nil end
+      assert.is_false(Display.gateContext().capabilities.runes)
+    end)
+
+    describe("inactiveRows", function()
+      it("lists only the rows that cannot fire, with their reasons", function()
+        local rows, key = Display.inactiveRows()
+        assert.equal(1, #rows)
+        assert.equal("DIVINE_STORM", rows[1].spell)
+        assert.same({ "Divine Storm consumes Holy Power" }, rows[1].reasons)
+        assert.equal("PALADIN_EXODIN", key)
+      end)
+
+      it("lists nothing once every row is live", function()
+        setBonus(true)
+        assert.equal(0, #Display.inactiveRows())
+      end)
+
+      it("lists nothing rather than erroring with no build, no state or no Gates", function()
+        ns.Display.activeBuild = function() return nil, nil, "no pack" end
+        assert.same({}, Display.inactiveRows())
+        withGates(); setBonus(false)
+        ns.API = { GetState = function() return nil end }
+        assert.same({}, Display.inactiveRows())
+        withGates(); setBonus(false)
+        ns.Gates = nil
+        assert.same({}, Display.inactiveRows())
+      end)
+    end)
+
+    it("hands Gates the pack's own words for a set and a bonus", function()
+      local gateCtx = Display.gateContext()
+      assert.is_not_nil(gateCtx.bonuses.HOLY_POWER_CONSUME)
+      assert.is_not_nil(gateCtx.spells.DIVINE_STORM)
+      ns.Display.currentPack = function() return nil end
+      assert.same({}, Display.gateContext())
+    end)
+  end)
+
   describe("renderer errors", function()
     it("reports the same error once, not on every queue change", function()
       Display.register("broken", function() error("kaboom") end)

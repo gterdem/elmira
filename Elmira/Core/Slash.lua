@@ -304,7 +304,7 @@ end
 Slash.register{ key = "help", desc = ns.L["Show this help"], order = 0, run = helpLines }
 
 Slash.register{
-  key = "debug", args = "state|bars|swing|cues|perf|dump|queue", desc = ns.L["Diagnostics"], order = 10,
+  key = "debug", args = "state|bars|swing|cues|perf|dump|queue|gates", desc = ns.L["Diagnostics"], order = 10,
   run = function(rest)
     local sub = rest and rest:match("^(%S+)")
     if sub == "state" then
@@ -318,6 +318,23 @@ Slash.register{
         "capabilities: " .. table.concat(caps, " "),
         "state: " .. tostring(d.state),
       }
+    elseif sub == "gates" then
+      -- Which rows of the active build cannot fire for this character, and why. The same answer
+      -- the announcement gives at the moment it changes, on demand and in full.
+      if not (ns.Display and ns.Display.inactiveRows) then return { "gates: display not loaded" } end
+      local rows, key = ns.Display.inactiveRows()
+      if not key then return { "gates: no build is active." } end
+      if #rows == 0 then
+        return { string.format("gates: every row of %s is live for this character.", tostring(key)) }
+      end
+      local lines = { string.format("gates: %d row(s) of %s are not live for this character:",
+                                    #rows, tostring(key)) }
+      for _, row in ipairs(rows) do
+        lines[#lines + 1] = string.format("  %d. %s — %s", row.index,
+          tostring(row.spell or ("item " .. tostring(row.item))),
+          table.concat(row.reasons, "; "))
+      end
+      return lines
     elseif sub == "bars" then
       -- Walks the WHOLE chain, because "the bar glow does not work" has four independent causes and
       -- the old version of this command could only report the first. Counting registered providers

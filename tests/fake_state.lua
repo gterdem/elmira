@@ -11,6 +11,7 @@ function FakeState.new(t)
   s.powers = t.power or { MANA = {1000, 1000} }; s._targetType = t.targetType; s._moving = t.moving or false
   s.weapons = t.weapon or {}; s.sets = t.sets or {}; s.items = t.items or {}; s._seal = t.seal
   s.usableSet = t.usable  -- nil = everything usable
+  s.knownSet = t.known    -- nil = everything known
   s.souls = t.souls or {}; s.bonuses = t.bonuses or {}; s._swing = t.swing; s._ttd = t.ttd; s._enemies = t.enemies or 1; s._mode = t.mode or "Single"; s._inCombat = t.inCombat  -- nil = in combat (the default); false = out of combat
   s.setDefs = t.setDefs; s.bonusDefs = t.bonusDefs  -- optional: resolve bonus() from sets/souls like the adapter does
   s.enchants = t.enchants or {}   -- was read by :enchant() but never populated here, so it always returned nil
@@ -29,6 +30,7 @@ function FakeState:gcd() return self._gcd end
 function FakeState:gcdDuration() return self._gcdDuration end
 function FakeState:cooldown(key) return self.cooldowns[key] or 0 end
 function FakeState:usable(key) return self.usableSet == nil or self.usableSet[key] ~= false end
+function FakeState:known(key) return self.knownSet == nil or self.knownSet[key] ~= false end
 function FakeState:castTime(key) return self.castTimes[key] or 0 end
 function FakeState:buff(key) local b = self.buffs[key]; if b then return b.stacks or 1, b.remaining or 10 end end
 function FakeState:debuff(key, mine) local d = self.debuffs[key]; if d and (not mine or d.mine) then return d.stacks or 1, d.remaining or 10 end end

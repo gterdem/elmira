@@ -442,6 +442,45 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
 
   -- Two recordings reported combat=false on every mark, including ones taken at combat start.
   -- InCombatLockdown answers a different question and is not set when PLAYER_REGEN_DISABLED fires.
+  -- Added at M5g for Core/Gates: "have you learned this at all" is a different question from
+  -- `usable`, which is IsUsableSpell and answers false when you are merely out of mana.
+  describe("known() — the spellbook, not IsUsableSpell", function()
+    it("reports a spell the character has learned", function()
+      mock.knownSpells = { [415073] = true }
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_true(state:known("EXORCISM"))
+    end)
+
+    it("reports one they have not", function()
+      mock.knownSpells = {}
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_false(state:known("EXORCISM"))
+    end)
+
+    -- nil, not false: Gates dims a row on false, and "this client will not answer" must not dim
+    -- every row in the build.
+    it("answers nil for a key the pack does not have", function()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_nil(state:known("NOT_IN_THE_PACK"))
+    end)
+
+    it("answers nil on a client with no IsPlayerSpell at all", function()
+      local real = _G.IsPlayerSpell
+      _G.IsPlayerSpell = nil
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_nil(state:known("EXORCISM"))
+      _G.IsPlayerSpell = real
+    end)
+
+    it("answers nil rather than erroring when the call throws", function()
+      local real = _G.IsPlayerSpell
+      _G.IsPlayerSpell = function() error("no such spell") end
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_nil(state:known("EXORCISM"))
+      _G.IsPlayerSpell = real
+    end)
+  end)
+
   describe("inCombat() — the player's combat state, not UI lockdown", function()
     it("reports combat from UnitAffectingCombat", function()
       mock.affectingCombat = true
