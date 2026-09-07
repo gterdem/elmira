@@ -409,6 +409,14 @@ function NA:StartDisplay()
     ns.Overlay.Create()
     ns.Display.register("overlay", ns.Overlay.Render)
   end
+  -- The Builder's live status column (ADR-0015 amendment). A renderer rather than a timer: the one
+  -- moment the column stops being true is the moment the queue changes, which is exactly when a
+  -- renderer runs -- so the panel can say "as of the last time the queue changed" and mean it.
+  -- It costs one predicate call per queue change while the panel is shut, which is always.
+  --
+  -- Guarded like the three registrations above it, and for the same reason they are: this function
+  -- is the one place that names every optional renderer, and a spec loads it without Options.
+  if ns.Rotation then ns.Display.register("builder", ns.Rotation.onQueueChanged) end
   if self.db.profile.enabled then
     ns.Display.Enable()
   end
@@ -462,6 +470,22 @@ function NA:SetupMinimapButton()
 
   self.db.global.minimap = self.db.global.minimap or {}
   DBIcon:Register("Elmira", obj, self.db.global.minimap)
+  -- Kept so SetMinimapShown has a handle: Options never calls LibDBIcon directly, this
+  -- is the one seam.
+  self.dbIcon = DBIcon
+end
+
+-- The General page's "Show minimap button" toggle calls this rather than LibDBIcon itself. Stores
+-- the flag LibDBIcon already owns (db.global.minimap.hide, read back at the next Register/Refresh)
+-- AND pushes it onto the button that is on screen right now — storing alone would leave the icon
+-- exactly where it was until the next /reload, which is not what a toggle promises.
+function NA:SetMinimapShown(shown)
+  self.db.global.minimap = self.db.global.minimap or {}
+  self.db.global.minimap.hide = not shown
+  if self.dbIcon then
+    if shown then self.dbIcon:Show("Elmira") else self.dbIcon:Hide("Elmira") end
+  end
+  return shown
 end
 
 function NA:OnSlash(input)

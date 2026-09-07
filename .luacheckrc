@@ -38,6 +38,10 @@ local WOW_API = {
   -- `/elm debug perf`: per-addon memory, so the diagnostic can answer "is ELMIRA expensive" instead
   -- of reporting the whole client's Lua heap.
   "UpdateAddOnMemoryUsage", "GetAddOnMemoryUsage",
+  -- M5e: which frame owns the keyboard, so the Builder's live refresh never rebuilds the panel out
+  -- from under a half-typed value. Presence-checked at the call site (Vanilla.typing) rather than
+  -- assumed -- an every-frame FrameXML global is not the same promise as a documented C API.
+  "GetCurrentKeyBoardFocus",
 }
 
 -- Core is pure Lua: naming a WoW global anywhere under Elmira/Core/ is a lint ERROR, by omission.
@@ -64,7 +68,14 @@ files["Elmira/Display/"] = { read_globals = { "CreateFrame", "UIParent", "GameTo
   "SendChatMessage", "IsInGroup", "IsInRaid" } }
 files["Elmira/Setup/"] = { read_globals = { "CreateFrame", "UIParent", "UnitClass", "UnitLevel",
   "GetTalentTabInfo", "C_Engraving" } }
-files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent" } }
+files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent",
+  -- M5h, the options window's own chrome (Options.lua): the reposition button's tooltip, and
+  -- CLOSE -- the client's localised button text, which is how AceGUI's anonymous Close button is
+  -- identified (ElvUI Config.lua:1441-1447). Presentation only; no state is read through either.
+  "GameTooltip", "CLOSE",
+  -- Pass 2: a post-call hook on AceConfigDialog's own Open, filtered to our app name, so a refresh
+  -- neither Options.Open nor AceConfigDialog's pooling triggers still re-runs Options.Decorate.
+  "hooksecurefunc" } }
 
 -- Shipped class data (ADR-0011): data only, and held to Core's bar. A WoW API call here is as wrong
 -- as one in Core/ — these files are inside the core addon now, and hard rule 3 does not soften
@@ -111,5 +122,8 @@ files["tests/"] = {
     "securecallfunction", "C_Timer", "DEFAULT_CHAT_FRAME",
     "GetRealmName", "UnitName", "UnitRace", "UnitFactionGroup", "GetCurrentRegion",
     "GetCurrentRegionName", "strmatch", "ElmiraDB", "__lastFrame",
+    -- The options window's own chrome (tests/spec/options_window_spec.lua). CLOSE is the client's
+    -- localised button text, which is how AceGUI's anonymous Close button is identified.
+    "GameTooltip", "CLOSE",
   },
 }

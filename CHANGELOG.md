@@ -1,5 +1,36 @@
 # Changelog
 ## Unreleased
+- **New: the Builder checks your rotation for you.** Underneath the list, in a **Checks** box that
+  only appears when there is something to say: a line an earlier line always beats, and a line that
+  names a spell or set your class data no longer has. Both are certain rather than sampled — they
+  are read off the rotation itself, so neither can be wrong about a situation nobody thought to try
+  — and neither stops you saving. They appear while you edit, not after you save.
+- **New: when a template you forked has been updated, the panel now says what is different.** Under
+  the "has been updated since you forked it" line: which lines the template has that yours does not
+  and the other way round, which lines have different conditions, and which have moved. Your
+  rotation is never rebased over — the point is that you can read the difference and decide.
+- **Fixed: moving a line in the Builder, or switching one off, did not change the rotation you were
+  actually running until you reloaded.** The panel showed the new order, the queue kept firing the
+  old one, and nothing said anything was wrong. The compiled copy of a rotation was cached against
+  the rotation itself, and editing a line changes the rotation in place — so the cache never noticed.
+  Every edit now drops it.
+- **New: the Builder edits conditions.** Pick a line and its conditions appear underneath as rows you
+  choose from lists — category, field, test, value — with a `not` switch and a choice of whether the
+  line needs every condition or any one of them. Lines whose conditions nest more deeply than that
+  are shown in plain words and left alone rather than rewritten.
+- **New: the Builder edits a draft, and you press Save.** Reordering, switching a line off, adding
+  one from the palette and every condition change go to a draft; Save writes it and repaints the
+  display, Discard puts it back. Anything the rotation compiler cannot read is listed underneath the
+  Save button, which stays greyed out until it is fixed.
+- **New: every line says what it is doing right now.** A marker per line — firing now and in which
+  slot, not active for you (with the gear or rune it needs), waiting (with the condition it is
+  waiting for), switched off, or not saved yet — and the queue itself mirrored above the list with
+  your target, its health, the enemies around you and your mana. It refreshes when the queue
+  changes, and never while you are typing into a box.
+- **New: click a spell or an equipment slot in the palette to add it** to the bottom of the rotation
+  you are editing. `Remove` on a line takes it back out.
+- **Changed: a line now says what it waits for instead of counting.** "2 conditions" said the same
+  thing about every line that had two; it now reads "no seal is up, mana at least 30%".
 - **Fixed: Elmira's memory figure climbed by megabytes a minute while you stood still, when every
   other addon's stood flat.** The display recomputes the queue four times a second whether or not
   anything changed, and every recompute allocated about 30 KB it then threw away: the queue rebuilt

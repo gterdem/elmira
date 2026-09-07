@@ -42,6 +42,11 @@ Core\Ticker.lua
 Core\MemProbe.lua
 Core\Transition.lua
 Core\Palette.lua
+# After Palette and Gates: the editor's condition model borrows "can you press this" from one
+# and the wording of a static gate from the other, rather than keeping second copies of either.
+Core\Conditions.lua
+# Reads Schema's own KEY_SOURCE, so it follows Schema.
+Core\Diagnostics.lua
 Core\Recorder.lua
 Core\Slash.lua
 

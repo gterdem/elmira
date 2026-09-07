@@ -8,7 +8,7 @@ local mock = require("tests.wow_mock")
 -- load an ADAPTER-grade environment (tests/wow_mock.lua) AND the real vendored Ace3 libraries
 -- (Elmira/Libs/) rather than fake them. Faking AceAddon/AceEvent/AceConsole/AceTimer ourselves would
 -- mean asserting our own guess about their semantics; the real libraries are already vendored, pure
--- Lua once CreateFrame/geterrorhandler/etc. are mocked, and this is exactly the file the lint config
+-- Lua once CreateFrame/geterrorhandler/etc. are mocked, and this is exactly the file the project rules
 -- carves out the LibStub exception for.
 --
 -- What is NOT exercised here: AceAddon-3.0's own ADDON_LOADED/PLAYER_LOGIN queueing
@@ -60,9 +60,14 @@ describe("Core.Init", function()
 
     local dbicon = LibStub:NewLibrary("LibDBIcon-1.0", 1)
     dbicon.registered = {}
+    dbicon.calls = {}
     function dbicon:Register(name, obj, db)
       table.insert(self.registered, { name = name, obj = obj, db = db })
     end
+    -- SetMinimapShown's whole contract with the library, so the show/hide test can assert the call
+    -- actually reached LibDBIcon rather than only that our own flag changed.
+    function dbicon:Show(name) table.insert(self.calls, { action = "show", name = name }) end
+    function dbicon:Hide(name) table.insert(self.calls, { action = "hide", name = name }) end
     return ldb, dbicon
   end
 
@@ -689,6 +694,28 @@ describe("Core.Init", function()
       assert.same({ "register:queue", "register:overlay" }, regs)
     end)
 
+    -- The Builder's live status column (ADR-0015 amendment). A renderer, not a timer: the moment
+    -- the column stops being true is the moment the queue changes, which is when a renderer runs.
+    -- Registered here or the first time anyone opens the Builder it silently never updates.
+    it("registers the Builder as a renderer when the Rotation section is loaded", function()
+      local called = 0
+      ns.Rotation = { onQueueChanged = function() called = called + 1 end }
+      ns.Display.register = function(name, render)
+        order[#order + 1] = "register:" .. name
+        if name == "builder" then render() end
+      end
+      NA:OnInitialize()
+      NA:StartDisplay()
+      local regs = {}
+      for _, e in ipairs(order) do
+        if e:match("^register:") then regs[#regs + 1] = e end
+      end
+      assert.same({ "register:queue", "register:overlay", "register:builder" }, regs)
+      -- Registered by REFERENCE, not by a name looked up later: the function the driver holds has
+      -- to be the one that actually refreshes the panel.
+      assert.equal(1, called)
+    end)
+
     it("registers only the queue when no Overlay module is present", function()
       ns.Overlay = nil
       NA:OnInitialize()
@@ -865,6 +892,41 @@ describe("Core.Init", function()
       local ok = pcall(function() NA:StartDisplay() end)
       assert.is_true(ok)
       assert.is_nil(NA.db.global.minimap)
+    end)
+  end)
+
+  -- D17: Options never touches LibDBIcon directly. This is the one seam it calls
+  -- through, so the tests live where the seam lives rather than in options_spec.lua.
+  describe("SetMinimapShown", function()
+    it("hides the button and stores the flag LibDBIcon owns", function()
+      local _, dbicon = installMinimapLibs()
+      NA:OnInitialize()
+      NA:StartDisplay()
+
+      assert.is_false(NA:SetMinimapShown(false))
+      assert.is_true(NA.db.global.minimap.hide)
+      assert.same({ { action = "hide", name = "Elmira" } }, dbicon.calls)
+    end)
+
+    it("shows the button and clears the flag", function()
+      local _, dbicon = installMinimapLibs()
+      NA:OnInitialize()
+      NA:StartDisplay()
+
+      NA:SetMinimapShown(false)
+      assert.is_true(NA:SetMinimapShown(true))
+      assert.is_false(NA.db.global.minimap.hide)
+      assert.same(
+        { { action = "hide", name = "Elmira" }, { action = "show", name = "Elmira" } },
+        dbicon.calls)
+    end)
+
+    it("still stores the flag when neither library is present, without erroring", function()
+      NA:OnInitialize()
+      NA:StartDisplay()
+      local ok = pcall(function() NA:SetMinimapShown(false) end)
+      assert.is_true(ok)
+      assert.is_true(NA.db.global.minimap.hide)
     end)
   end)
 end)

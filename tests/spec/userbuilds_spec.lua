@@ -20,6 +20,10 @@ describe("Core.UserBuilds", function()
     helper.load("Elmira/Core/Schema.lua")
     Serialize = helper.load("Elmira/Core/Serialize.lua")
     UserBuilds = helper.load("Elmira/Core/UserBuilds.lua")
+    -- Core/Slash.lua owns `ns.compileBuild` and its cache, which every edit below has to
+    -- invalidate. Loaded for real rather than faked: the whole defect these tests pin is that the
+    -- two files disagreed about when a compilation stops being valid.
+    helper.load("Elmira/Core/Slash.lua")
     local LS, LD = loadCodec()
     Serialize.use{ serializer = LS, deflate = LD }
     pack = helper.classPack("Paladin")
@@ -138,122 +142,173 @@ describe("Core.UserBuilds", function()
 
   -- Priority order IS the rotation (F1: the first passing entry is the suggestion), so these are the
   -- most consequential edits the Builder offers.
-  describe("moveEntry() and setEntryDisabled()", function()
+  -- The Builder's Save (M5e step 4). It writes the whole line list at once because the panel edits a
+  -- DRAFT: a half-applied save would leave a rotation that is neither what was stored nor what is on
+  -- screen, and nothing would say so.
+  describe("replaceEntries()", function()
     local key
     before_each(function() key = UserBuilds.fork(pack, "PALADIN_EXODIN", {}) end)
 
-    -- `e.spell or item:N`, never `e.spell` alone: an entry that binds to an inventory slot has no
-    -- spell, and appending nil silently shortens the list -- which made this helper disagree with
-    -- the real entry count and the off-the-end assertions pass for the wrong reason.
-    local function spellsOf()
-      local out = {}
-      for _, e in ipairs(UserBuilds.find(pack, key).entries) do
-        out[#out + 1] = e.spell or ("item:" .. tostring(e.item))
-      end
-      return out
+    local function entriesOf()
+      return UserBuilds.find(pack, key).entries
     end
 
-    it("swaps a line with the one above it", function()
-      local before = spellsOf()
-      assert.is_true(UserBuilds.moveEntry(pack, key, 2, -1))
-      local after = spellsOf()
-      assert.equal(before[2], after[1])
-      assert.equal(before[1], after[2])
-      assert.equal(#before, #after)
+    it("writes the whole list, in the order it was handed", function()
+      local ok = UserBuilds.replaceEntries(pack, key, {
+        { spell = "EXORCISM" },
+        { spell = "CONSECRATION", when = { { "resource", "MANA", minPct = 40 } } },
+      })
+      assert.is_true(ok)
+      local entries = entriesOf()
+      assert.equal(2, #entries)
+      assert.equal("EXORCISM", entries[1].spell)
+      assert.equal("CONSECRATION", entries[2].spell)
+      assert.same({ { "resource", "MANA", minPct = 40 } }, entries[2].when)
     end)
 
-    it("swaps a line with the one below it", function()
-      local before = spellsOf()
-      assert.is_true(UserBuilds.moveEntry(pack, key, 1, 1))
-      assert.equal(before[1], spellsOf()[2])
+    -- The Builder hangs `src` -- the saved position a draft row came from -- on every row it holds.
+    -- `Schema.exportable` copies every field an entry has, so anything left here travels out in the
+    -- next ELM1 string to whoever the rotation is shared with.
+    it("strips the editor's own bookkeeping instead of storing it", function()
+      assert.is_true(UserBuilds.replaceEntries(pack, key, {
+        { spell = "EXORCISM", src = 7, selected = true },
+      }))
+      local entry = entriesOf()[1]
+      assert.equal("EXORCISM", entry.spell)
+      assert.is_nil(entry.src)
+      assert.is_nil(entry.selected)
+      local exported = ns.Schema.exportable(UserBuilds.find(pack, key))
+      assert.is_nil(exported.entries[1].src)
+      assert.is_truthy(UserBuilds.exportKey(pack, key))
     end)
 
-    it("refuses to move off either end rather than dropping the line", function()
-      local before = spellsOf()
-      assert.is_false(UserBuilds.moveEntry(pack, key, 1, -1))
-      assert.is_false(UserBuilds.moveEntry(pack, key, #before, 1))
-      assert.is_false(UserBuilds.moveEntry(pack, key, 0, 1))
-      assert.is_false(UserBuilds.moveEntry(pack, key, #before + 1, -1))
-      assert.same(before, spellsOf())
+    -- A whitelist can only be right if it names every field the FORMAT has. The shipped pack is the
+    -- authority on that, and this is what makes adding a field to docs/03 fail here rather than
+    -- silently dropping it on the first save anyone makes.
+    it("keeps every field the shipped builds author", function()
+      local used = {}
+      for _, build in pairs(pack.builds) do
+        for _, entry in ipairs(build.entries) do
+          for field in pairs(entry) do used[field] = true end
+        end
+      end
+      used.disabled = true -- written by the enable toggle, never by an author
+      local kept = {}
+      for _, field in ipairs(UserBuilds.ENTRY_FIELDS) do kept[field] = true end
+      local dropped = {}
+      for field in pairs(used) do
+        if not kept[field] then dropped[#dropped + 1] = field end
+      end
+      table.sort(dropped)
+      assert.same({}, dropped)
+      -- And it really does carry them, rather than merely listing them.
+      assert.is_true(UserBuilds.replaceEntries(pack, key, {
+        { spell = "EXORCISM", label = "opener", hold = true, disabled = true },
+        { item = 13, when = { { "item_ready", 13 } } },
+      }))
+      local entries = entriesOf()
+      assert.equal("opener", entries[1].label)
+      assert.is_true(entries[1].hold)
+      assert.is_true(entries[1].disabled)
+      assert.equal(13, entries[2].item)
     end)
 
-    -- A template is read-only (ADR-0005, hard rule 7). The Builder must not be the one place that
-    -- can quietly write to one.
-    it("refuses to edit a shipped template, and says why", function()
-      local ok, why = UserBuilds.moveEntry(pack, "PALADIN_EXODIN", 1, 1)
+    -- Copies, not references: a draft that shared its `when` tables with the stored build would
+    -- change the saved rotation on every keystroke, and Discard could not put it back.
+    it("copies the lines it is handed, all the way down", function()
+      local when = { { "resource", "MANA", minPct = 40 } }
+      local handed = { { spell = "CONSECRATION", when = when } }
+      assert.is_true(UserBuilds.replaceEntries(pack, key, handed))
+      when[1].minPct = 90
+      handed[1].spell = "EXORCISM"
+      local entry = entriesOf()[1]
+      assert.equal("CONSECRATION", entry.spell)
+      assert.equal(40, entry.when[1].minPct)
+    end)
+
+    -- All of it lands or none of it does. A half-applied save leaves a rotation that is neither
+    -- what was stored nor what is on screen.
+    it("refuses the whole save when one line is bad, and says which", function()
+      local before = entriesOf()
+      local ok, reasons = UserBuilds.replaceEntries(pack, key, {
+        { spell = "EXORCISM" },
+        { spell = "NOT_A_REAL_SPELL" },
+      })
       assert.is_false(ok)
-      assert.equal("not one of your rotations", why)
-      ok, why = UserBuilds.setEntryDisabled(pack, "PALADIN_EXODIN", 1, true)
-      assert.is_false(ok)
-      assert.equal("not one of your rotations", why)
-      assert.is_false(UserBuilds.moveEntry(pack, "USER_NOT_A_THING", 1, 1))
-      -- The template itself is untouched, which is the point (ADR-0005, hard rule 7).
-      assert.is_nil(pack.builds.PALADIN_EXODIN.entries[1].disabled)
+      assert.equal("table", type(reasons))
+      assert.is_true(#reasons > 0)
+      assert.is_truthy(table.concat(reasons, " "):find("NOT_A_REAL_SPELL", 1, true))
+      assert.is_truthy(table.concat(reasons, " "):find("entry 2", 1, true))
+      assert.equal(before, entriesOf(), "the stored rotation must be untouched")
     end)
 
-    -- Structural, not incidental: a template key is refused because it is not a USER_ key, rather
-    -- than because templates happen not to live in db.global.userBuilds.
-    -- db.global is shared across every character on the account, so the class check is what stops
-    -- a mage reordering a paladin's rotation. The key prefix alone cannot tell them apart.
-    it("refuses a fork belonging to another class", function()
+    it("refuses a line with a condition the compiler cannot read", function()
+      local ok, reasons = UserBuilds.replaceEntries(pack, key, {
+        { spell = "EXORCISM", when = { { "no_such_condition" } } },
+      })
+      assert.is_false(ok)
+      assert.is_truthy(table.concat(reasons, " "):find("no_such_condition", 1, true))
+    end)
+
+    it("refuses an empty rotation rather than storing one nothing can run", function()
+      local ok, reasons = UserBuilds.replaceEntries(pack, key, {})
+      assert.is_false(ok)
+      assert.is_truthy(table.concat(reasons, " "):find("non-empty", 1, true))
+    end)
+
+    -- Every refusal answers with a LIST, so a caller can print the reasons without asking which
+    -- shape it got back.
+    it("refuses a template, a foreign class and a rotation that is not a list", function()
+      local function reasonsFor(...)
+        local ok, reasons = UserBuilds.replaceEntries(...)
+        assert.is_false(ok)
+        assert.equal("table", type(reasons))
+        return table.concat(reasons, " ")
+      end
+      assert.equal("not one of your rotations",
+                   reasonsFor(pack, "PALADIN_EXODIN", { { spell = "EXORCISM" } }))
       db.global.userBuilds.USER_MAGE_THING =
         { build = { entries = { { spell = "FIREBALL" } } }, class = "MAGE", name = "Mage" }
-      local ok, why = UserBuilds.moveEntry(pack, "USER_MAGE_THING", 1, 1)
-      assert.is_false(ok)
-      assert.equal("not one of your rotations", why)
-      assert.is_false(UserBuilds.setEntryDisabled(pack, "USER_MAGE_THING", 1, true))
+      assert.equal("not one of your rotations",
+                   reasonsFor(pack, "USER_MAGE_THING", { { spell = "EXORCISM" } }))
+      assert.is_truthy(reasonsFor(pack, key, "not a list"):find("list of lines", 1, true))
+      assert.is_truthy(reasonsFor(pack, key, { "not a line" }):find("line 1", 1, true))
+      -- Without the pack's tables Schema cannot check a single symbolic key, so a rotation naming
+      -- spells that do not exist would be accepted and fail much later as an empty queue.
+      assert.is_truthy(reasonsFor(nil, key, { { spell = "EXORCISM" } }):find("data pack", 1, true))
+      assert.equal("PALADIN_EXODIN", pack.builds.PALADIN_EXODIN.key)
     end)
 
-    it("refuses any key that is not one of the user's own", function()
-      assert.is_false(UserBuilds.moveEntry(pack, "PALADIN_EXODIN", 1, 1))
-      assert.is_false(UserBuilds.moveEntry(pack, nil, 1, 1))
-      assert.is_false(UserBuilds.moveEntry(pack, 42, 1, 1))
-      assert.is_false(UserBuilds.setEntryDisabled(pack, "NOT_PREFIXED", 1, true))
-    end)
-
-    -- A fork whose build survived import with no entries -- possible for a hand-edited or truncated
-    -- string. It is still YOURS, so the refusal has to say something different from "not one of
-    -- your rotations", or the panel would tell you a rotation you are looking at is not yours.
-    it("distinguishes an empty rotation from one that is not yours", function()
-      db.global.userBuilds.USER_EMPTY = { build = { key = "USER_EMPTY" }, class = pack.class,
-                                          name = "Empty" }
-      local ok, why = UserBuilds.moveEntry(pack, "USER_EMPTY", 1, 1)
-      assert.is_false(ok)
-      assert.equal("that rotation has no lines", why)
-      assert.is_false(UserBuilds.setEntryDisabled(pack, "USER_EMPTY", 1, true))
-    end)
-
-    it("says why when a line is out of range", function()
-      local ok, why = UserBuilds.moveEntry(pack, key, 1, -1)
-      assert.is_false(ok)
-      assert.equal("out of range", why)
-      ok, why = UserBuilds.setEntryDisabled(pack, key, 99, true)
-      assert.is_false(ok)
-      assert.equal("out of range", why)
-    end)
-
-    it("turns a line off and on again", function()
-      assert.is_true(UserBuilds.setEntryDisabled(pack, key, 1, true))
-      assert.is_true(UserBuilds.find(pack, key).entries[1].disabled)
-      assert.is_true(UserBuilds.setEntryDisabled(pack, key, 1, false))
-      -- nil, not false: Schema.compile and Schema.exportable both test truthiness, and an exported
-      -- build carrying `disabled = false` on every line is noise that travels to whoever imports it.
-      assert.is_nil(UserBuilds.find(pack, key).entries[1].disabled)
-    end)
-
-    it("refuses a line that is not there", function()
-      assert.is_false(UserBuilds.setEntryDisabled(pack, key, 99, true))
-    end)
-
-    -- The point of the checkbox: a disabled line must actually leave the rotation.
-    it("a disabled line is skipped when the build compiles", function()
+    -- The pre-existing defect this step exists to end, and this project's characteristic shape
+    -- exactly: the panel did the edit, the store held the new rotation, and the DISPLAY went on
+    -- running the compilation it had taken before it -- because `ns.compileBuild` caches on the
+    -- build table and the write mutates that table in place, so the cached entry never stops
+    -- looking valid. Silent until the next /reload. `Display.refresh()` does not help: it drops
+    -- the painted queue and then asks `activeBuild()`, which reads straight back out of the cache.
+    it("changes what the live queue compiles to", function()
       local build = UserBuilds.find(pack, key)
-      local before = #ns.Schema.compile(build, { spells = pack.spells, sets = pack.sets,
-        souls = pack.souls, bonuses = pack.bonuses }).entries
-      UserBuilds.setEntryDisabled(pack, key, 1, true)
-      local after = #ns.Schema.compile(build, { spells = pack.spells, sets = pack.sets,
-        souls = pack.souls, bonuses = pack.bonuses }).entries
-      assert.equal(before - 1, after)
+      local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls,
+                    bonuses = pack.bonuses }
+      assert.is_true(#ns.compileBuild(build, ctx).entries > 1)
+      assert.is_true(UserBuilds.replaceEntries(pack, key, { { spell = "EXORCISM" } }))
+      local compiled = ns.compileBuild(build, ctx)
+      assert.equal(1, #compiled.entries)
+      assert.equal("EXORCISM", compiled.entries[1].spell)
+    end)
+
+    -- A refused save changed nothing, so it must not throw the compilation away either -- and the
+    -- nil build a refusal carries is what `ns.forgetCompiled` has to answer for rather than raise
+    -- on (indexing a table with nil is an error in Lua).
+    it("leaves the cache alone when the save is refused", function()
+      local build = UserBuilds.find(pack, key)
+      local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls,
+                    bonuses = pack.bonuses }
+      local compiled = ns.compileBuild(build, ctx)
+      assert.is_false(UserBuilds.replaceEntries(pack, key, {}))
+      assert.equal(compiled, ns.compileBuild(build, ctx))
+      assert.is_false(ns.forgetCompiled(nil))
+      assert.is_true(ns.forgetCompiled(build))
+      assert.are_not.equal(compiled, ns.compileBuild(build, ctx))
     end)
   end)
 

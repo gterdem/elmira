@@ -103,6 +103,38 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
     end)
   end)
 
+  -- What the Builder's live refresh asks before it rebuilds the options panel. Every AceConfig
+  -- `set` rebuilds the whole table and an AceGUI EditBox commits only on Enter, so a refresh that
+  -- lands mid-keystroke silently discards a half-typed condition value.
+  describe("typing()", function()
+    local saved
+    before_each(function() saved = _G.GetCurrentKeyBoardFocus end)
+    after_each(function() _G.GetCurrentKeyBoardFocus = saved end)
+
+    it("answers whether a frame currently owns the keyboard", function()
+      _G.GetCurrentKeyBoardFocus = function() return { "an edit box" } end
+      assert.is_true(Vanilla.typing())
+      _G.GetCurrentKeyBoardFocus = function() return nil end
+      assert.is_false(Vanilla.typing())
+    end)
+
+    -- A FrameXML global, not a documented C API. A client without it must degrade to "not typing"
+    -- -- the panel refreshes a little too eagerly -- rather than erroring out of the render loop.
+    it("answers false, not an error, on a client that does not have the global", function()
+      _G.GetCurrentKeyBoardFocus = nil
+      assert.is_false(Vanilla.typing())
+    end)
+
+    -- Never nil. The caller inverts it (`not typing` means "go ahead and repaint"), and a nil that
+    -- reads as false there is a different claim from a false that was measured.
+    it("always answers a boolean", function()
+      _G.GetCurrentKeyBoardFocus = function() return nil end
+      assert.equal("boolean", type(Vanilla.typing()))
+      _G.GetCurrentKeyBoardFocus = nil
+      assert.equal("boolean", type(Vanilla.typing()))
+    end)
+  end)
+
   -- ============================================================ 1. baseCooldown / GCD filtering
   -- The headline finding (docs/07 §9.1, §9.10): GetSpellBaseCooldown is a dead end (15000 ms in
   -- every gear state); the real value comes from observing GetSpellCooldown when the spell is

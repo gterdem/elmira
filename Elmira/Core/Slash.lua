@@ -55,6 +55,24 @@ function ns.compileBuild(build, ctx)
   return compiled, errors
 end
 
+-- Drop one build's cached compilation. The cache is keyed on the build TABLE, and every edit the
+-- Builder makes -- moving a line, switching one off, saving new conditions -- mutates that same
+-- table in place, so nothing about it changes identity and the hit stays valid for ever. The queue
+-- therefore kept running the compilation taken before the edit until the next /reload: the panel
+-- said the line had moved, the strip disagreed, and neither said anything was wrong.
+--
+-- Core/UserBuilds calls this from every edit rather than the Builder remembering to. A design where
+-- the caller must invalidate someone else's memory gets forgotten eventually, and gets forgotten
+-- silently (Display/Overlay.Reset, the same mistake one milestone earlier).
+function ns.forgetCompiled(build)
+  -- A nil build is a caller whose lookup failed, not a programming error; answering false is what
+  -- lets an edit path call this unconditionally instead of guarding at every site. Indexing a table
+  -- with nil is a raised error in Lua, so without this the invalidation is what takes the edit down.
+  if build == nil then return false end
+  compileCache[build] = nil
+  return true
+end
+
 -- Which buffs this pack's builds actually ask about, walked out of their conditions. Recording every
 -- aura on the player would be huge and mostly noise; recording none is why the third and fourth
 -- recordings could not explain a single verdict -- whether the seal was up had to be inferred
@@ -966,9 +984,12 @@ Slash.register{
     return lines
   end,
 }
-Slash.register{ key = "sim", desc = ns.L["Export to WoWSims"], order = 104, run = unavailableNamed("sim", "5c") }
-Slash.register{ key = "history", desc = ns.L["Encounter history"], order = 105, run = unavailableNamed("history", "5f") }
-Slash.register{ key = "rotdiag", desc = ns.L["Paste-friendly diagnostic snapshot"], order = 106, run = unavailableNamed("rotdiag", "5a") }
+Slash.register{ key = "sim", desc = ns.L["Export to WoWSims"], order = 104, available = false,
+                run = unavailableNamed("sim", "5c") }
+Slash.register{ key = "history", desc = ns.L["Encounter history"], order = 105, available = false,
+                run = unavailableNamed("history", "5f") }
+Slash.register{ key = "rotdiag", desc = ns.L["Paste-friendly diagnostic snapshot"], order = 106,
+                available = false, run = unavailableNamed("rotdiag", "5a") }
 
 local function find(key)
   for _, e in ipairs(entries) do
@@ -978,6 +999,21 @@ end
 
 function Slash.help()
   return helpLines()
+end
+
+-- Rows for the General page's read-only command list: key + one-line desc, for every command that
+-- actually runs something right now. `available` defaults to true so an ordinary entry needs no
+-- flag; the three `unavailableNamed` placeholders (sim, history, rotdiag) set it false so a settings
+-- panel never advertises a command that only prints "not available yet". Options.lua reads this
+-- instead of walking `entries` itself, so the list on screen can never drift from what `/elm` offers.
+function Slash.availableEntries()
+  local out = {}
+  for _, e in ipairs(entries) do
+    if e.available ~= false then
+      out[#out + 1] = { key = e.key, desc = e.desc }
+    end
+  end
+  return out
 end
 
 -- Never throws: an unrecognised or empty command returns exactly one designed line.

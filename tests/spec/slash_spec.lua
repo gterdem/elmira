@@ -134,6 +134,40 @@ describe("Core.Slash", function()
     assert.is_true(hasLineMatching(Slash.run(""), "debug"))
   end)
 
+  -- Options.lua's General page reads this instead of walking `entries` itself: it is what keeps the
+  -- panel's list from drifting away from what `/elm` actually offers.
+  describe("Slash.availableEntries", function()
+    it("lists every command except the unavailableNamed placeholders", function()
+      local rows = Slash.availableEntries()
+      local keys = {}
+      for _, r in ipairs(rows) do keys[r.key] = r.desc end
+      assert.is_string(keys.help)
+      assert.is_string(keys.rotation)
+      assert.is_nil(keys.sim, "sim is not available yet and must not be listed")
+      assert.is_nil(keys.history, "history is not available yet and must not be listed")
+      assert.is_nil(keys.rotdiag, "rotdiag is not available yet and must not be listed")
+    end)
+
+    -- /elm help lists every command, including the unavailableNamed placeholders; availableEntries
+    -- must appear as a SUBSEQUENCE of it, in the same order, or a command that moves in the
+    -- registration order would silently reorder on one list and not the other.
+    it("keeps the same relative order as /elm help, for the entries it lists", function()
+      local order = {}
+      for _, line in ipairs(Slash.help()) do
+        local verb = line:match("^%s%s(%S+)")
+        if verb then order[#order + 1] = verb end
+      end
+      local listed = {}
+      for _, r in ipairs(Slash.availableEntries()) do listed[#listed + 1] = r.key end
+      assert.is_true(#listed > 0)
+      local matched = 0
+      for _, verb in ipairs(order) do
+        if listed[matched + 1] == verb then matched = matched + 1 end
+      end
+      assert.equal(#listed, matched, "availableEntries drifted from /elm help's own order")
+    end)
+  end)
+
   it("empty input and 'help' produce byte-identical output (fixed order, never pairs())", function()
     local a = table.concat(Slash.run(""), "\n")
     local b = table.concat(Slash.run("help"), "\n")

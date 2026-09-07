@@ -94,19 +94,43 @@ function Display.activeBuild()
   return compiled, key, reason
 end
 
--- Which rows of the active build cannot fire for this character, and why. The Builder dims these
--- (M5e) and `/elm debug gates` prints them; the announcement below is the same answer, said once,
--- at the moment it changes.
-function Display.inactiveRows()
+-- Display.gateRows() -> compiled, rows, key
+--
+-- ALL the rows, active and not, in the compiled build's own order. The Builder needs the whole list
+-- because its per-row status has to distinguish "this row cannot fire for you" from "this row is
+-- fine and simply is not first right now", and only the second half of that is in `inactiveRows`.
+--
+-- Row i belongs to SAVED entry `compiled.entries[i].index`, not to saved entry i: `Schema.compile`
+-- skips disabled entries and records the position it came from. A caller that maps by ordinal puts
+-- every status one row out as soon as a line is switched off.
+function Display.gateRows()
   local compiled, key = Display.activeBuild()
-  if not (compiled and ns.Gates) then return {}, key end
+  if not (compiled and ns.Gates) then return nil, {}, key end
   -- A nil state needs no guard of its own: Gates.evaluate answers with no rows for one.
   local state = ns.API and ns.API.GetState()
+  return compiled, ns.Gates.evaluate(compiled, state, Display.gateContext()), key
+end
+
+-- Which rows of the active build cannot fire for this character, and why. `/elm debug gates` prints
+-- these and Display.checkGates announces the moment the set changes; the Builder wants gateRows
+-- instead, because it draws the active ones too.
+function Display.inactiveRows()
+  local _, rows, key = Display.gateRows()
   local out = {}
-  for _, row in ipairs(ns.Gates.evaluate(compiled, state, Display.gateContext())) do
+  for _, row in ipairs(rows) do
     if not row.active then out[#out + 1] = row end
   end
   return out, key
+end
+
+-- The queue exactly as it is on screen, or nil while the display is hidden -- which is most of a
+-- session, and is a real answer rather than a missing one ("no target, out of combat").
+--
+-- Only valid for the CURRENT render. `Display.tick` alternates between two buffers, so the table
+-- this returns is refilled two queue changes from now; a caller reads it fresh each time it draws
+-- and never keeps it.
+function Display.currentQueue()
+  return lastQueue
 end
 
 -- The pack tables Core/Gates needs to turn a condition into a sentence: a set's name, a bonus's

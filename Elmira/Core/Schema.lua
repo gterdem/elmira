@@ -264,6 +264,10 @@ C.custom = {
 }
 
 ns.__schemaConditions = C -- exposed for the spec's coverage check against docs/02
+-- Exposed for Core/Diagnostics, which has to ask "does this key still exist in the pack?" for the
+-- same kinds this table governs. A second copy over there would answer correctly right up until a
+-- key-taking condition type was added, and then it would quietly stop checking the new one.
+ns.__schemaKeySource = KEY_SOURCE
 
 -- ---------------------------------------------------------------- compilation
 -- `condLabel` is forward-declared here rather than at its definition below because Schema.compileWhen

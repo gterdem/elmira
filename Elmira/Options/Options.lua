@@ -93,13 +93,13 @@ local function barRows()
     local mark = (r.state == "active") and "|cff40c057>>|r" or "|cff9AA0A6--|r"
     local grey = (r.state == "absent") and "|cff9AA0A6" or "|cffFFFFFF"
     args["row" .. order] = {
-      type = "description", order = order, width = "full",
+      type = "description", fontSize = "medium", order = order, width = "full",
       name = string.format("%s %s%s|r  |cff9AA0A6%s|r", mark, grey, label, state),
     }
     if r.state == "active" and BAR_BLURB[r.name] then
       order = order + 1
       args["blurb" .. order] = {
-        type = "description", order = order, width = "full",
+        type = "description", fontSize = "medium", order = order, width = "full",
         name = "      |cff9AA0A6" .. L[BAR_BLURB[r.name]] .. "|r",
       }
     end
@@ -318,10 +318,10 @@ local CHECK_MARKS = setmetatable(
 local function checkRows()
   local key = Options.checkSpell()
   if not key then
-    return { none = { type = "description", order = 1, width = "full",
+    return { none = { type = "description", fontSize = "medium", order = 1, width = "full",
                       name = L["Nothing is being suggested right now, so there is nothing to check."] } }
   end
-  local args = { header = { type = "description", order = 0, width = "full",
+  local args = { header = { type = "description", fontSize = "medium", order = 0, width = "full",
                             name = string.format(L["Checking %s:"], spellLabel(key)) } }
   for i, r in ipairs((ns.BarGlow and type(ns.BarGlow.check) == "function" and ns.BarGlow.check(key)) or {}) do
     -- Glyph AND colour, never colour alone: red/green is the first thing to go for a colour-blind
@@ -329,7 +329,7 @@ local function checkRows()
     local look = CHECK_MARKS[r.ok]
     local mark, colour = look[1], look[2]
     args["row" .. i] = {
-      type = "description", order = i, width = "full",
+      type = "description", fontSize = "medium", order = i, width = "full",
       name = string.format("%s%s|r %s  |cff9AA0A6%s|r",
         colour, mark, L[CHECK_LABELS[r.label] or r.label], checkDetail(r)),
     }
@@ -341,7 +341,7 @@ local function actionBarsGroup()
   previewNote = ""
   return {
     intro = {
-      type = "description", order = 0, width = "full",
+      type = "description", fontSize = "medium", order = 0, width = "full",
       name = L["Elmira glows the button holding your next suggested spell."],
     },
     bars = {
@@ -364,7 +364,7 @@ local function actionBarsGroup()
       func = function() Options.previewGlow() end,
     },
     previewNote = {
-      type = "description", order = 4, width = "full",
+      type = "description", fontSize = "medium", order = 4, width = "full",
       name = function() return previewNote end,
     },
     check = {
@@ -388,14 +388,14 @@ local function overlayGroup()
   local cues = ns.Overlay and ns.Overlay.availableCues() or {}
   if #cues == 0 then
     args.none = {
-      type = "description", order = 1,
+      type = "description", fontSize = "medium", order = 1,
       name = L["This build suggests no peripheral cues."],
     }
     return args
   end
 
   args.header = {
-    type = "description", order = 0,
+    type = "description", fontSize = "medium", order = 0,
     name = L["Screen-edge flares for the moments you are not looking at the UI. Off unless you turn one on."],
   }
 
@@ -556,7 +556,7 @@ local function announceGroup()
   local dropped = (A and A.dropped()) or 0
   if dropped > 0 then
     args.logDropped = {
-      type = "description", order = 29,
+      type = "description", fontSize = "medium", order = 29,
       name = ns.Colors.wrap(ns.Colors.MUTED,
         string.format(L["%d older line(s) have been dropped."], dropped)),
     }
@@ -564,14 +564,14 @@ local function announceGroup()
   local rows = (A and A.log(LOG_LINES)) or {}
   if #rows == 0 then
     args.logEmpty = {
-      type = "description", order = 2,
+      type = "description", fontSize = "medium", order = 2,
       name = ns.Colors.wrap(ns.Colors.MUTED, L["Nothing yet."]),
     }
   end
   for i, row in ipairs(rows) do
     local cat = A.category(row.category)
     args["log" .. i] = {
-      type = "description", order = 1 + i,
+      type = "description", fontSize = "medium", order = 1 + i,
       name = ns.Colors.wrap(ns.Colors.MUTED, (cat and cat.label) or row.category) .. "  " ..
              ns.Colors.wrap((cat and ns.Colors[cat.color]) or ns.Colors.MUTED, A.plain(row.text)),
     }
@@ -662,9 +662,16 @@ local function announceGroup()
     get = function() return profile().announce.sound end,
     set = function(_, v) profile().announce.sound = v end,
   }
+  -- Locking on the General page also ends move mode (see `locked.set`), but the toggle still has
+  -- to say why it refuses to turn back on rather than silently doing nothing while locked.
+  local function positionsLocked() return ns.Queue and ns.Queue.isLocked() == true end
   args.move = {
     type = "toggle", order = 66, name = L["Move the on-screen message"],
-    desc = L["Shows one sample of every kind so you can see how tall it gets, and lets you drag it."],
+    desc = function()
+      if positionsLocked() then return L["Unlock all positions on the General page first."] end
+      return L["Shows one sample of every kind so you can see how tall it gets, and lets you drag it."]
+    end,
+    disabled = positionsLocked,
     get = function() return ns.Announcers and ns.Announcers.isMoving() or false end,
     set = function(_, v) if ns.Announcers then ns.Announcers.SetMoving(v) end end,
   }
@@ -687,13 +694,437 @@ local function announceGroup()
   return args
 end
 
+-- ============================================================ The options window itself
+--
+-- AceConfigDialog hands us AceGUI's stock Frame: 700x500, a 100px drag tab floating in the middle of
+-- the title bar, a Close button at the bottom right, and no memory of where it was left. This
+-- section is the window's own chrome -- the size and scale it opens at, a full-width drag bar
+-- carrying the version, an X where every other addon puts one, and a way back when it ends up off
+-- screen or too big to reach.
+--
+-- Everything here re-runs after EVERY Open and has to be idempotent. AceConfigDialog pools its
+-- frames and calls SetTitle/SetStatusTable on each open, so decoration applied once is undone the
+-- second time -- and a button created without a guard is created again on top of the first.
+
+-- ElvUI's floor and margin (Config.lua:664-676). The margin matters: a window resizable to exactly
+-- the screen has no grab handle left on it.
+local WINDOW_MIN_W, WINDOW_MIN_H, WINDOW_MARGIN = 800, 560, 50
+local SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.9, 1.4, 0.05
+-- Every one of AceGUI's three title-bar textures is file id 131080, and only the middle one is
+-- exposed on the widget (`titlebg`). The two end caps are locals, so they are found by texture id
+-- and told apart from the middle one by identity (AceGUIContainer-Frame.lua:223-250).
+local TITLE_TEXTURE = 131080
+
+local function windowDefaults()
+  return (ns.DB and ns.DB.defaults.global.window) or {}
+end
+
+-- Account-wide (Core/DB.lua): a window's size and place belong to the screen, not the character.
+local function windowDB()
+  local g = ns.db and ns.db.global
+  if not g then return nil end
+  if not g.window then g.window = {} end
+  return g.window
+end
+
+local function clampScale(v)
+  if type(v) ~= "number" then return windowDefaults().scale or 1 end
+  if v < SCALE_MIN then return SCALE_MIN end
+  if v > SCALE_MAX then return SCALE_MAX end
+  return v
+end
+
+function Options.windowScale()
+  local w = windowDB()
+  return clampScale(w and w.scale)
+end
+
+-- The open STANDALONE panel's AceGUI widget. The Blizzard-embedded copy is deliberately not here:
+-- it is a page inside Blizzard's own window, with no frame of ours to size, move, scale or close.
+local function openWidget()
+  local d = Options.dialog
+  return d and d.OpenFrames and d.OpenFrames.Elmira or nil
+end
+
+-- Push db.global.window onto the frame that is open right now. Scale FIRST: every measurement below
+-- is in the frame's own coordinates, which SetScale changes underneath them.
+function Options.ApplyWindow()
+  local widget = openWidget()
+  local frame = widget and widget.frame
+  if not frame then return false end
+  local w = windowDB() or {}
+  local defaults = windowDefaults()
+
+  frame:SetScale(Options.windowScale())
+  -- SetScale scales about the frame's current anchor, so a window the user has dragged near the top
+  -- walks its own title bar off the screen as it grows -- and the title bar is the only thing you
+  -- can drag it back by. Clamping is what makes the scale slider safe to drag.
+  frame:SetClampedToScreen(true)
+
+  local maxW, maxH = 1024, 768
+  if UIParent and UIParent.GetWidth then
+    maxW, maxH = UIParent:GetWidth() or maxW, UIParent:GetHeight() or maxH
+  end
+  -- SetResizeBounds replaced SetMinResize/SetMaxResize in 10.0 and Classic Era has been given it in
+  -- stages, so ask the frame which one it has rather than the client which version it is.
+  if frame.SetResizeBounds then
+    frame:SetResizeBounds(WINDOW_MIN_W, WINDOW_MIN_H, maxW - WINDOW_MARGIN, maxH - WINDOW_MARGIN)
+  elseif frame.SetMinResize then
+    frame:SetMinResize(WINDOW_MIN_W, WINDOW_MIN_H)
+    frame:SetMaxResize(maxW - WINDOW_MARGIN, maxH - WINDOW_MARGIN)
+  end
+
+  local status = widget.status or widget.localstatus
+  if not status then return true end
+  status.width = w.width or defaults.width
+  status.height = w.height or defaults.height
+  -- `false`, not nil, is what "never positioned" looks like on disk (Core/DB.lua), and AceGUI reads
+  -- nil as "centre me" (AceGUIContainer-Frame.lua:151-157). The two spellings meet here.
+  status.top = (w.top ~= false) and w.top or nil
+  status.left = (w.left ~= false) and w.left or nil
+  if widget.ApplyStatus then widget:ApplyStatus() end
+  return true
+end
+
+-- Remember where and how big the window was left. AceGUI writes both into the status table on every
+-- drag-stop, but that table is memory-only and the widget is wiped when it goes back to the pool --
+-- so this is the step that makes the size survive a /reload.
+function Options.SaveWindow(widget)
+  widget = widget or openWidget()
+  local status = widget and (widget.status or widget.localstatus)
+  local db = windowDB()
+  if not (status and db) then return false end
+  db.width, db.height = status.width, status.height
+  db.top, db.left = status.top or false, status.left or false
+  return true
+end
+
+-- The slider's setter, not just a store: a scale that only took effect on the next open would look
+-- like a control that does nothing.
+function Options.SetWindowScale(v)
+  local db = windowDB()
+  if not db then return false end
+  db.scale = clampScale(v)
+  -- Forget the saved position. A position is recorded in the frame's OWN coordinates, so it means a
+  -- different place on screen at a different scale; re-centring is the only reading of it that is
+  -- still true, and it is also what guarantees the title bar is reachable afterwards.
+  db.top, db.left = false, false
+  Options.ApplyWindow()
+  return true
+end
+
+-- The way back from "I dragged it off the screen" and "I scaled it past the edge". Resets the stored
+-- geometry AND pushes it onto the open frame, because the person clicking it is looking at that
+-- frame; a reset that waited for the next open would read as a dead button.
+function Options.ResetWindow()
+  local db = windowDB()
+  if not db then return false end
+  local d = windowDefaults()
+  db.scale, db.width, db.height = d.scale, d.width, d.height
+  db.top, db.left = false, false
+  Options.ApplyWindow()
+  return true
+end
+
+-- Just "Elmira", brand-coloured. The version used to live in this same string, appended after a
+-- space -- which put it on a font string (`titletext`) that AceConfigDialog rewrites on every
+-- refresh, not only on Options.Open (see the range-slider path below Options.versionLine). It lives
+-- on its own font string now; this is what Options.Decorate hands to widget:SetTitle.
+function Options.windowTitle()
+  return ns.Colors.wrap(ns.Colors.BRAND, "Elmira")
+end
+
+-- "Version: 1.2.3", or "Version: dev" in a dev tree, where the packager has never substituted the
+-- TOC's @project-version@ placeholder and the adapter hands it back verbatim. Showing the
+-- placeholder would put a build number on screen that no release ever had.
+function Options.versionLine()
+  local v = ns.Adapter and ns.Adapter.addonVersion and ns.Adapter.addonVersion()
+  if type(v) ~= "string" or v == "" or v:find("project%-version") then v = "dev" end
+  return string.format(L["Version: %s"], v)
+end
+
+-- ElvUI's own pattern for the same shared-pool problem (Config_SaveOldPosition /
+-- Config_RestoreOldPosition, Game/Shared/General/Config.lua:998-1019): capture whatever anchors a
+-- region already had before we move it, once, so Options.Undecorate can put it back byte for byte
+-- rather than guessing at what AceGUI originally drew.
+local function saveOriginalPoints(region)
+  if not (region and region.GetNumPoints and region.GetPoint) then return nil end
+  local saved = {}
+  for i = 1, region:GetNumPoints() do
+    saved[i] = { region:GetPoint(i) }
+  end
+  return saved
+end
+
+local function restoreOriginalPoints(region, saved)
+  if not (region and saved and region.ClearAllPoints and region.SetPoint) then return end
+  region:ClearAllPoints()
+  for i = 1, #saved do
+    region:SetPoint(unpack(saved[i]))
+  end
+end
+
+local function decorateTitle(widget)
+  local frame, titlebg = widget.frame, widget.titlebg
+  if widget.SetTitle then widget:SetTitle(Options.windowTitle()) end
+
+  if titlebg and titlebg.ClearAllPoints then
+    -- Saved once per frame: the pool hands this SAME frame table to every other Ace3 addon once we
+    -- let go of it (AceGUI-3.0.lua:88-113, objPools keyed on widget TYPE alone), so re-saving on a
+    -- later re-open would capture OUR full-width anchors instead of AceGUI's original ones.
+    if not frame.elmiraOriginalTitlebg then
+      frame.elmiraOriginalTitlebg = saveOriginalPoints(titlebg)
+    end
+    -- AceGUI's invisible drag frame is SetAllPoints(titlebg) (AceGUIContainer-Frame.lua:230-234), so
+    -- widening the TEXTURE is what makes the whole strip draggable. Until now the only grabbable
+    -- part was a 100px tab in the middle, which moved as the title text changed length.
+    -- The +12 keeps the header exactly where AceGUI drew it vertically (SetPoint("TOP", 0, 12)),
+    -- so nothing below it has to move.
+    titlebg:ClearAllPoints()
+    titlebg:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 12)
+    titlebg:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 12)
+  end
+
+  -- The rounded end caps are drawn to butt against a 100px middle; against a full-width one they
+  -- hang off the sides of the window.
+  if frame.GetRegions then
+    for _, region in ipairs({ frame:GetRegions() }) do
+      if region ~= titlebg and region.GetTexture and region:GetTexture() == TITLE_TEXTURE then
+        region:Hide()
+      end
+    end
+  end
+
+  -- `titletext` is left exactly where AceGUI anchored it (TOP of titlebg,
+  -- AceGUIContainer-Frame.lua:236-237): now that titlebg spans the whole window that anchor centres
+  -- the name on the full-width bar on its own, so nothing here has to touch it -- or put it back.
+end
+
+-- The version, on a font string of OUR OWN that widget:SetTitle never touches (SetTitle only ever
+-- writes titletext, AceGUIContainer-Frame.lua:116-117). Created once per frame and reused after
+-- that -- CreateFontString on a pooled frame the next open hands back would be the second-button bug
+-- M5g shipped, from the font-string side -- with the text refreshed on every Decorate, since that is
+-- the only thing about it that ever changes.
+local function decorateVersion(widget)
+  local frame, titlebg = widget.frame, widget.titlebg
+  if not frame.CreateFontString then return end
+  local fs = frame.elmiraVersion
+  if not fs then
+    fs = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    fs:SetPoint("LEFT", titlebg or frame, "LEFT", 16, -6)
+    if fs.SetJustifyH then fs:SetJustifyH("LEFT") end
+    frame.elmiraVersion = fs
+  end
+  if fs.SetTextColor then fs:SetTextColor(ns.Colors.MUTED.r, ns.Colors.MUTED.g, ns.Colors.MUTED.b) end
+  fs:SetText(Options.versionLine())
+  if fs.Show then fs:Show() end
+end
+
+-- AceGUI's stock Close button is an anonymous child; ElvUI identifies it by its text
+-- (Config.lua:1441-1447) and so do we. Not cached: it is a scan over a handful of children, run
+-- on open and on click, and a cache on a POOLED frame is a stale pointer waiting to happen.
+local function stockClose(frame)
+  if not frame.GetChildren then return nil end
+  for _, child in ipairs({ frame:GetChildren() }) do
+    if child.GetText and child:GetText() == CLOSE then return child end
+  end
+end
+
+local function tooltipScripts(button, text)
+  button:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    GameTooltip:SetText(text, 1, 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+end
+
+local function decorateButtons(widget)
+  local frame = widget.frame
+  -- The stock button stays in the hierarchy and keeps its OnClick: it is what the X clicks, so
+  -- AceConfigDialog's FrameOnClose still runs, still clears OpenFrames and still releases the widget
+  -- to the pool. Hiding it is re-done on every open because a pooled frame may be re-shown.
+  local close = stockClose(frame)
+  if close and close.Hide then close:Hide() end
+
+  if not frame.elmiraClose then
+    local x = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+    x:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 2, 2)
+    x:SetFrameLevel((frame.GetFrameLevel and frame:GetFrameLevel() or 100) + 10)
+    -- Never frame:Hide() here. That skips OnClose entirely, so OpenFrames.Elmira keeps pointing at a
+    -- hidden widget and the next Open reuses a frame the pool still believes is out on loan --
+    -- the leak M5g shipped, from the other direction.
+    x:SetScript("OnClick", function()
+      local btn = stockClose(frame)
+      if btn and btn.Click then btn:Click() end
+    end)
+    frame.elmiraClose = x
+  end
+  -- Re-shown on every Decorate: Options.Undecorate hides it on close so a frame the pool hands to
+  -- another addon carries none of ours visibly, and this is what brings it back.
+  if frame.elmiraClose.Show then frame.elmiraClose:Show() end
+
+  if not frame.elmiraReposition then
+    local b = CreateFrame("Button", nil, frame)
+    b:SetWidth(20)
+    b:SetHeight(20)
+    b:SetPoint("RIGHT", frame.elmiraClose, "LEFT", 2, 0)
+    b:SetFrameLevel((frame.GetFrameLevel and frame:GetFrameLevel() or 100) + 10)
+    -- Verified present on this client: DBM-Core/modules/gui uses the same two paths on Classic Era.
+    b:SetNormalTexture("Interface\\Buttons\\UI-RefreshButton")
+    b:SetPushedTexture("Interface\\Buttons\\UI-RefreshButton-Down")
+    b:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight")
+    tooltipScripts(b, L["Reset the size and position of this frame."])
+    b:SetScript("OnClick", function() Options.ResetWindow() end)
+    frame.elmiraReposition = b
+  end
+  if frame.elmiraReposition.Show then frame.elmiraReposition:Show() end
+end
+
+-- Everything the stock AceGUI frame does not give us, applied to whatever frame is open now.
+-- Called after every Open (see Options.Open) because AceConfigDialog pools and re-titles frames --
+-- and, since D13/D15, after every OTHER refresh of THIS app too (the hook installed below) so a
+-- slider drag mid-session cannot leave the chrome stale. `openWidget()` is the only source of
+-- `widget`, so this can only ever decorate OpenFrames.Elmira's own frame -- never a frame the pool
+-- has since handed to a different addon.
+function Options.Decorate()
+  local widget = openWidget()
+  if not (widget and widget.frame) then return false end
+  Options.ApplyWindow()
+  decorateTitle(widget)
+  decorateVersion(widget)
+  decorateButtons(widget)
+  return true
+end
+
+-- Undoes Decorate, called from Options.Open's chained OnClose BEFORE AceConfigDialog's own
+-- FrameOnClose releases the widget back to AceGUI's shared pool. The pool is keyed on widget TYPE
+-- alone (AceGUI-3.0.lua:88 objPools, ~91-124 newWidget/delWidget) -- every Ace3 addon that opens a
+-- standalone AceConfigDialog Frame draws from the exact same handful of instances -- and AceGUI's
+-- own release (AceGUI-3.0.lua:172-198) neither restores an anchor we moved nor removes a child we
+-- created. Left undone, the next addon to acquire this frame inherits our title bar, our X and our
+-- version text sitting on top of theirs. ElvUI hits the identical problem and solves it the
+-- identical way (Config_SaveOldPosition/Config_RestoreOldPosition,
+-- Game/Shared/General/Config.lua:998-1019).
+function Options.Undecorate(widget)
+  if not (widget and widget.frame) then return false end
+  local frame, titlebg = widget.frame, widget.titlebg
+  restoreOriginalPoints(titlebg, frame.elmiraOriginalTitlebg)
+
+  if frame.GetRegions then
+    for _, region in ipairs({ frame:GetRegions() }) do
+      if region ~= titlebg and region.GetTexture and region:GetTexture() == TITLE_TEXTURE then
+        if region.Show then region:Show() end
+      end
+    end
+  end
+
+  local close = stockClose(frame)
+  if close and close.Show then close:Show() end
+  if frame.elmiraClose and frame.elmiraClose.Hide then frame.elmiraClose:Hide() end
+  if frame.elmiraReposition and frame.elmiraReposition.Hide then frame.elmiraReposition:Hide() end
+  if frame.elmiraVersion and frame.elmiraVersion.Hide then frame.elmiraVersion:Hide() end
+  return true
+end
+
+-- The wrapper we last installed and the callback it wraps, so re-chaining onto AceConfigDialog's
+-- own OnClose lands on ITS current callback rather than on ourselves. AceConfigDialog resets OnClose
+-- on EVERY Open, not only the first time a frame is created (AceConfigDialog-3.0.lua:1911's `else`
+-- branch runs whether f is new or reused) -- which is also why the refresh hook below re-chains,
+-- not only re-decorates: without it, the first option changed after opening the panel would
+-- silently strip Options.SaveWindow and Options.Undecorate off the close path, and D15's own fix
+-- would stop firing.
+local ourClose, ourPrior -- mutants: equivalent deletion only makes these globals
+
+-- CHAIN, never replace: Ace registries keep exactly one callback per event name
+-- (`widget.events[name]`), and overwriting AceConfigDialog's own FrameOnClose leaked the frame on
+-- every close (M5g). Shared by Options.Open and the refresh hook, since AceConfigDialog:Open resets
+-- OnClose from both paths equally.
+local function chainClose(dialog)
+  local open = dialog and dialog.OpenFrames and dialog.OpenFrames.Elmira
+  if not (open and open.SetCallback) then return end
+  local prior = open.events and open.events.OnClose
+  if prior == ourClose then prior = ourPrior end
+  ourPrior = prior
+  ourClose = function(widget, event, ...)
+    -- pcall because this runs from a frame's OnHide: ours must never be the reason the dialog's own
+    -- cleanup below is skipped. Reported, not swallowed -- failing to leave move mode leaves a
+    -- mouse-eating frame across the middle of the screen, which is precisely the kind of thing
+    -- nobody files a bug about because it does not look like an error.
+    if ns.Announcers then
+      local ok, err = pcall(ns.Announcers.StopMoving)
+      if not ok then
+        ns.log("Elmira: could not leave move mode when the panel closed: %s", tostring(err))
+      end
+    end
+    -- Where and how big it was left. Same pcall discipline, and for the same reason: the dialog's
+    -- own cleanup below runs whatever happens here. AceGUI wipes the status table when the widget
+    -- goes back to the pool, so this is the last moment the numbers exist.
+    local savedOK, savedErr = pcall(Options.SaveWindow, widget)
+    if not savedOK then
+      ns.log("Elmira: could not remember the options window's size: %s", tostring(savedErr))
+    end
+    -- BEFORE prior(): prior is AceConfigDialog's own FrameOnClose, which releases this widget back
+    -- to AceGUI's pool for the next addon to acquire (D15). Undecorate has to run while the frame
+    -- is still ours to put back the way we found it.
+    local undecOK, undecErr = pcall(Options.Undecorate, widget)
+    if not undecOK then
+      ns.log("Elmira: could not undo the options window's chrome: %s", tostring(undecErr))
+    end
+    if prior then return prior(widget, event, ...) end
+  end
+  open:SetCallback("OnClose", ourClose)
+end
+
+-- The slider-drag refresh calls AceConfigDialog:Open() directly on the range option's OnMouseUp
+-- (AceConfigDialog-3.0.lua:856-862) -- and every OTHER option type's `set` does the same on its own
+-- final branch -- re-titling the SAME pooled frame without ever going through Options.Open. Before
+-- D12 that overwrote the version text living inside titletext; it also silently strips the OnClose
+-- chain (see chainClose above). A post-call hook on the library's own Open, filtered to our app
+-- name, is what survives every refresh path there is rather than chasing each one by hand; it
+-- touches no other addon, because it is a no-op for every appName but "Elmira". Never wraps or
+-- replaces Open -- hooksecurefunc runs alongside the original, after it returns.
+-- Returns whether the hook is (now, or already) installed: Options.Open uses that to know whether
+-- it still has to decorate and chain the close callback itself, or whether the hook -- which fires
+-- synchronously as part of dialog:Open, including THIS call -- has it covered. Installing is
+-- idempotent (the flag), firing is not skipped on any call, including the very first.
+local function installRefreshHook(dialog)
+  if not (dialog and hooksecurefunc) then return false end
+  if not dialog.elmiraRefreshHooked then
+    dialog.elmiraRefreshHooked = true
+    hooksecurefunc(dialog, "Open", function(_, appName)
+      if appName ~= "Elmira" then return end
+      Options.Decorate()
+      chainClose(dialog)
+    end)
+  end
+  return true
+end
+
+-- The General page's read-only command list. Built from `Slash.availableEntries()`, which already
+-- excludes the `unavailableNamed` placeholders (sim, history, rotdiag) -- a settings panel should
+-- never advertise a command whose only output is "not available yet".
+local function slashRows()
+  local args = {}
+  local rows = (ns.Slash and ns.Slash.availableEntries and ns.Slash.availableEntries()) or {}
+  for i, r in ipairs(rows) do
+    args["row" .. i] = {
+      type = "description", fontSize = "medium", order = i, width = "full",
+      name = string.format("|cff9AA0A6/elm %s|r  %s", r.key, tostring(r.desc)),
+    }
+  end
+  return args
+end
+
 function Options.table()
   return {
     type = "group",
     name = ns.Colors.wrap(ns.Colors.BRAND, "Elmira"),
     args = {
-      queue = {
-        type = "group", order = 1, name = L["Queue"], inline = false,
+      -- The front page. Everything that is about ELMIRA rather than about one part of its display:
+      -- the master switch, the wizard, and the settings window you are standing in.
+      general = {
+        type = "group", order = 1, name = L["General"], inline = false,
         args = {
           enabled = {
             type = "toggle", order = 1, name = L["Enable Elmira"],
@@ -709,19 +1140,88 @@ function Options.table()
               redraw()
             end,
           },
+          -- The front door (ADR-0015 SS1): lands ON the Rotation section of THIS open dialog.
+          -- `Options.Open` re-uses AceConfigDialog's own already-open frame (its `Open` only
+          -- creates a new one when `OpenFrames[appName]` is nil) and sets its path, so this is a
+          -- SelectGroup, not a reopen.
+          chooseRotation = {
+            type = "execute", order = 2, name = L["Choose your rotation"],
+            desc = L["Jumps straight to picking or editing your rotation."],
+            func = function() Options.Open("rotation") end,
+          },
+          -- Demoted below the button above: the wizard is scheduled for removal once the Rotation
+          -- page fully replaces it, so it no longer gets the front-page spot.
+          setup = {
+            type = "execute", order = 3, name = L["Run setup again"],
+            desc = L["Pick a playstyle for this character."],
+            func = function() if ns.Wizard then ns.Wizard.Open() end end,
+            hidden = function() return ns.Wizard == nil end,
+          },
+          minimap = {
+            type = "toggle", order = 4, name = L["Show minimap button"],
+            desc = L["Shows Elmira's launcher button on the minimap."],
+            get = function()
+              local m = ns.db and ns.db.global and ns.db.global.minimap
+              return not (m and m.hide)
+            end,
+            -- Never touches LibDBIcon itself: NA:SetMinimapShown is the one seam.
+            set = function(_, v)
+              if ns.addon and ns.addon.SetMinimapShown then ns.addon:SetMinimapShown(v) end
+            end,
+          },
+          locked = {
+            type = "toggle", order = 5, name = L["Lock all positions"],
+            desc = L["Locks the queue strip and the on-screen message. Same as /elm lock."],
+            get = function() return (ns.Queue and ns.Queue.isLocked()) == true end,
+            set = function(_, v)
+              if ns.Queue then ns.Queue.SetLocked(v) end
+              -- Locking with the on-screen message still in move mode would leave a mouse-eating
+              -- frame across the middle of the screen with no obvious way back to it -- the same
+              -- failure the options-window OnClose already guards against on close.
+              if v and ns.Announcers then
+                local ok, err = pcall(ns.Announcers.StopMoving)
+                if not ok then
+                  ns.log("Elmira: could not leave move mode when positions were locked: %s", tostring(err))
+                end
+              end
+            end,
+          },
+          window = {
+            type = "group", inline = true, order = 10, name = L["Options window"],
+            args = {
+              scale = {
+                type = "range", order = 1, name = L["Panel scale"],
+                -- Whole-window scale, not a font size: AceGUI row heights are fixed, so a bigger
+                -- font clips inside the same 24px row. Scale is the one lever that grows the text
+                -- and the rows it sits in together.
+                desc = L["How large this settings window is drawn. Applies as you drag."],
+                min = SCALE_MIN, max = SCALE_MAX, step = SCALE_STEP, isPercent = true,
+                get = function() return Options.windowScale() end,
+                set = function(_, v) Options.SetWindowScale(v) end,
+              },
+            },
+          },
+          slash = {
+            type = "group", inline = true, order = 20, name = L["Slash commands"],
+            -- Read from ns.Slash at table-build time, not hand-copied, so this can never list a
+            -- command /elm does not actually have, or omit one it just gained.
+            args = slashRows(),
+          },
+        },
+      },
+      -- The strip alone. "Scale" here is the STRIP's, and it used to be the only scale in the panel;
+      -- it is named for what it scales now that the window has one of its own, because two sliders
+      -- both labelled Scale on two adjacent pages is a settings screen guessing game.
+      queue = {
+        type = "group", order = 1.5, name = L["Queue"], inline = false,
+        args = {
           -- Separate from `enabled` on purpose (ADR-0015 §3). Hekili players routinely watch only
           -- the glowing button; before this the only way to lose the strip was to lose the glow too.
           showQueue = {
-            type = "toggle", order = 1.5, name = L["Show the queue strip"],
+            type = "toggle", order = 1, name = L["Show the queue strip"],
             desc = L["Off keeps the action-bar glow and hides the icons."],
             get = function() return profile().showQueue ~= false end,
             set = function(_, v) profile().showQueue = v; redraw() end,
-          },
-          animate = {
-            type = "toggle", order = 1.6, name = L["Animate changes"],
-            desc = L["Icons slide when the queue moves and pop when you cast the suggestion."],
-            get = function() return profile().animate ~= false end,
-            set = function(_, v) profile().animate = v; redraw() end,
           },
           depth = {
             type = "range", order = 2, name = L["Icons"], min = 1, max = 5, step = 1,
@@ -730,19 +1230,20 @@ function Options.table()
             set = function(_, v) profile().depth = v; redraw() end,
           },
           scale = {
-            type = "range", order = 3, name = L["Scale"], min = 0.5, max = 2.0, step = 0.05,
+            type = "range", order = 3, name = L["Strip scale"], min = 0.5, max = 2.0, step = 0.05,
+            desc = L["How large the queue icons are drawn on your screen."],
             isPercent = true,
             get = function() return profile().scale end,
             set = function(_, v) profile().scale = v; redraw() end,
           },
-          setup = {
-            type = "execute", order = 0, name = L["Run setup again"],
-            desc = L["Pick a playstyle for this character."],
-            func = function() if ns.Wizard then ns.Wizard.Open() end end,
-            hidden = function() return ns.Wizard == nil end,
+          animate = {
+            type = "toggle", order = 4, name = L["Animate changes"],
+            desc = L["Icons slide when the queue moves and pop when you cast the suggestion."],
+            get = function() return profile().animate ~= false end,
+            set = function(_, v) profile().animate = v; redraw() end,
           },
           visibility = {
-            type = "select", order = 4, width = "full", name = L["Show the queue"],
+            type = "select", order = 5, width = "full", name = L["Show the queue"],
             desc = L["When the queue and its bar glow are on screen. Hiding it also stops the "
                   .. "update loop, so a hidden queue costs nothing."],
             values = function()
@@ -763,7 +1264,7 @@ function Options.table()
             end,
           },
           learning = {
-            type = "toggle", order = 5, width = "full", name = L["Learning mode"],
+            type = "toggle", order = 6, width = "full", name = L["Learning mode"],
             desc = L["Shows one suggestion at a time, larger, with the name of the rule that chose "
                   .. "it. Sets icons to 1 and scale to 140% — both remain yours to change afterwards. "
                   .. "Does not turn on any screen-edge cues; those stay your choice."],
@@ -779,12 +1280,6 @@ function Options.table()
                 if ns.Announce then ns.Announce.emit("status", text) else ns.log("%s", text) end
               end
             end,
-          },
-          locked = {
-            type = "toggle", order = 4, name = L["Lock position"],
-            desc = L["Unlock to drag the queue. Same as /elm lock."],
-            get = function() return ns.Queue.isLocked() end,
-            set = function(_, v) ns.Queue.SetLocked(v) end,
           },
         },
       },
@@ -956,45 +1451,72 @@ function Options.Register()
   return true
 end
 
--- The wrapper we last installed and the callback it wraps, so a second Open() chains onto
--- AceConfigDialog's callback rather than onto ourselves. AceConfigDialog re-sets its own on every
--- Open, so this should never trigger; it is here because the alternative if it ever does is
--- unbounded recursion on close.
-local ourClose, ourPrior -- mutants: equivalent deletion only makes these globals
+-- Is the Builder on screen, showing, and not being typed into?
+--
+-- The gate on the Builder's live refresh (Options/Rotation.onQueueChanged). Three separate
+-- questions, and every one of them has to be true before the panel may be rebuilt underneath the
+-- player:
+--   * **Is the window even open?** Elmira has two: the standalone dialog, which AceConfigDialog
+--     records in `OpenFrames.Elmira` while it is up, and the Blizzard-embedded panel, which is a
+--     frame we hold. Refreshing a closed panel is pure cost -- it runs every time the queue
+--     changes, which in combat is several times a second.
+--   * **Is the Builder the visible TAB?** `AceConfigRegistry:NotifyChange` rebuilds the whole
+--     options table, so refreshing while the player is reading the Rotations tab would throw away
+--     their scroll position for a status column they cannot see.
+--   * **Is anyone typing?** Every AceConfig `set` rebuilds the panel and an AceGUI EditBox commits
+--     only on Enter, so a rebuild that lands mid-keystroke silently discards what was typed.
+--
+-- `groups` is nil until the tab group has been opened once, which is the state on the very first
+-- render -- and indexing it is what would take the render loop down.
+function Options.builderIdle()
+  local dialog = Options.dialog
+  if not dialog then return false end
+  local standalone = dialog.OpenFrames and dialog.OpenFrames.Elmira
+  local embedded = Options.frame and Options.frame.IsVisible and Options.frame:IsVisible()
+  if not (standalone or embedded) then return false end
+
+  local status = dialog.GetStatusTable and dialog:GetStatusTable("Elmira", { "rotation" })
+  local groups = status and status.groups
+  if not groups or groups.selected ~= "builder" then return false end
+
+  if ns.Adapter and ns.Adapter.typing and ns.Adapter.typing() then return false end
+  return true
+end
 
 -- `...` is an optional path into the options table, e.g. Options.Open("rotation") to land on the
--- Rotation section. AceConfigDialog supports it on `Open(appName, container, ...)`; nothing used it
--- before the Rotation section became the front door.
+-- Rotation section. Fed to `dialog:SelectGroup` AFTER an unconditional `Open("Elmira")`, never as a
+-- path on Open itself: AceConfigDialog:Open(appName, container, ...) stores that path as the
+-- frame's `basepath` and feeds it as the window's ROOT (AceConfigDialog-3.0.lua ~1897-1930), which
+-- replaces the whole tree -- including the left menu -- with just that one group.
 function Options.Open(...)
   if not Options.dialog then Options.Register() end
   if Options.dialog then
-    Options.dialog:Open("Elmira", nil, ...)
-    -- Move mode enables the mouse on a frame across the middle of the screen. Closing the panel
-    -- has to end it, or that frame sits there eating clicks with nothing on screen to explain it.
-    --
-    -- CHAIN, never replace. AceGUI keeps ONE callback per event name (`self.events[name]`), and
-    -- AceConfigDialog has already put its own FrameOnClose on this frame -- the callback that clears
-    -- OpenFrames[appName] and releases the widget back to the pool. Overwriting it leaked the frame
-    -- on every close, which is what shipped in M5g.
-    local open = Options.dialog.OpenFrames and Options.dialog.OpenFrames.Elmira
-    if open and open.SetCallback then
-      local prior = open.events and open.events.OnClose
-      if prior == ourClose then prior = ourPrior end
-      ourPrior = prior
-      ourClose = function(widget, event, ...)
-        -- pcall because this runs from a frame's OnHide: ours must never be the reason the dialog's
-        -- own cleanup below is skipped. Reported, not swallowed -- failing to leave move mode
-        -- leaves a mouse-eating frame across the middle of the screen, which is precisely the kind
-        -- of thing nobody files a bug about because it does not look like an error.
-        if ns.Announcers then
-          local ok, err = pcall(ns.Announcers.StopMoving)
-          if not ok then
-            ns.log("Elmira: could not leave move mode when the panel closed: %s", tostring(err))
-          end
-        end
-        if prior then return prior(widget, event, ...) end
-      end
-      open:SetCallback("OnClose", ourClose)
+    -- BEFORE Open, because Open reads the status table it writes into and applies it on the way up
+    -- (AceConfigDialog-3.0.lua:1838). Called with the REMEMBERED size, not the shipped one: this is
+    -- the only hook that gets a size onto a frame that has not been created yet.
+    if Options.dialog.SetDefaultSize then
+      local w = windowDB() or {}
+      local d = windowDefaults()
+      Options.dialog:SetDefaultSize("Elmira", w.width or d.width, w.height or d.height)
+    end
+    -- Installed once per dialog, not per Open, and firing on every dialog:Open from here on --
+    -- including the call below, synchronously, since hooksecurefunc's post-hook runs inside the
+    -- very call it wraps. That is what makes a refresh Options.Open never triggered (the range
+    -- slider's OnMouseUp, AceConfigDialog-3.0.lua:856-862) still decorate and re-chain OnClose.
+    local hooked = installRefreshHook(Options.dialog)
+    Options.dialog:Open("Elmira")
+    -- SelectGroup, not a second Open with the path: it moves the SAME frame's selection onto the
+    -- requested section without ever making it the window's root, so General, Queue, Rotation and
+    -- the rest of the left menu stay on screen.
+    if select("#", ...) > 0 then
+      Options.dialog:SelectGroup("Elmira", ...)
+    end
+    if not hooked then
+      -- No hooksecurefunc on this client (never true in-game; only reachable if the global is
+      -- missing entirely): the hook above never got the chance to run, so decorate and chain the
+      -- close callback directly instead of leaving the panel undressed.
+      Options.Decorate()
+      chainClose(Options.dialog)
     end
     return true
   end

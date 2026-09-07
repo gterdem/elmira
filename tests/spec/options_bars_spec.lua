@@ -161,9 +161,10 @@ describe("Options (action bars)", function()
     end)
   end)
 
-  -- The panel's running order is a design decision, not an accident: Queue (what you see), Action
-  -- Bars (where it points), Glow (how it looks), then the optional extras. Two groups sharing an
-  -- `order` renders them in pairs() order, which differs between openings.
+  -- The panel's running order is a design decision, not an accident: General (the addon itself and
+  -- the window you are standing in), Queue (what you see), Action Bars (where it points), Glow (how
+  -- it looks), then the optional extras. Two groups sharing an `order` renders them in pairs()
+  -- order, which differs between openings.
   it("orders the settings groups, each exactly once", function()
     local seen, orders = {}, {}
     for key, g in pairs(Options.table().args) do
@@ -176,12 +177,13 @@ describe("Options (action bars)", function()
     -- The Rotation section is the front door (ADR-0015 SS1), so it sorts above the display settings
     -- rather than sitting at the bottom where Import/Export used to be.
     assert.equal("rotation", seen[orders[1]])
-    assert.equal("queue", seen[orders[2]])
-    assert.equal("bars", seen[orders[3]])
-    assert.equal("glow", seen[orders[4]])
+    assert.equal("general", seen[orders[2]])
+    assert.equal("queue", seen[orders[3]])
+    assert.equal("bars", seen[orders[4]])
+    assert.equal("glow", seen[orders[5]])
     -- Everything that TELLS you something lives under one heading (ADR-0015 F37), rather than as
     -- three more peers of "Queue": announcements, flares and cue sounds are one question.
-    assert.equal("notifications", seen[orders[5]])
+    assert.equal("notifications", seen[orders[6]])
   end)
 
   it("groups announcements, flares and cue sounds under Notifications, each exactly once", function()

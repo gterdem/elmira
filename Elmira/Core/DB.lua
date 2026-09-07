@@ -16,7 +16,15 @@ DB.defaults = {
   -- ADR-0010: the user's own builds, account-wide, keyed USER_<slug> (Core/UserBuilds.lua).
   -- The announcement log survives a reload on purpose: "what did it just tell me?" is most often
   -- asked after the chat frame has scrolled or the on-screen message has faded.
-  global = { dbVersion = 0, userBuilds = {}, announceLog = {}, announceDropped = 0 },
+  -- `window` is the options panel's own frame: how big it is, where it sits and what scale it is
+  -- drawn at. Account-wide rather than per-profile because it describes the SCREEN it is drawn on,
+  -- not the character in front of it -- swapping profiles must not move the settings window.
+  -- `top`/`left` are `false`, never nil, for the reason at the top of this file: `false` says "never
+  -- positioned, centre it" and survives AceDB's omit-the-default rule, where nil would not.
+  -- 1.2 rather than 1.0: AceConfig description rows are 12pt at best and the panel is read, not
+  -- glanced at. 960x680 is the size at which the Builder's rows stop wrapping.
+  global = { dbVersion = 0, userBuilds = {}, announceLog = {}, announceDropped = 0,
+             window = { scale = 1.2, width = 960, height = 680, top = false, left = false } },
   profile = {
     enabled = true,
     depth = 3,

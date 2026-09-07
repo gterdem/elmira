@@ -106,6 +106,26 @@ function Vanilla.today()
   return date and date("%Y-%m-%d") or nil
 end
 
+-- Is the player typing into something right now?
+--
+-- An adapter EXTRA, not a State contract member: no condition in docs/02 reads it and adding one
+-- would mean editing the contract, the null state and interface_spec for something only the
+-- options panel wants. It is here rather than in Options/ because it names a WoW global, and
+-- Adapters/ is the only place that may (hard rule 3).
+--
+-- Why anything needs it: EVERY AceConfig `set` rebuilds the whole panel, and an AceGUI EditBox
+-- commits only on Enter -- so a rebuild that arrives while someone is halfway through typing "90"
+-- into a condition value discards what they typed, with no error and nothing to look at. The
+-- Builder's live refresh asks this before it repaints.
+--
+-- Presence-checked rather than assumed. `GetCurrentKeyBoardFocus` is a FrameXML global, not a
+-- documented C API, and a client without it must degrade to "not typing" (the panel refreshes a
+-- little too eagerly) rather than erroring out of the render loop.
+function Vanilla.typing()
+  if not GetCurrentKeyBoardFocus then return false end
+  return GetCurrentKeyBoardFocus() ~= nil
+end
+
 function Vanilla.playerClass()
   local _, class = UnitClass("player")
   return class

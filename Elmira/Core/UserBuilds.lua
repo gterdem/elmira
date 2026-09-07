@@ -122,6 +122,12 @@ local function deepCopy(v, seen)
   return out
 end
 
+-- Exported for the same reason `catalogUpdated` is: Options/Rotation's Builder takes a DRAFT copy
+-- of a fork's lines before it edits them, and it must copy exactly as deeply as a fork does. A
+-- second implementation over there would share a nested `when` table on the first day someone
+-- changed one of the two, and the symptom would be a rotation that changed before Save was pressed.
+UserBuilds.copy = deepCopy
+
 -- UserBuilds.fork(pack, templateKey, opts) -> key | nil, reason
 --
 -- ADR-0015 §2: Customize forks the template AND activates the fork in the same click. Hekili's
@@ -150,42 +156,73 @@ function UserBuilds.fork(pack, templateKey, opts)
   return key
 end
 
--- The two edits the Builder's list makes. Both refuse anything that is not one of the user's own
--- rotations: a template is read-only (ADR-0005, hard rule 7), and the panel must not be the one
--- place that can quietly write to one.
--- Through `find`, which is the one lookup that knows a fork belongs to a CLASS. db.global is shared
--- across every character on the account, so without that check these would happily reorder a
--- paladin's rotation from a mage. Templates are refused as a consequence: `find` reports them as
--- origin "pack", and a template is read-only (ADR-0005, hard rule 7).
-local function entriesOf(pack, key)
+-- Core/Slash.lua owns `ns.compileBuild` and caches it on the build TABLE, and the write below
+-- mutates that table in place -- so without dropping the cache the display goes on running the
+-- compilation it took before the save, and the panel and the queue disagree until the next
+-- /reload. Invalidation lives with the WRITE rather than with the caller for the reason
+-- Display/Overlay learned a milestone ago: a contract that says "remember to call Reset()" is one
+-- that gets forgotten silently.
+--
+-- Called unguarded on purpose: `Core\Slash.lua` is loaded by the same TOC that loads this file, so
+-- `ns.forgetCompiled and ...` here would turn a load-order mistake into the exact silent staleness
+-- this call exists to end.
+local function edited(build)
+  ns.forgetCompiled(build)
+  return true
+end
+
+-- The fields an entry is AUTHORED with (docs/03-BUILD-FORMAT). A WHITELIST, not a list of things to
+-- strip. The Builder hangs its own bookkeeping on a draft row -- `src`, the saved position the row
+-- came from -- and `Schema.compile` hangs seven more on a compiled one (`test`, `data`,
+-- `conditions`, `index`, `cdVolatile`, `cost`, `cooldownSecs`, two of them closures). Either would
+-- reach SavedVariables and then travel out in the next export string, because `Schema.exportable`
+-- copies every field an entry has. A blacklist would have to be updated in step with two other
+-- files to stay correct; this one only has to be updated when the FORMAT gains a field, and
+-- userbuilds_spec fails against the shipped pack if it ever has.
+local ENTRY_FIELDS = { "spell", "item", "when", "label", "hold", "disabled" }
+-- Exported for the spec's drift check ALONE -- the same seam, and the same reason, as
+-- `ns.__schemaConditions` in Core/Schema.lua. A whitelist can only be right if it names every field
+-- the format has, and the shipped builds are the authority on that; without a handle the spec
+-- cannot compare the two, and the first authored field anyone adds is silently dropped on save.
+UserBuilds.ENTRY_FIELDS = ENTRY_FIELDS
+
+-- UserBuilds.replaceEntries(pack, key, entries) -> true | false, reasons
+--
+-- The Builder's Save. It writes the whole line list at once rather than one edit at a time because
+-- the panel edits a DRAFT: a half-applied save -- three rows written, the fourth rejected -- would
+-- leave a rotation that is neither what was stored nor what is on screen, and nothing would say so.
+-- So the candidate build is validated ENTIRE, through the same `Schema.validate` the shipped builds
+-- pass at load, and either all of it lands or none of it does.
+--
+-- `reasons` is always a list, so a caller can print them without asking which shape it got.
+function UserBuilds.replaceEntries(pack, key, entries)
+  -- Refused rather than validated against an empty ctx: without the pack's tables `Schema.validate`
+  -- cannot check a single symbolic key, so it would accept a rotation naming spells that do not
+  -- exist and the failure would surface as an empty queue much later.
+  if not (pack and pack.class) then return false, { "no data pack for your class" } end
   local build, origin = UserBuilds.find(pack, key)
-  if origin ~= "fork" then return nil, "not one of your rotations" end
-  if not (build and build.entries) then return nil, "that rotation has no lines" end
-  return build.entries, nil
-end
+  if origin ~= "fork" then return false, { "not one of your rotations" } end
+  if type(entries) ~= "table" then return false, { "a rotation is a list of lines" } end
 
--- UserBuilds.moveEntry(pack, key, index, delta) -> true | false, reason
--- Priority order IS the rotation (F1: the first passing entry is the suggestion), so moving a row
--- is the single most consequential edit the Builder offers.
-function UserBuilds.moveEntry(pack, key, index, delta)
-  local entries, err = entriesOf(pack, key)
-  if not entries then return false, err end
-  local to = (tonumber(index) or 0) + (tonumber(delta) or 0)
-  if not entries[index] or not entries[to] then return false, "out of range" end
-  entries[index], entries[to] = entries[to], entries[index]
-  return true
-end
+  local copies = {}
+  for i, entry in ipairs(entries) do
+    if type(entry) ~= "table" then return false, { "line " .. i .. " is not a line" } end
+    local copy = {}
+    -- deepCopy on the value, not a reference: the draft's `when` lists would otherwise be shared
+    -- with the stored build, so the next edit to the draft would change the saved rotation before
+    -- Save was pressed -- and Discard could not put it back.
+    for _, field in ipairs(ENTRY_FIELDS) do copy[field] = deepCopy(entry[field]) end
+    copies[i] = copy
+  end
 
--- UserBuilds.setEntryDisabled(pack, key, index, disabled) -> true | false, reason
--- Cleared to nil rather than stored as false: `Schema.compile` and `Schema.exportable` both test
--- truthiness, and an exported build carrying `disabled = false` on every line is noise that would
--- travel to whoever imports it.
-function UserBuilds.setEntryDisabled(pack, key, index, disabled)
-  local entries, err = entriesOf(pack, key)
-  if not entries then return false, err end
-  if not entries[index] then return false, "out of range" end
-  entries[index].disabled = disabled and true or nil
-  return true
+  local candidate = {}
+  for k, v in pairs(build) do candidate[k] = v end
+  candidate.entries = copies
+  local ok, errors = ns.Schema.validate(candidate, ctxFor(pack))
+  if not ok then return false, ns.Schema.errorLines(errors) end
+
+  build.entries = copies
+  return edited(build)
 end
 
 -- UserBuilds.exportKey(pack, key) -> string | nil, reason

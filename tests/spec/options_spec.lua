@@ -45,6 +45,9 @@ describe("Options (overlay/peripheral cues)", function()
   -- the same as the visibility dropdown below it.
   describe("Queue section switches", function()
     local function queueArgs() return Options.table().args.queue.args end
+    -- The master switch and the wizard live on General; the strip's own settings on Queue. Two
+    -- accessors rather than one, so a row moving pages fails here rather than silently reading nil.
+    local function generalArgs() return Options.table().args.general.args end
 
     before_each(function()
       ns.db.profile.enabled = true
@@ -60,12 +63,12 @@ describe("Options (overlay/peripheral cues)", function()
     it("releases every glow when the master switch goes off", function()
       local stopped = 0
       ns.Glow = { StopAll = function() stopped = stopped + 1 end }
-      queueArgs().enabled.set(nil, false)
+      generalArgs().enabled.set(nil, false)
       assert.equal(1, stopped)
     end)
 
     it("names the master switch for the addon, not for the strip", function()
-      local row = queueArgs().enabled
+      local row = generalArgs().enabled
       assert.equal("Enable Elmira", row.name)
       assert.equal("Turns the whole display off: no queue, no bar glow, no update loop.", row.desc)
     end)
@@ -103,11 +106,252 @@ describe("Options (overlay/peripheral cues)", function()
     it("repaints on every one of the three, or the change is invisible until the queue moves", function()
       local redraws = 0
       ns.Display.refresh = function() redraws = redraws + 1 end
-      queueArgs().enabled.set(nil, true)
+      generalArgs().enabled.set(nil, true)
       queueArgs().showQueue.set(nil, false)
       queueArgs().animate.set(nil, false)
       assert.equal(3, redraws)
     end)
+  end)
+
+  -- The left menu, after the 2026-09-07 split. "Queue" used to be the front page and held the
+  -- master switch, the wizard and the strip's own settings in one list; the window's scale had
+  -- nowhere to live and the strip's scale was called, simply, "Scale". The 2026-09-07 pass-3 (D16-
+  -- D19) moved position locking from Queue onto General as "Lock all positions" and added the
+  -- minimap toggle, the rotation shortcut, and the read-only slash-command list.
+  describe("General and Queue pages", function()
+    local function args() return Options.table().args end
+
+    before_each(function()
+      ns.db.profile.enabled = true
+      ns.db.profile.showQueue = true
+      ns.db.profile.animate = true
+      ns.db.profile.depth = 3
+      ns.db.profile.scale = 1.0
+      ns.db.global = { window = { scale = 1.2 } }
+      ns.Display.Enable = function() end
+      ns.Display.Disable = function() end
+      ns.Queue = { Layout = function() end, isLocked = function() return true end,
+                   SetLocked = function() end }
+      ns.Visibility = { MODES = { "always" }, DEFAULT = "always" }
+    end)
+
+    it("opens on General, which holds the addon itself and nothing about the strip", function()
+      local general = args().general
+      assert.equal("General", general.name)
+      assert.equal("Enable Elmira", general.args.enabled.name)
+      assert.equal("Choose your rotation", general.args.chooseRotation.name)
+      assert.equal("Jumps straight to picking or editing your rotation.", general.args.chooseRotation.desc)
+      assert.equal("Run setup again", general.args.setup.name)
+      assert.equal("Show minimap button", general.args.minimap.name)
+      assert.equal("Shows Elmira's launcher button on the minimap.", general.args.minimap.desc)
+      assert.equal("Lock all positions", general.args.locked.name)
+      -- The strip's settings are NOT here: that is the whole point of the split.
+      assert.is_nil(general.args.depth)
+      assert.is_nil(general.args.showQueue)
+    end)
+
+    -- The wizard is the way back to "just pick me a playstyle". It is demoted below the rotation
+    -- shortcut it is scheduled to be replaced by, but still sits near the top of the page.
+    it("opens the wizard from General, and hides the button when there is no wizard", function()
+      local opened = 0
+      local row = args().general.args.setup
+      assert.equal(3, row.order)
+      assert.equal("Pick a playstyle for this character.", row.desc)
+      assert.is_true(row.hidden(), "the button is offered with no wizard behind it")
+      ns.Wizard = { Open = function() opened = opened + 1 end }
+      assert.is_false(args().general.args.setup.hidden())
+      args().general.args.setup.func()
+      assert.equal(1, opened)
+    end)
+
+    it("orders General's front controls, each exactly once, ahead of the window and slash groups",
+      function()
+        local general = args().general
+        local seen = {}
+        for key, row in pairs(general.args) do
+          assert.is_number(row.order, key .. " has no order")
+          assert.is_nil(seen[row.order], key .. " shares order " .. tostring(row.order))
+          seen[row.order] = key
+        end
+        assert.same({ "enabled", "chooseRotation", "setup", "minimap", "locked" },
+                    { seen[1], seen[2], seen[3], seen[4], seen[5] })
+        assert.equal("window", seen[10])
+        assert.equal("slash", seen[20])
+      end)
+
+    -- ADR-0015 SS1's front door. AceConfigDialog:Open only creates a NEW frame when
+    -- `OpenFrames[appName]` is nil, so calling it again on an already-open panel just moves the
+    -- SAME frame's selection -- this button never closes and reopens the window.
+    it("Choose your rotation runs Options.Open('rotation')", function()
+      local calls = {}
+      local original = Options.Open
+      Options.Open = function(...) calls[#calls + 1] = { ... } end
+      args().general.args.chooseRotation.func()
+      Options.Open = original
+      assert.same({ { "rotation" } }, calls)
+    end)
+
+    describe("Show minimap button", function()
+      -- Options never touches LibDBIcon itself; the toggle calls through the addon
+      -- object, and Core/Init.lua's NA:SetMinimapShown is the only place LibDBIcon is asked.
+      it("routes through the addon object, never LibDBIcon directly", function()
+        local calls = {}
+        ns.addon = { SetMinimapShown = function(_, v) calls[#calls + 1] = v end }
+        args().general.args.minimap.set(nil, true)
+        assert.same({ true }, calls)
+      end)
+
+      it("reads the stored flag", function()
+        ns.db.global.minimap = { hide = true }
+        assert.is_false(args().general.args.minimap.get())
+        ns.db.global.minimap.hide = false
+        assert.is_true(args().general.args.minimap.get())
+      end)
+
+      it("reads as shown before anything has been stored", function()
+        assert.is_true(args().general.args.minimap.get())
+      end)
+    end)
+
+    describe("Lock all positions", function()
+      it("replaces the Queue page's own lock toggle, reading and writing through Queue", function()
+        local row = args().general.args.locked
+        assert.equal("Locks the queue strip and the on-screen message. Same as /elm lock.", row.desc)
+        assert.is_true(row.get()) -- ns.Queue.isLocked() stubbed true in before_each
+        local set
+        ns.Queue.SetLocked = function(v) set = v end
+        row.set(nil, false)
+        assert.is_false(set)
+      end)
+
+      -- Locking with the on-screen message still in move mode would leave a mouse-eating frame
+      -- across the middle of the screen -- the same failure the window's own OnClose guards against.
+      it("also leaves move mode when locking, but never when merely unlocking", function()
+        local stopped = 0
+        ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
+        args().general.args.locked.set(nil, false)
+        assert.equal(0, stopped)
+        args().general.args.locked.set(nil, true)
+        assert.equal(1, stopped)
+      end)
+
+      it("still locks when leaving move mode errors, and says so", function()
+        local logged = {}
+        ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+        local locked
+        ns.Queue.SetLocked = function(v) locked = v end
+        ns.Announcers = { StopMoving = function() error("MessageFrame has no Clear()") end }
+        args().general.args.locked.set(nil, true)
+        assert.is_true(locked, "an error leaving move mode must not skip locking")
+        assert.equal(1, #logged)
+        assert.is_truthy(logged[1]:find("locked", 1, true))
+      end)
+    end)
+
+    -- Whole-window scale rather than a font size: AceGUI row heights are fixed, so a larger font
+    -- clips inside the same row. Scale is the one lever that grows the text and the row together.
+    it("puts the panel's own scale on General, in a group that says what it scales", function()
+      local window = args().general.args.window
+      assert.equal("Options window", window.name)
+      assert.is_true(window.inline)
+      local row = window.args.scale
+      assert.equal("Panel scale", row.name)
+      assert.equal("range", row.type)
+      assert.equal(0.9, row.min)
+      assert.equal(1.4, row.max)
+      assert.equal(0.05, row.step)
+      assert.is_true(row.isPercent)
+      assert.equal("How large this settings window is drawn. Applies as you drag.", row.desc)
+      assert.equal(1.2, row.get())
+      row.set(nil, 1.35)
+      assert.equal(1.35, ns.db.global.window.scale)
+      assert.equal(1.35, row.get())
+    end)
+
+    -- Read from ns.Slash at table-build time so this list can never drift from what /elm offers.
+    describe("Slash commands", function()
+      it("lists every available command's key and desc, skipping unavailableNamed placeholders",
+        function()
+          ns.Slash = { availableEntries = function()
+            return { { key = "help", desc = "Show this help" },
+                      { key = "rotation", desc = "Choose or edit your rotation" } }
+          end }
+          local group = args().general.args.slash
+          assert.equal("Slash commands", group.name)
+          assert.is_true(group.inline)
+          assert.equal("description", group.args.row1.type)
+          assert.equal("medium", group.args.row1.fontSize)
+          assert.is_truthy(group.args.row1.name:find("/elm help", 1, true))
+          assert.is_truthy(group.args.row1.name:find("Show this help", 1, true))
+          assert.is_truthy(group.args.row2.name:find("/elm rotation", 1, true))
+        end)
+
+      it("renders as empty, not an error, with no Slash module loaded", function()
+        ns.Slash = nil
+        assert.is_true(pcall(function() return args().general.args.slash.args end))
+        assert.same({}, args().general.args.slash.args)
+      end)
+    end)
+
+    it("leaves Queue holding only the strip, with every row exactly once, and no lock any more",
+      function()
+        local queue = args().queue
+        assert.equal("Queue", queue.name)
+        assert.is_nil(queue.args.enabled, "the master switch is still on the Queue page")
+        assert.is_nil(queue.args.setup, "the wizard button is still on the Queue page")
+        assert.is_nil(queue.args.locked, "Lock position moved to General as Lock all positions")
+        local seen = {}
+        for key, row in pairs(queue.args) do
+          assert.is_number(row.order, key .. " has no order")
+          assert.is_nil(seen[row.order], key .. " shares order " .. tostring(row.order))
+          seen[row.order] = key
+        end
+        assert.same({ "showQueue", "depth", "scale", "animate", "visibility", "learning" },
+                    { seen[1], seen[2], seen[3], seen[4], seen[5], seen[6] })
+      end)
+
+    -- Two sliders both labelled "Scale", one page apart, is a guessing game. The strip's is named
+    -- for what it scales now that the window has one of its own.
+    it("names the strip's scale for the strip", function()
+      local row = args().queue.args.scale
+      assert.equal("Strip scale", row.name)
+      assert.is_truthy(row.desc)
+      assert.equal(1.0, row.get())
+      row.set(nil, 1.3)
+      assert.equal(1.3, ns.db.profile.scale)
+    end)
+  end)
+
+  -- AceConfig renders a `description` row in GameFontHighlightSmall (10pt) unless `fontSize` says
+  -- otherwise (AceConfigDialog-3.0.lua:1404-1410), so the panel's CONTENT was two points smaller
+  -- than the labels above it -- worst exactly where there is most to read. `medium` is the 12pt
+  -- baseline the checkboxes, buttons and tree rows already use, so whole-window scale enlarges the
+  -- panel evenly instead of enlarging the labels and leaving the prose behind.
+  --
+  -- A walk rather than a list: a description row added tomorrow has to be caught by this, and the
+  -- `type` assertion is here because a row that lost its type is not a row this check would see.
+  it("renders every description at the same size as the labels around it", function()
+    local function walk(node, path)
+      for key, row in pairs(node.args or {}) do
+        local where = path .. "." .. tostring(key)
+        assert.is_table(row, where .. " is not a table")
+        assert.is_string(row.type, where .. " has no type")
+        if row.type == "description" then
+          assert.equal("medium", row.fontSize, where .. " is drawn smaller than its own label")
+        elseif row.type == "group" then
+          walk(row, where)
+        end
+      end
+    end
+    walk(Options.table(), "Elmira")
+    -- Twice, because whole sections are built from the ACTIVE BUILD and the empty-build panel is a
+    -- different set of rows: the peripheral-cue page is a single "nothing suggests one" line until
+    -- a build suggests a cue, and then it is a heading and a group per cue.
+    ns.Display.activeBuild = function()
+      return { visuals = { cues = { { event = "now_slot", spell = "EXORCISM",
+                                      reason = "Exorcism up", edge = "left" } } } }
+    end
+    walk(Options.table(), "Elmira(with cues)")
   end)
 
   -- ADR-0015 §3 makes the bar glow the single attention signal, so it gets the range of control
@@ -504,6 +748,7 @@ describe("Options (overlay/peripheral cues)", function()
       }
       ns.db.global = { announceLog = {}, announceDropped = 0 }
       ns.Announce.use{ now = function() return 1 end, inCombat = function() return false end }
+      ns.Queue = { isLocked = function() return false end }
       ns.Announcers = {
         chatWindows = function() return { [0] = "Default", [2] = "Addons" } end,
         fonts = function() return { ["Friz Quadrata TT"] = "Friz Quadrata TT" } end,
@@ -622,6 +867,18 @@ describe("Options (overlay/peripheral cues)", function()
     it("reflects move mode being on", function()
       ns.Announcers.isMoving = function() return true end
       assert.is_true(announceArgs().move.get())
+    end)
+
+    -- D18: locking positions on General ends move mode AND must stop it being switched back on
+    -- until unlocked, or the toggle would read as broken the moment the strip locked underneath it.
+    it("is disabled, with a reason, while positions are locked on General", function()
+      local row = announceArgs().move
+      assert.is_false(row.disabled())
+      assert.equal("Shows one sample of every kind so you can see how tall it gets, and lets you "
+                 .. "drag it.", row.desc())
+      ns.Queue.isLocked = function() return true end
+      assert.is_true(row.disabled())
+      assert.equal("Unlock all positions on the General page first.", row.desc())
     end)
 
     it("chooses a sound", function()
@@ -748,6 +1005,85 @@ describe("Options (overlay/peripheral cues)", function()
 
   -- Move mode enables the mouse on a frame across the middle of the screen. Closing the panel has
   -- to end it, or that frame sits there eating clicks with nothing on screen to explain it.
+  -- The gate on the Builder's live refresh (Options/Rotation.onQueueChanged). It runs on every
+  -- queue change, which in combat is several times a second, and what it guards is expensive and
+  -- destructive: `AceConfigRegistry:NotifyChange` rebuilds the WHOLE options table, and an AceGUI
+  -- EditBox commits only on Enter -- so a rebuild that lands mid-keystroke silently throws away
+  -- whatever was half-typed into a condition value.
+  describe("builderIdle()", function()
+    local function fakeDialog(opts)
+      opts = opts or {}
+      return {
+        OpenFrames = opts.standalone and { Elmira = {} } or {},
+        GetStatusTable = function(_, app, path)
+          assert.equal("Elmira", app)
+          assert.same({ "rotation" }, path)
+          if opts.noGroups then return {} end
+          return { groups = { selected = opts.tab or "builder" } }
+        end,
+      }
+    end
+
+    it("is true when the standalone panel is open on the Builder and nobody is typing", function()
+      Options.dialog = fakeDialog{ standalone = true }
+      assert.is_true(Options.builderIdle())
+    end)
+
+    it("is true for the Blizzard-embedded panel too", function()
+      Options.dialog = fakeDialog{}
+      Options.frame = { IsVisible = function() return true end }
+      assert.is_true(Options.builderIdle())
+      Options.frame = { IsVisible = function() return false end }
+      assert.is_false(Options.builderIdle(), "a hidden embedded panel is not on screen")
+    end)
+
+    it("is false when no panel is on screen at all", function()
+      Options.dialog = fakeDialog{}
+      Options.frame = nil
+      assert.is_false(Options.builderIdle())
+    end)
+
+    -- NotifyChange rebuilds every section, so refreshing while the player is reading Rotations
+    -- would throw away their place for a status column they cannot see.
+    it("is false when a different tab is showing", function()
+      Options.dialog = fakeDialog{ standalone = true, tab = "rotations" }
+      assert.is_false(Options.builderIdle())
+      Options.dialog = fakeDialog{ standalone = true, tab = "share" }
+      assert.is_false(Options.builderIdle())
+    end)
+
+    -- `groups` does not exist until the tab group has been opened once, which is the state on the
+    -- very first render -- and indexing it is what would take the render loop down.
+    it("is false, not an error, before the tab group has ever been opened", function()
+      Options.dialog = fakeDialog{ standalone = true, noGroups = true }
+      assert.is_false(Options.builderIdle())
+    end)
+
+    it("is false while someone is typing into a box", function()
+      Options.dialog = fakeDialog{ standalone = true }
+      ns.Adapter = { typing = function() return true end }
+      assert.is_false(Options.builderIdle())
+      ns.Adapter = { typing = function() return false end }
+      assert.is_true(Options.builderIdle())
+    end)
+
+    it("is false, not an error, before the panel has been registered", function()
+      Options.dialog = nil
+      Options.frame = nil
+      assert.is_false(Options.builderIdle())
+    end)
+
+    -- An adapter that cannot answer "is anyone typing" is a client where the refresh is a little
+    -- too eager, not one where the render loop errors.
+    it("tolerates an adapter with no typing() at all", function()
+      Options.dialog = fakeDialog{ standalone = true }
+      ns.Adapter = {}
+      assert.is_true(Options.builderIdle())
+      ns.Adapter = nil
+      assert.is_true(Options.builderIdle())
+    end)
+  end)
+
   describe("Options.Open", function()
     it("ends move mode when the panel is closed", function()
       local stopped, closer = 0, nil
@@ -764,23 +1100,32 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal(1, stopped)
     end)
 
-    -- The Rotation section is the front door, so /elm rotation has to land on it. AceConfigDialog
-    -- takes the path as Open(appName, container, ...); passing it as the CONTAINER would silently
-    -- open the panel wherever it was last left.
-    it("passes a section path through to the dialog, after the container slot", function()
-      local got
+    -- The Rotation section is the front door, so /elm rotation has to land on it -- WITHOUT losing
+    -- the left menu. AceConfigDialog:Open(appName, container, ...) stores a path as the frame's
+    -- basepath and feeds THAT group as the window's root, showing only the Rotation subtree; the fix
+    -- is to open with no path at all and move the selection with SelectGroup instead.
+    it("opens with no basepath and selects the section separately, so the left menu survives", function()
+      local opened, selected = {}, nil
       ns.Announcers = { StopMoving = function() end }
-      Options.dialog = { Open = function(_, app, container, ...) got = { app, container, ... } end }
+      Options.dialog = {
+        Open = function(_, app, container, ...) opened = { app, container, ... } end,
+        SelectGroup = function(_, app, ...) selected = { app, ... } end,
+      }
       assert.is_true(Options.Open("rotation"))
-      assert.same({ "Elmira", nil, "rotation" }, got)
+      assert.same({ "Elmira" }, opened, "Open must carry no path, or it becomes the window's root")
+      assert.same({ "Elmira", "rotation" }, selected)
     end)
 
-    it("opens with no path at all, which is what /elm config wants", function()
-      local got
+    it("opens with no path at all, which is what /elm config wants, and never calls SelectGroup", function()
+      local got, selectCalls = nil, 0
       ns.Announcers = { StopMoving = function() end }
-      Options.dialog = { Open = function(_, app, container, ...) got = { app, container, ... } end }
+      Options.dialog = {
+        Open = function(_, app, container, ...) got = { app, container, ... } end,
+        SelectGroup = function() selectCalls = selectCalls + 1 end,
+      }
       assert.is_true(Options.Open())
       assert.same({ "Elmira" }, got)
+      assert.equal(0, selectCalls)
     end)
 
     it("opens without erroring on a dialog that exposes no frames", function()

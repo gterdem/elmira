@@ -436,6 +436,56 @@ describe("Display.Driver", function()
       end)
     end)
 
+    -- The Builder draws a status marker per row, so it needs the ACTIVE rows too: "cannot fire for
+    -- you" and "fine, simply not first right now" are different colours and inactiveRows only
+    -- distinguishes one of them.
+    describe("gateRows", function()
+      it("hands back every row, the compiled build and the key", function()
+        entries = { { spell = "DIVINE_STORM", when = { { "bonus", "HOLY_POWER_CONSUME" } } },
+                    { spell = "EXORCISM" } }
+        local compiled, rows, key = Display.gateRows()
+        assert.equal(2, #rows)
+        assert.is_false(rows[1].active)
+        assert.is_true(rows[2].active)
+        assert.equal("PALADIN_EXODIN", key)
+        assert.equal(2, #compiled.entries)
+      end)
+
+      -- Row i belongs to compiled.entries[i].index, not to saved entry i. Schema.compile drops a
+      -- disabled entry and records where it came from, so a caller mapping by ordinal would put
+      -- every status one row out the moment a line was switched off.
+      it("carries the SAVED position of each row, past a disabled line", function()
+        -- Compiled for real here, not stubbed: the skew this pins is created by Schema.compile
+        -- dropping a disabled entry, so a stub that hands back the raw build cannot show it.
+        local build = { schema = 1, key = "K", name = "K", class = "PALADIN", entries = {
+          { spell = "EXORCISM", disabled = true },
+          { spell = "DIVINE_STORM", when = { { "bonus", "HOLY_POWER_CONSUME" } } },
+        } }
+        local built = ns.Schema.compile(build, { spells = { EXORCISM = { id = 1 },
+                                                            DIVINE_STORM = { id = 2 } },
+                                                 bonuses = { HOLY_POWER_CONSUME = { note = "n" } } })
+        ns.Display.activeBuild = function() return built, "PALADIN_EXODIN", "pinned" end
+        local compiled, rows = Display.gateRows()
+        assert.equal(1, #rows, "the disabled line does not compile, so it has no gate row")
+        assert.equal(1, rows[1].index, "the gate row is the first COMPILED row")
+        assert.equal(2, compiled.entries[1].index, "and it is the second SAVED row")
+        assert.equal("DIVINE_STORM", rows[1].spell)
+      end)
+
+      it("answers no rows rather than erroring with no build or no Gates", function()
+        ns.Display.activeBuild = function() return nil, nil, "no pack" end
+        local compiled, rows, key = Display.gateRows()
+        assert.is_nil(compiled)
+        assert.same({}, rows)
+        assert.is_nil(key)
+        withGates(); setBonus(false)
+        ns.Gates = nil
+        local again, noRows = Display.gateRows()
+        assert.is_nil(again)
+        assert.same({}, noRows)
+      end)
+    end)
+
     it("hands Gates the pack's own words for a set and a bonus", function()
       local gateCtx = Display.gateContext()
       assert.is_not_nil(gateCtx.bonuses.HOLY_POWER_CONSUME)
@@ -658,6 +708,29 @@ describe("Display.Driver", function()
       assert.is_table(given[1], "the tick passes a buffer")
       D.computeQueue(3)
       assert.is_nil(given[2], "a direct caller gets fresh tables it may keep")
+    end)
+
+    -- What the Builder's queue mirror reads. `nil` while hidden is a real answer -- "no target, out
+    -- of combat" -- and must not read as "the addon is broken".
+    it("answers the queue that is on screen, and nil while hidden", function()
+      computed = { "EXORCISM" }
+      ns.db.profile.visibility = "combat_or_target"
+      stubState(true, true)
+      local D = realComputeQueue()
+      assert.is_nil(D.currentQueue(), "nothing has been rendered yet")
+      D.tick(1)
+      assert.equal(rendered[#rendered].queue, D.currentQueue())
+      assert.equal("EXORCISM", D.currentQueue()[1].spell)
+
+      -- It follows the double buffer rather than holding the first table it saw.
+      computed = { "JUDGEMENT" }
+      D.tick(2)
+      assert.equal("JUDGEMENT", D.currentQueue()[1].spell)
+      assert.equal(rendered[#rendered].queue, D.currentQueue())
+
+      stubState(false, false)
+      assert.equal("hidden", D.tick(3))
+      assert.is_nil(D.currentQueue())
     end)
 
     it("allocates nothing for a tick whose queue did not change", function()
