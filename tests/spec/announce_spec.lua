@@ -10,7 +10,7 @@ describe("Core.Announce", function()
   local A, ns
 
   local function db()
-    return { profile = { announce = { routes = {} } }, global = { announceLog = {}, announceDropped = 0 } }
+    return { profile = { announce = { routes = {} } }, global = { announceLog = {} } }
   end
 
   before_each(function()
@@ -58,20 +58,28 @@ describe("Core.Announce", function()
 
   -- Each row is a design decision, so each row is asserted rather than counted.
   describe("the kinds of thing it says", function()
-    it("names six categories in the order the panel lists them", function()
+    -- D21: `template` and `mode` are gone -- neither was ever emitted, and a row nothing can fire
+    -- only teaches the panel to be ignored.
+    it("names four categories in the order the panel lists them", function()
       local keys = {}
       for _, c in ipairs(A.CATEGORIES) do keys[#keys + 1] = c.key end
-      assert.same({ "rotation", "template", "mode", "warning", "status", "cooldown" }, keys)
+      assert.same({ "rotation", "warning", "status", "cooldown" }, keys)
     end)
 
-    it("gives each one its own colour and label", function()
+    it("gives each one its own colour and its renamed label", function()
       assert.equal("HIGHLIGHT", A.category("rotation").color)
-      assert.equal("Rotation changed", A.category("rotation").label)
-      assert.equal("BRAND", A.category("template").color)
-      assert.equal("BRAND", A.category("mode").color)
+      assert.equal("Rotation changes", A.category("rotation").label)
       assert.equal("WARN", A.category("warning").color)
+      assert.equal("Problems", A.category("warning").label)
       assert.equal("MUTED", A.category("status").color)
+      assert.equal("Status", A.category("status").label)
       assert.equal("OK", A.category("cooldown").color)
+      assert.equal("Long cooldowns used", A.category("cooldown").label)
+    end)
+
+    it("has no category left for the two that were never emitted", function()
+      assert.is_nil(A.category("template"))
+      assert.is_nil(A.category("mode"))
     end)
 
     -- The rule the owner set: a message about YOUR rotation is not something a group should see.
@@ -93,18 +101,14 @@ describe("Core.Announce", function()
 
   describe("the routing it ships with", function()
     it("interrupts for a rotation change and nothing else", function()
-      assert.same({ chat = true, screen = true, sound = false, party = false },
+      assert.same({ chat = true, screen = true, sound = false, party = false, raid = false },
                   A.DEFAULT_ROUTES.rotation)
     end)
 
-    it("puts warnings, templates and status in chat, and a mode change on screen", function()
-      assert.same({ chat = true, screen = false, sound = false, party = false },
+    it("puts warnings and status in chat", function()
+      assert.same({ chat = true, screen = false, sound = false, party = false, raid = false },
                   A.DEFAULT_ROUTES.warning)
-      assert.same({ chat = true, screen = false, sound = false, party = false },
-                  A.DEFAULT_ROUTES.template)
-      assert.same({ chat = false, screen = true, sound = false, party = false },
-                  A.DEFAULT_ROUTES.mode)
-      assert.same({ chat = true, screen = false, sound = false, party = false },
+      assert.same({ chat = true, screen = false, sound = false, party = false, raid = false },
                   A.DEFAULT_ROUTES.status)
     end)
 
@@ -145,9 +149,10 @@ describe("Core.Announce", function()
       assert.is_true(ns.db.profile.announce.routes.cooldown.party)
     end)
 
-    it("ships every category silent in party, shareable or not", function()
+    it("ships every category silent in party and raid, shareable or not", function()
       for _, c in ipairs(A.CATEGORIES) do
         assert.is_false(A.DEFAULT_ROUTES[c.key].party, c.key .. " ships routed to party")
+        assert.is_false(A.DEFAULT_ROUTES[c.key].raid, c.key .. " ships routed to raid")
       end
     end)
 
@@ -164,12 +169,6 @@ describe("Core.Announce", function()
   end)
 
   describe("the log", function()
-    it("counts what it dropped, so the panel can say so", function()
-      assert.equal(0, A.dropped())
-      for i = 1, A.MAX_LOG + 2 do A.emit("status", "line " .. i) end
-      assert.equal(2, A.dropped())
-    end)
-
     it("records what was said, with its category and time", function()
       A.emit("status", "hello")
       local rows = A.log()
@@ -198,22 +197,23 @@ describe("Core.Announce", function()
       assert.equal("line 5", A.log(2)[1].text)
     end)
 
-    it("drops the oldest past its cap and counts what it dropped", function()
+    it("drops the oldest past its cap, keeping only the newest", function()
       for i = 1, A.MAX_LOG + 3 do A.emit("status", "line " .. i) end
       assert.equal(A.MAX_LOG, #ns.db.global.announceLog)
-      assert.equal(3, ns.db.global.announceDropped)
       assert.equal("line 4", ns.db.global.announceLog[1].text)
     end)
 
-    it("caps at 200, which is more than anyone reads and small on disk", function()
-      assert.equal(200, A.MAX_LOG)
+    -- D27 (2026-09-07 Notifications pass): the store matches what the single page can actually show
+    -- at the bottom of it -- twenty lines, not two hundred -- and there is no dropped-lines counter
+    -- left to say otherwise (Options no longer has a row for it).
+    it("caps at twenty, matching what the panel shows", function()
+      assert.equal(20, A.MAX_LOG)
     end)
 
     it("empties on request", function()
       A.emit("status", "x")
       assert.is_true(A.clear())
       assert.equal(0, #A.log())
-      assert.equal(0, ns.db.global.announceDropped)
     end)
 
     -- The Log is the record. Routing decides how loudly something announces itself on the way in,
@@ -268,6 +268,25 @@ describe("Core.Announce", function()
       A.emit("warning", "careful")
       assert.equal("screen", seen[1][1])
       assert.equal(1, #seen)
+    end)
+
+    -- D22: the "party" sink fires on EITHER flag -- Display/Announcers.party is the one place that
+    -- knows which of the two the current group actually is, so dispatch only has to know "at least
+    -- one of them is on".
+    it("reaches the party sink when only raid is switched on", function()
+      ns.db.profile.announce.routes.cooldown = { raid = true }
+      A.emit("cooldown", "Avenging Wrath")
+      local names = {}
+      for _, row in ipairs(seen) do names[row[1]] = true end
+      assert.is_true(names.party)
+    end)
+
+    it("never reaches the party sink when neither party nor raid is on", function()
+      ns.db.profile.announce.routes.cooldown = { chat = true }
+      A.emit("cooldown", "Avenging Wrath")
+      local names = {}
+      for _, row in ipairs(seen) do names[row[1]] = true end
+      assert.is_nil(names.party)
     end)
 
     -- One broken sink must not silence the rest, and none of them can un-log what was already said.
@@ -326,7 +345,8 @@ describe("Core.Announce", function()
     end)
 
     -- A fight producing fifty toasts is already telling the player something is wrong; dumping all
-    -- fifty the moment they stop fighting is not the way to say it. The Log keeps them all.
+    -- fifty the moment they stop fighting is not the way to say it. The Log keeps as many as its own
+    -- cap allows, which (D27) is now smaller than a long fight's deferred queue can be.
     it("holds only the newest few, however long the fight goes on", function()
       local texts = {}
       A.registerSink("screen", function(_, r) texts[#texts + 1] = r.text end)
@@ -336,7 +356,7 @@ describe("Core.Announce", function()
       assert.equal(A.MAX_DEFERRED, #texts)
       assert.equal("line 4", texts[1])                       -- oldest dropped, newest kept
       assert.equal("line " .. (A.MAX_DEFERRED + 3), texts[#texts])
-      assert.equal(A.MAX_DEFERRED + 3, #A.log())             -- and the Log has every one of them
+      assert.equal(A.MAX_LOG, #A.log())                      -- and the Log has its own cap's worth
     end)
 
     it("caps the held messages at twenty", function()
@@ -363,6 +383,18 @@ describe("Core.Announce", function()
       A.registerSink("party", function() partied = partied + 1 end)
       A.registerSink("chat", function() end)
       ns.db.profile.announce.routes.cooldown = { chat = true, party = true }
+      A.emit("cooldown", "Avenging Wrath", { noShare = true })
+      assert.equal(0, partied)
+      A.emit("cooldown", "Avenging Wrath")
+      assert.equal(1, partied)
+    end)
+
+    -- D22: raid is a second flag on the same channel, and noShare has to zero both, or a
+    -- raid-only user would see their own test button leak into raid chat.
+    it("keeps a message out of raid too, even when the user routed it there", function()
+      local partied = 0
+      A.registerSink("party", function() partied = partied + 1 end)
+      ns.db.profile.announce.routes.cooldown = { raid = true }
       A.emit("cooldown", "Avenging Wrath", { noShare = true })
       assert.equal(0, partied)
       A.emit("cooldown", "Avenging Wrath")

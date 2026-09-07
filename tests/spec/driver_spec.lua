@@ -143,6 +143,35 @@ describe("Display.Driver", function()
       assert.equal("USER_MINE", compiled.key)
       assert.is_true(#compiled.entries > 10)
     end)
+
+    -- R2b (D75/D76): Save validating a registry-key line is not the whole story -- the ACTIVE
+    -- build is what the render loop shows, and before this pass `packContext` still handed
+    -- `Schema.compile` the pack's OWN spells table alone, so a saved rotation naming a registered
+    -- spell would fail to compile here even though `UserBuilds.replaceEntries` had already
+    -- accepted it — a rotation that saves but never renders.
+    it("compiles a fork naming a registry-only spell, and resolves its id", function()
+      helper.load("Elmira/Core/Spells.lua")
+      helper.load("Elmira/Adapters/Interface.lua")
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Profiles.lua")
+      helper.load("Elmira/Core/UserBuilds.lua")
+      ns.compileBuild = ns.compileBuild or function(b, ctx) return ns.Schema.compile(b, ctx) end
+      local pack = helper.classPack("Paladin")
+      ns.API = { GetProvider = function(kind, class)
+        return kind == "dataPacks" and class == "PALADIN" and pack or nil
+      end }
+      ns.Adapter = { playerClass = function() return "PALADIN" end }
+      local fork = {}
+      for k, v in pairs(pack.builds.PALADIN_EXODIN) do fork[k] = v end
+      fork.key, fork.entries = "USER_MINE", { { spell = "SLICE" } }
+      ns.db = { profile = { activeBuild = "USER_MINE" },
+                char = { spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice" } } },
+                global = { userBuilds = { USER_MINE = { class = "PALADIN", build = fork } } } }
+      local compiled, key, reason = Display.activeBuild()
+      assert.equal("USER_MINE", key)
+      assert.is_table(compiled, tostring(reason))
+      assert.equal(900, compiled.entries[1].data.id)
+    end)
   end)
 
   describe("stats() build resolution", function()
@@ -178,17 +207,24 @@ describe("Display.Driver", function()
   describe("telling the player their gear changed the rotation", function()
     local said, entries
 
+    -- The REAL Core/UserBuilds, and a pack with a REAL catalog: the sentence is built from the
+    -- storage key, and the name lookup that turns `PALADIN_EXODIN` (or a fork's `USER_...` slug)
+    -- into words is the half that was never reachable from here. Stubbing it would put the pin
+    -- back where D47 found it.
     local function withGates()
       said = {}
       entries = { { spell = "DIVINE_STORM", when = { { "bonus", "HOLY_POWER_CONSUME" } } } }
       helper.load("Elmira/Core/Schema.lua")
       helper.load("Elmira/Core/Gates.lua")
+      helper.load("Elmira/Core/UserBuilds.lua")
       ns.Announce = { emit = function(cat, text, opts)
         said[#said + 1] = { cat = cat, text = text, icon = opts and opts.icon }
       end }
       ns.Display.activeBuild = function() return { entries = entries }, "PALADIN_EXODIN", "pinned" end
       ns.Display.currentPack = function()
-        return { spells = { DIVINE_STORM = { id = 53385 } },
+        return { class = "PALADIN",
+                 catalog = { PALADIN = { { build = "PALADIN_EXODIN", playstyle = "Exodin" } } },
+                 spells = { DIVINE_STORM = { id = 53385 } },
                  bonuses = { HOLY_POWER_CONSUME = { note = "Divine Storm consumes Holy Power" } } }
       end
       _G.GetSpellTexture = function() return "Interface\\Icons\\Ability_Warrior_Cleave" end
@@ -220,7 +256,37 @@ describe("Display.Driver", function()
       assert.equal("rotation", said[1].cat)
       assert.is_truthy(said[1].text:find("Divine Storm is now active"))
       assert.is_truthy(said[1].text:find("Divine Storm consumes Holy Power"))
-      assert.is_truthy(said[1].text:find("PALADIN_EXODIN"))
+      -- D40/D47: the PLAYSTYLE name, never the storage key. This assertion used to demand the raw
+      -- `PALADIN_EXODIN` -- it pinned the very defect the fix removes.
+      assert.is_truthy(said[1].text:find("in Exodin", 1, true))
+      assert.is_nil(said[1].text:find("PALADIN_EXODIN", 1, true))
+    end)
+
+    -- D41's missing assertion. A fork's key is a slug the addon invented (`USER_MY_EXODIN`) and no
+    -- player has ever seen; this announcement is the only sentence in the addon assembled from a
+    -- storage key, so it is the only place one could reach the screen.
+    it("says a fork's own name, never the USER_ key it is stored under", function()
+      ns.db.global = { userBuilds = { USER_MY_EXODIN = {
+        class = "PALADIN", name = "My Exodin", build = { entries = entries } } } }
+      ns.Display.activeBuild = function()
+        return { entries = entries }, "USER_MY_EXODIN", "pinned"
+      end
+      Display.checkGates()
+      setBonus(true)
+      Display.checkGates()
+      assert.equal(1, #said)
+      assert.is_truthy(said[1].text:find("in My Exodin", 1, true))
+      assert.is_nil(said[1].text:find("USER_", 1, true))
+    end)
+
+    -- And when the key answers to nothing at all -- a build removed from the catalog while it was
+    -- pinned -- the key is still better than an empty "is now active in .".
+    it("falls back to the key when nothing can name it", function()
+      ns.Display.activeBuild = function() return { entries = entries }, "PALADIN_GONE", "pinned" end
+      Display.checkGates()
+      setBonus(true)
+      Display.checkGates()
+      assert.is_truthy(said[1].text:find("in PALADIN_GONE", 1, true))
     end)
 
     it("carries the spell's icon, so the toast reads before the sentence does", function()
@@ -274,6 +340,17 @@ describe("Display.Driver", function()
       assert.equal("Interface\\Icons\\Ability_Warrior_Cleave", Display.spellIcon("DIVINE_STORM"))
       _G.GetSpellTexture = nil
       assert.is_nil(Display.spellIcon("DIVINE_STORM"))
+    end)
+
+    -- D81 (review finding on R2b): this used to read `pack.spells` alone, so a spell added by
+    -- id/name/spellbook -- resolvable everywhere else after D75/D79/D80 -- still had no icon
+    -- anywhere it was drawn, including U1's rows. Same merge as `gateContext`'s own D76 test above.
+    it("resolves a registry-only spell's icon too, not just the pack's own keys", function()
+      helper.load("Elmira/Core/Spells.lua")
+      ns.db = { char = { spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice" } } } }
+      assert.equal("Interface\\Icons\\Ability_Warrior_Cleave", Display.spellIcon("SLICE"))
+      assert.equal("Interface\\Icons\\Ability_Warrior_Cleave", Display.spellIcon("DIVINE_STORM"),
+        "the pack's own spells must still resolve")
     end)
 
     -- Slot-based, not item-based: a build entry binds to the SLOT (`entry.item = 13`), so the
@@ -492,6 +569,16 @@ describe("Display.Driver", function()
       assert.is_not_nil(gateCtx.spells.DIVINE_STORM)
       ns.Display.currentPack = function() return nil end
       assert.same({}, Display.gateContext())
+    end)
+
+    -- R2b (D76): a gate naming a registry-only spell ("this row needs X you registered") must
+    -- resolve it too, not just the pack's own keys -- same merge as `packContext`.
+    it("merges this character's registry into the pack's own spells too", function()
+      helper.load("Elmira/Core/Spells.lua")
+      ns.db = { char = { spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice" } } } }
+      local gateCtx = Display.gateContext()
+      assert.equal(900, gateCtx.spells.SLICE.id)
+      assert.is_not_nil(gateCtx.spells.DIVINE_STORM, "the pack's own spells must still be there")
     end)
   end)
 

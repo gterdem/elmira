@@ -52,7 +52,18 @@ function Vanilla.capabilities()
     addonMemory = (UpdateAddOnMemoryUsage or (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage)) ~= nil,
     inspect = false,
     nameplates = false,
+    -- D25/D49: does this client have the FrameXML helper that answers "does this chat window show
+    -- System messages?" Display/Announcers picks the windows to print in with it, and falls back --
+    -- to the frame's own method, then to the raw `messageTypeList`, then to DEFAULT_CHAT_FRAME --
+    -- when it is missing, which on this install it always is: grepping every installed addon for
+    -- the name returns zero hits. Declared here because that is where a non-universal global is
+    -- allowed to be named at all, and so `/elm debug state` can say which tier a client is on.
+    chatMessageGroups = ChatFrame_ContainsMessageGroup ~= nil,
     seal = true,               -- paladin seal accessor; class-gated at M5 when other classes land
+    -- R2 (D53/D54c): can this client turn a spell NAME back into an id at all? True on Classic Era,
+    -- where GetSpellInfo still accepts a string; declared as its own flag because the retail
+    -- replacement does not (see Adapters/Interface.lua's comment on this flag).
+    spellNameLookup = GetSpellInfo ~= nil,
   }
 end
 
@@ -314,6 +325,48 @@ local function spellbookNames()
   if partial then return names end
   spellbookCache = names
   return names
+end
+
+-- R2 (D53/D54a): the Spells page's "From spellbook" picker needs an ID beside every name, which
+-- `spellbookNames()` throws away on purpose (it only ever answers "known?"). A SEPARATE scan rather
+-- than teaching that one to keep ids: caching this list under the same whole-book rule would trade
+-- a `known()` slowdown for a `/elm config` one every time either function's cache is cleared, for no
+-- shared benefit -- the Spells page is opened rarely, never from the render loop.
+--
+-- Not cached at all: a page that lists what the client already knows can afford to ask again.
+function Vanilla.spellbookEntries()
+  local out, i = {}, 1
+  while true do
+    local ok, name, _, id = pcall(GetSpellBookItemName, i, BOOKTYPE)
+    if not ok or not name or name == "" then break end
+    if not futureSpell(i) and type(id) == "number" and id > 0 then
+      out[#out + 1] = { id = id, name = name }
+    end
+    i = i + 1
+    if i > 1024 then break end -- same bound as spellbookNames(), same reason
+  end
+  return out
+end
+
+-- R2 (D53/D54b): "By ID" shows what the id resolves to before storing it, so a typo reads as
+-- "not found" rather than silently registering the wrong spell.
+function Vanilla.spellNameByID(id)
+  if type(id) ~= "number" or id <= 0 or not GetSpellInfo then return nil end
+  local ok, name = pcall(GetSpellInfo, id)
+  if not ok or not name or name == "" then return nil end
+  return name
+end
+
+-- R2 (D53/D54c, capability `spellNameLookup`): "By name" resolves ONLY a name this client's own
+-- cache already holds -- GetSpellInfo answers nil for anything it has never seen, which is exactly
+-- the "this character has not seen it" boundary the add row is required to respect. The exact-match
+-- check on the returned name (not just "did it answer at all") is what stops a near-miss
+-- ("exorcism") from silently registering under the text the player actually typed.
+function Vanilla.spellIDByName(name)
+  if type(name) ~= "string" or name == "" or not GetSpellInfo then return nil end
+  local ok, resolvedName, _, _, _, _, _, id = pcall(GetSpellInfo, name)
+  if not ok or resolvedName ~= name or type(id) ~= "number" or id <= 0 then return nil end
+  return id
 end
 
 -- How many times the held answers have been dropped this session. Every character-change event
@@ -685,7 +738,35 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   function S:buff(key) return findAura("player", key, "HELPFUL") end
   function S:debuff(key, mine) return findAura("target", key, "HARMFUL", mine == true) end
 
+  -- COMBO_POINTS, added at R2 (D59) for the pack-less rogue this pass exists to serve: with no data
+  -- pack there is no spell key to gate on, so "5 combo points" has to be expressible as a plain
+  -- power condition instead.
+  --
+  -- VERIFIED against the live install, 2026-09-07, at
+  -- /mnt/d/Blizzard/World of Warcraft/_classic_era_/Interface/AddOns/ -- not written from memory:
+  --   * Current value: `GetComboPoints(unit, unit .. '-target')`, the classic-only global (retail
+  --     reads combo points through plain `UnitPower`/`Enum.PowerType.ComboPoints` instead — the two
+  --     branch on `not oUF.isRetail` right next to each other). Three independent, unrelated addons
+  --     on THIS client all read it the same way with no capability check anywhere around it:
+  --     ElvUI_Libraries/Game/Shared/oUF/elements/classpower.lua:306, WeakAuras/Prototypes.lua:3858,
+  --     PallyPower/Libs/LibClassicDurations/core.lua:341/351. That is what makes it universal enough
+  --     to need no flag here, the same as MANA/RAGE/ENERGY below.
+  --   * Max value: the FrameXML global `MAX_COMBO_POINTS`, not `UnitPowerMax(unit,
+  --     Enum.PowerType.ComboPoints)`. ElvUI reads the global directly and unconditionally in three
+  --     places (e.g. ElvUI/Game/Shared/Modules/Nameplates/Elements/ClassPower.lua:10,
+  --     `local MAX_COMBO_POINTS = MAX_COMBO_POINTS`) — a client-shipped constant, never toggled, so
+  --     there is nothing to gate. UnitPowerMax is the UNSAFE path here: WeakAuras guards its own use
+  --     of it with `math.max(1, UnitPowerMax(unit, Enum.PowerType.ComboPoints))`
+  --     (WeakAuras/Prototypes.lua:3859) precisely because it can read 0 on this client — exactly the
+  --     "max comes back 0" failure this function must not reproduce, so it never calls UnitPowerMax
+  --     for this kind at all.
   function S:power(kind)
+    if kind == "COMBO_POINTS" then
+      local current = GetComboPoints and GetComboPoints("player", "target") or 0
+      local max = MAX_COMBO_POINTS
+      if type(max) ~= "number" or max <= 0 then max = 5 end
+      return current or 0, max
+    end
     local index = 0
     if Enum and Enum.PowerType then
       if kind == "RAGE" then index = Enum.PowerType.Rage
@@ -983,11 +1064,24 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
 end
 
 -- Rebuilt whenever the registered pack changes; Core reaches it through Elmira.API.GetState().
+--
+-- R2b (D76): `idOf` above resolves a symbolic key against whichever `spells` table this State
+-- closed over, and that used to be `pack.spells` alone -- so a spell registered by id, by name or
+-- from the spellbook (Core/Spells.lua) validated and compiled, but `state:cooldown/usable/known`
+-- could never find its id, because the table this State actually reads from had never heard of it.
+-- `Spells.merged` is the SAME table `Core/UserBuilds.ctxFor` and `Display.packContext` build the
+-- compile ctx from (pack wins on a key collision), so a registry key resolves here exactly the way
+-- a pack key does -- one merge, shared, rather than a second copy that could disagree with it. It
+-- also stays LIVE: `Spells.merged` mutates one table per pack rather than replacing it, and this
+-- State's `spells` upvalue is that same object, so a spell added after login is visible the next
+-- time anything (the render loop's `packContext`, most often) asks for a merge -- no re-attach
+-- needed. This is pure data assembly, still no WoW API call of its own (hard rule 3).
 function Vanilla.attachPack(pack)
   pack = pack or {}
+  local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or pack.spells
   -- `sealLingerWindow` is optional and usually absent: it is a sourced server-side timing constant,
   -- and a pack that has not sourced one leaves seal twisting inert rather than mis-timed.
-  Vanilla.state = Vanilla.newState(pack.spells, pack.sets, pack.souls, pack.bonuses,
+  Vanilla.state = Vanilla.newState(spells, pack.sets, pack.souls, pack.bonuses,
                                    pack.sealLingerWindow)
   return Vanilla.state
 end

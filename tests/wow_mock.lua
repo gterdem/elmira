@@ -29,6 +29,7 @@ local function defaults()
     powerCosts = {},         -- [spellID] = amount (mana)
     auras = { player = {}, target = {} },
     power = { [0] = { 1000, 1000 } },
+    comboPoints = 0,   -- GetComboPoints(unit, "target"); R2 D59, classic-only, not part of `power`
     inventory = {},          -- [slot] = itemID
     itemLinks = {},          -- [slot] = link string
     tooltipLines = {},       -- [slot] = { "line", ... }  (LEFT column)
@@ -105,10 +106,23 @@ function IsUsableSpell(id) return M.knownSpells[id] == true, false end
 function IsPlayerSpell(id) return M.knownSpells[id] == true end
 function IsSpellKnown(id) return M.knownSpells[id] == true end
 
-function GetSpellInfo(id)
-  if M.knownSpells[id] == nil then return nil end
-  -- Field 2 (rank) is absent on this client — docs/07 §9.6. Returning nil keeps specs honest.
-  return M.spellNames[id] or ("Spell" .. tostring(id)), nil, nil, M.castTimes[id] or 0
+-- Takes an id OR a name, matching the real client (Vanilla.spellIDByName relies on the latter).
+-- Field 2 (rank) is absent on this client — docs/07 §9.6. Field 7 (spellID) is real: three
+-- independent addons on the live install destructure it this way (see Adapters/Vanilla.lua's
+-- S:power COMBO_POINTS comment for the exact file:line citations of the same client sweep).
+function GetSpellInfo(idOrName)
+  local id = idOrName
+  if type(idOrName) == "string" then
+    id = nil
+    -- Case-INSENSITIVE, like the real client's name cache: this is what lets a spec prove
+    -- Vanilla.spellIDByName's exact-match check earns its keep, by querying "exorcism" and getting
+    -- back the CANONICALLY-cased "Exorcism" rather than nothing at all.
+    for sid, sname in pairs(M.spellNames) do
+      if sname:lower() == idOrName:lower() then id = sid; break end
+    end
+  end
+  if id == nil or M.knownSpells[id] == nil then return nil end
+  return M.spellNames[id] or ("Spell" .. tostring(id)), nil, nil, M.castTimes[id] or 0, nil, nil, id
 end
 
 -- Returns a LIST of cost tables, not a bare number. Reflects runes on the live client (345 -> 69
@@ -140,6 +154,14 @@ AuraUtil = {
 
 function UnitPower(u, kind) return M.power[kind or 0][1] end
 function UnitPowerMax(u, kind) return M.power[kind or 0][2] end
+-- Classic-only global (R2 D59): current combo points, read the same way three independent addons on
+-- the live install read it -- see Adapters/Vanilla.lua's S:power COMBO_POINTS comment.
+function GetComboPoints(unit, target) return M.comboPoints or 0 end
+-- The FrameXML constant, not a client-state value: real WoW never changes it mid-session, so it is
+-- a plain global here too rather than something `M.reset()` touches -- a spec that needs to prove
+-- the "not 0" guard sets `_G.MAX_COMBO_POINTS` directly and restores it itself, the same pattern
+-- already used for `_G.GetSpellInfo` elsewhere in this suite.
+MAX_COMBO_POINTS = 5
 function UnitCreatureType(u) return M.creatureType end
 function UnitExists(u)
   if u == "target" then return M.targetExists end

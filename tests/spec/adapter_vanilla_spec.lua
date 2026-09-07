@@ -288,6 +288,200 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       _G.UpdateAddOnMemoryUsage, C_AddOns.UpdateAddOnMemoryUsage = savedGlobal, savedCAddOns
       assert.is_true(Vanilla.capabilities().addonMemory)
     end)
+
+    -- D49. Display/Announcers picks the chat windows that show System messages, and the FrameXML
+    -- helper it prefers is absent on this client (zero hits across every installed addon), so the
+    -- fallback tiers are what actually run. A fallback nobody declared is a fallback nobody
+    -- noticed: this flag is how `/elm debug state` says which tier a client is on.
+    it("reports chatMessageGroups from the client, not from a constant", function()
+      local saved = _G.ChatFrame_ContainsMessageGroup
+      _G.ChatFrame_ContainsMessageGroup = nil
+      assert.is_false(Vanilla.capabilities().chatMessageGroups)
+      _G.ChatFrame_ContainsMessageGroup = function() return true end
+      assert.is_true(Vanilla.capabilities().chatMessageGroups)
+      _G.ChatFrame_ContainsMessageGroup = saved
+    end)
+
+    -- R2 D53/D54c: whether this client can turn a spell NAME back into an id at all.
+    it("reports spellNameLookup from GetSpellInfo's real presence", function()
+      local saved = _G.GetSpellInfo
+      assert.is_true(Vanilla.capabilities().spellNameLookup)
+      _G.GetSpellInfo = nil
+      assert.is_false(Vanilla.capabilities().spellNameLookup)
+      _G.GetSpellInfo = saved
+    end)
+  end)
+
+  -- R2 (D53/D54): the three client lookups the Spells registry is built from.
+  describe("spellbookEntries()/spellNameByID()/spellIDByName() (D54a/b/c)", function()
+    after_each(function() _G.GetSpellBookItemName, _G.GetSpellBookItemInfo = nil, nil end)
+
+    describe("spellbookEntries() — D54a's 'From your spellbook' picker", function()
+      it("returns id and name for each entry, in book order, ids as numbers", function()
+        local book = { { "Exorcism", 415073 }, { "Holy Wrath", 2812 } }
+        _G.GetSpellBookItemName = function(i, booktype)
+          if booktype ~= "spell" then return nil end
+          local e = book[i]
+          if not e then return nil end
+          return e[1], "", e[2]
+        end
+        local rows = Vanilla.spellbookEntries()
+        assert.same({ { id = 415073, name = "Exorcism" }, { id = 2812, name = "Holy Wrath" } }, rows)
+      end)
+
+      it("skips a future-rank entry the trainer has not sold yet", function()
+        _G.GetSpellBookItemName = function(i, booktype)
+          if booktype ~= "spell" then return nil end
+          return ({ "Exorcism", "Holy Wrath" })[i], "", ({ [1] = 415073, [2] = 2812 })[i]
+        end
+        _G.GetSpellBookItemInfo = function(i) return i == 2 and "FUTURESPELL" or "SPELL" end
+        local rows = Vanilla.spellbookEntries()
+        assert.equal(1, #rows)
+        assert.equal(415073, rows[1].id)
+      end)
+
+      it("skips an entry the client answered with no numeric id", function()
+        _G.GetSpellBookItemName = function(i, booktype)
+          if booktype ~= "spell" then return nil end
+          if i == 1 then return "Attack", "", nil end
+          return nil
+        end
+        assert.same({}, Vanilla.spellbookEntries())
+      end)
+
+      it("answers an empty list rather than erroring when the client cannot read the book at all", function()
+        _G.GetSpellBookItemName = nil
+        assert.same({}, Vanilla.spellbookEntries())
+      end)
+
+      -- The bound (D53) is what stops a client that never stops answering from hanging the game;
+      -- without it this test would time out instead of asserting anything.
+      it("bounds the scan at 1024 reads, even against a client that never stops answering", function()
+        local calls = 0
+        _G.GetSpellBookItemName = function(i, booktype)
+          calls = calls + 1
+          if booktype ~= "spell" then return nil end
+          return "Spell" .. i, "", i
+        end
+        local rows = Vanilla.spellbookEntries()
+        assert.equal(1024, calls)
+        assert.equal(1024, #rows)
+      end)
+
+      it("stops at the book's own end rather than scanning to the bound", function()
+        local calls = 0
+        local book = { { "Exorcism", 415073 } }
+        _G.GetSpellBookItemName = function(i, booktype)
+          calls = calls + 1
+          if booktype ~= "spell" then return nil end
+          local e = book[i]
+          if not e then return nil end
+          return e[1], "", e[2]
+        end
+        Vanilla.spellbookEntries()
+        assert.is_true(calls <= 3, "the scan read past the end of a one-spell book: " .. calls .. " reads")
+      end)
+    end)
+
+    describe("spellNameByID() — D54b's 'By ID' preview", function()
+      it("resolves a known id to its name", function()
+        mock.spell(415073, { known = true })
+        mock.spellNames[415073] = "Exorcism"
+        assert.equal("Exorcism", Vanilla.spellNameByID(415073))
+      end)
+
+      it("answers nil for an id the client has never seen", function()
+        assert.is_nil(Vanilla.spellNameByID(999999))
+      end)
+
+      it("answers nil for a non-number, and never errors", function()
+        assert.is_nil(Vanilla.spellNameByID("415073"))
+        assert.is_nil(Vanilla.spellNameByID(0))
+        assert.is_nil(Vanilla.spellNameByID(-1))
+      end)
+
+      it("answers nil rather than erroring on a client with no GetSpellInfo", function()
+        local saved = _G.GetSpellInfo
+        _G.GetSpellInfo = nil
+        assert.is_nil(Vanilla.spellNameByID(415073))
+        _G.GetSpellInfo = saved
+      end)
+
+      -- The type/range/presence guard exists to avoid CALLING the client at all for a bad id --
+      -- nil/0/negative would still answer nil either way, so a plain nil-return assertion cannot
+      -- tell "the guard ran" from "the mock answered nil anyway"; only counting the call can.
+      it("never calls the client at all for an invalid id", function()
+        local saved, calls = _G.GetSpellInfo, 0
+        _G.GetSpellInfo = function(...) calls = calls + 1; return saved(...) end
+        Vanilla.spellNameByID(0)
+        Vanilla.spellNameByID(-1)
+        Vanilla.spellNameByID("415073")
+        assert.equal(0, calls)
+        _G.GetSpellInfo = saved
+      end)
+
+      -- pcall returns (false, errorMessage) on a throw -- a STRING, and truthy. Without the
+      -- post-pcall guard, `return name` would hand back that error text as if it were a spell name.
+      it("returns nil, not the error text, when GetSpellInfo throws", function()
+        local saved = _G.GetSpellInfo
+        _G.GetSpellInfo = function() error("boom") end
+        assert.is_nil(Vanilla.spellNameByID(415073))
+        _G.GetSpellInfo = saved
+      end)
+    end)
+
+    -- D54c: "resolves a name ONLY for spells this character knows or has seen" -- the mock's
+    -- GetSpellInfo(name) answers only for a spell already in `mock.spellNames`, the same "the
+    -- client's own cache" boundary the real GetSpellInfo(name) enforces.
+    describe("spellIDByName() — D54c's 'By name' resolution", function()
+      it("resolves a name the client's cache holds to its id", function()
+        mock.spell(415073, { known = true })
+        mock.spellNames[415073] = "Exorcism"
+        assert.equal(415073, Vanilla.spellIDByName("Exorcism"))
+      end)
+
+      it("refuses a name the client has never seen", function()
+        assert.is_nil(Vanilla.spellIDByName("Something Nobody Has Cast"))
+      end)
+
+      it("refuses a near-miss: the returned name must match exactly, not just resolve to SOMETHING", function()
+        mock.spell(415073, { known = true })
+        mock.spellNames[415073] = "Exorcism"
+        assert.is_nil(Vanilla.spellIDByName("exorcism"))
+      end)
+
+      it("refuses a non-string and an empty string without erroring", function()
+        assert.is_nil(Vanilla.spellIDByName(nil))
+        assert.is_nil(Vanilla.spellIDByName(""))
+        assert.is_nil(Vanilla.spellIDByName(415073))
+      end)
+
+      it("answers nil rather than erroring on a client with no GetSpellInfo", function()
+        local saved = _G.GetSpellInfo
+        _G.GetSpellInfo = nil
+        assert.is_nil(Vanilla.spellIDByName("Exorcism"))
+        _G.GetSpellInfo = saved
+      end)
+
+      it("never calls the client at all for a non-string or empty name", function()
+        local saved, calls = _G.GetSpellInfo, 0
+        _G.GetSpellInfo = function(...) calls = calls + 1; return saved(...) end
+        Vanilla.spellIDByName(nil)
+        Vanilla.spellIDByName("")
+        Vanilla.spellIDByName(415073)
+        assert.equal(0, calls)
+        _G.GetSpellInfo = saved
+      end)
+
+      -- Same pcall-failure shape as spellNameByID: `ok` false makes the second return value the
+      -- ERROR TEXT, not a spellID, so a mutant reading it as one would report a made-up number.
+      it("returns nil, not a bogus id, when GetSpellInfo throws", function()
+        local saved = _G.GetSpellInfo
+        _G.GetSpellInfo = function() error("boom") end
+        assert.is_nil(Vanilla.spellIDByName("Exorcism"))
+        _G.GetSpellInfo = saved
+      end)
+    end)
   end)
 
   -- ============================================================ 2a. addonMemoryKB()
@@ -775,6 +969,38 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
       assert.is_nil(state:known("EXORCISM"))
       _G.IsPlayerSpell = real
+    end)
+  end)
+
+  -- R2b (D76): `attachPack` is the ONE place the live State (`ns.API.GetState()`) gets built, and
+  -- before this pass it closed over `pack.spells` alone -- so a spell a player added by id, by
+  -- name or from the spellbook (Core/Spells.lua) validated and compiled, but `state:cooldown/
+  -- usable/known` could never find its id, because the table this State actually reads from had
+  -- never heard of it. It resolves through `Spells.merged`, the SAME merge `Core/UserBuilds.ctxFor`
+  -- and `Display.packContext` build the compile ctx from (D75).
+  describe("attachPack() — resolves a registry key exactly the way it resolves a pack key (D76)", function()
+    it("resolves a spell that exists only in this character's registry, not the pack's own table", function()
+      helper.load("Elmira/Core/Spells.lua")
+      helper.ns().db = { char = { spells = {
+        SLICE = { key = "SLICE", id = 900, name = "Slice and Dice", source = "spellbook" },
+      } } }
+      mock.knownSpells = { [900] = true }
+      local pack = { spells = spellsFixture(), sets = setsFixture(), souls = soulsFixture() }
+      local state = Vanilla.attachPack(pack)
+      assert.is_true(state:known("SLICE"))
+    end)
+
+    -- D75's collision policy carried through to the adapter: shipped data is the authority, so the
+    -- live State must resolve the PACK's id under a colliding key, never the registry's.
+    it("still resolves the pack's own id when a registry entry collides with its key", function()
+      helper.load("Elmira/Core/Spells.lua")
+      helper.ns().db = { char = { spells = {
+        EXORCISM = { key = "EXORCISM", id = 1, name = "Mine", source = "id" },
+      } } }
+      mock.knownSpells = { [415073] = true, [1] = false }
+      local pack = { spells = spellsFixture(), sets = setsFixture(), souls = soulsFixture() }
+      local state = Vanilla.attachPack(pack)
+      assert.is_true(state:known("EXORCISM"), "must resolve the pack's id (415073), not the registry's (1)")
     end)
   end)
 
@@ -1332,6 +1558,53 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       local cur, max = state:power("RAGE")
       assert.equal(30, cur)
       assert.equal(100, max)
+    end)
+
+    -- R2 D59: COMBO_POINTS reads GetComboPoints/MAX_COMBO_POINTS, NOT the UnitPower/UnitPowerMax
+    -- path the other three kinds use -- see Adapters/Vanilla.lua's S:power comment for the client
+    -- sweep that settled it.
+    describe("COMBO_POINTS (D59)", function()
+      it("reads the current value from GetComboPoints, not from UnitPower", function()
+        mock.comboPoints = 3
+        mock.power[0] = { 999, 999 } -- a decoy: if this leaked in, the test would see 999
+        local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+        local cur = state:power("COMBO_POINTS")
+        assert.equal(3, cur)
+      end)
+
+      -- 7, not 5: the fallback this function uses when MAX_COMBO_POINTS is unusable is ALSO 5, so a
+      -- fixture of 5 here cannot tell "read the global" from "always answered the fallback".
+      it("reads the max from MAX_COMBO_POINTS, the FrameXML constant", function()
+        local saved = _G.MAX_COMBO_POINTS
+        _G.MAX_COMBO_POINTS = 7
+        local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+        local _, max = state:power("COMBO_POINTS")
+        assert.equal(7, max)
+        _G.MAX_COMBO_POINTS = saved
+      end)
+
+      -- The exact failure WeakAuras guards against on this client (Prototypes.lua:3859): a max that
+      -- reads 0 makes "5 combo points" un-writable no matter how many the character has.
+      it("never answers a max of 0, even if the client's own constant briefly does", function()
+        local saved = _G.MAX_COMBO_POINTS
+        _G.MAX_COMBO_POINTS = 0
+        local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+        local _, max = state:power("COMBO_POINTS")
+        assert.is_true(max > 0)
+        _G.MAX_COMBO_POINTS = nil
+        local _, max2 = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture()):power("COMBO_POINTS")
+        assert.is_true(max2 > 0)
+        _G.MAX_COMBO_POINTS = saved
+      end)
+
+      it("answers 0 current, not an error, on a client with no GetComboPoints at all", function()
+        local saved = _G.GetComboPoints
+        _G.GetComboPoints = nil
+        local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+        local cur = state:power("COMBO_POINTS")
+        assert.equal(0, cur)
+        _G.GetComboPoints = saved
+      end)
     end)
   end)
 

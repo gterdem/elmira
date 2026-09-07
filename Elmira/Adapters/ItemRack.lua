@@ -17,6 +17,7 @@
 -- while we are already here.
 local ADDON, ns = ...
 ns = ns or _G.__ELM_NS or {} -- mutants: equivalent tests/helper.lua always passes ns as a vararg
+local L = ns.L or setmetatable({}, { __index = function(_, k) return k end })
 
 local Rack = {}
 
@@ -38,8 +39,11 @@ function Rack.onChange(cb)
   if type(cb) ~= "function" then return false end
   if type(ItemRack) ~= "table" or type(ItemRack.UpdateCurrentSet) ~= "function" then
     -- Nothing to hook. Say so rather than registering a callback that can never fire: a silent
-    -- no-op here is exactly the failure that cost an in-game round at M0.
-    ns.log("ItemRack.UpdateCurrentSet not found; gear-swap build switching is off.")
+    -- no-op here is exactly the failure that cost an in-game round at M0. D26 (2026-09-07
+    -- Notifications pass): a warning, not a plain print -- gear-swap switching going off is exactly
+    -- the kind of thing the panel's "Problems" category exists to surface.
+    local text = L["ItemRack.UpdateCurrentSet not found; gear-swap build switching is off."]
+    if ns.Announce then ns.Announce.emit("warning", text) else ns.log("%s", text) end
     return false
   end
   -- UpdateCurrentSet takes NO arguments (docs/08): reading a hook parameter here would read

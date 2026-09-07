@@ -4,7 +4,7 @@ local ADDON, ns = ...
 ns = ns or _G.__ELM_NS or {}
 
 local DB = {}
-DB.CURRENT = 1 -- SavedVariables layout version
+DB.CURRENT = 2 -- SavedVariables layout version
 
 -- `global.dbVersion` starts at 0 deliberately: AceDB omits any value equal to its default (the same
 -- behaviour docs/07-INGAME-VERIFICATION-BASELINE.md §2 documents for ElvDB), so a default of 1 would
@@ -23,7 +23,7 @@ DB.defaults = {
   -- positioned, centre it" and survives AceDB's omit-the-default rule, where nil would not.
   -- 1.2 rather than 1.0: AceConfig description rows are 12pt at best and the panel is read, not
   -- glanced at. 960x680 is the size at which the Builder's rows stop wrapping.
-  global = { dbVersion = 0, userBuilds = {}, announceLog = {}, announceDropped = 0,
+  global = { dbVersion = 0, userBuilds = {}, announceLog = {},
              window = { scale = 1.2, width = 960, height = 680, top = false, left = false } },
   profile = {
     enabled = true,
@@ -45,6 +45,9 @@ DB.defaults = {
     -- on-use in the other slots, and a palette of empty rows teaches you to stop reading it.
     paletteAllSlots = false,
     activeBuild = false,
+    -- D38: the queue strip's own nudge while nothing is chosen yet. Owner was lukewarm on it, so it
+    -- ships behind this toggle rather than folded permanently into the strip.
+    showPlaceholder = true,
     anchor = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },
     -- Every numeric here is `false`, meaning "whatever LibCustomGlow would do on its own". That is
     -- what makes a default install render exactly as it did before these controls existed; the
@@ -70,13 +73,18 @@ DB.defaults = {
     -- Master mute only. A cue carries its own sound name, on the same opt-in set and the same
     -- change-to trigger as its flare.
     sounds = { enabled = false },
-    -- F37. `chatWindow = 0` means "wherever Elmira printed before", i.e. the default frame; a real
-    -- number picks one. `routes` starts EMPTY and Core/Announce falls back to its shipped defaults,
-    -- so a category added by a later release arrives with its intended routing rather than silent --
-    -- and a user who has never opened the panel is not carrying a frozen copy of an old default set.
+    -- F37. `routes` starts EMPTY and Core/Announce falls back to its shipped defaults, so a category
+    -- added by a later release arrives with its intended routing rather than silent -- and a user
+    -- who has never opened the panel is not carrying a frozen copy of an old default set.
+    --
+    -- D25 (2026-09-07): there is no `chatWindow` any more -- Elmira now prints to every chat window
+    -- that shows System messages (Display/Announcers.systemChatFrames), which is what "which of my
+    -- tabs" actually meant; a stored index went stale the moment a tab was renamed or closed.
     announce = {
-      chatWindow = 0,
       sound = "None",
+      -- D24: `sounds[key]` overrides `sound` for one category; empty until the player picks one, so
+      -- every category answers with the shared sound until they do.
+      sounds = {},
       screen = { font = "Friz Quadrata TT", size = 18, duration = 4,
                  anchor = { point = "TOP", relPoint = "TOP", x = 0, y = -140 } },
       -- Only cooldowns at least this long are announced. Shorter ones would be a line every global
@@ -86,13 +94,45 @@ DB.defaults = {
     },
     dbVersion = 0,
   },
-  char = { setupDone = 0, pinnedBuild = false, snoozed = {} },
+  -- D37: the first-run popup replaces the old setup wizard window. "Not now" asks again next
+  -- login; `firstRunDismissed` is the one flag that stops it for good ("Don't ask again").
+  -- R2 (D53): the Spells registry is PER CHARACTER, because it records what THIS character's client
+  -- could resolve -- a name only this account's rogue has seen means nothing to its paladin.
+  -- `[key] = { key =, id =, name =, source = "pack"|"spellbook"|"id"|"name" }`.
+  char = { setupDone = 0, pinnedBuild = false, snoozed = {}, firstRunDismissed = false, spells = {} },
 }
 
 -- Ordered migration lists. Each entry: { version = N, apply = function(target) end }. Empty at M0;
 -- later milestones append rather than rewrite, so old migrations keep running for old SavedVariables.
-DB.migrations = {}
-DB.profileMigrations = {}
+--
+-- D27 (2026-09-07 Notifications pass): the Log's cap dropped from 200 to 20 lines, matching what the
+-- redesigned single Notifications page actually shows. Announce.record only trims on WRITE, so an
+-- existing SavedVariables file sitting at up to 200 lines would otherwise stay that size until the
+-- 181st new line finally pushed the oldest one out.
+DB.migrations = {
+  { version = 2, apply = function(db)
+      local log = db.global and db.global.announceLog
+      if type(log) ~= "table" then return end
+      while #log > 20 do table.remove(log, 1) end
+    end },
+}
+
+-- D21/D22 (2026-09-07 Notifications pass): `template`/`mode` never fired and are gone from
+-- Announce.CATEGORIES, so a stored routing row for either is dead weight nothing will ever read
+-- again. Party and raid used to be one flag (`party`, which auto-picked the channel from whatever
+-- group the player happened to be in); anyone who had switched it on gets BOTH flags set, which is
+-- the only way to reproduce what they already had -- their message still reaches a party OR a raid,
+-- exactly as it did before there were two switches to ask about it.
+DB.profileMigrations = {
+  { version = 2, apply = function(profile)
+      local routes = profile.announce and profile.announce.routes
+      if type(routes) ~= "table" then return end
+      routes.template, routes.mode = nil, nil
+      for _, row in pairs(routes) do
+        if type(row) == "table" and row.party then row.raid = true end
+      end
+    end },
+}
 
 -- Global (account-wide) migration. Runs once per login from Core/Init.lua OnInitialize.
 function DB.migrate(db)

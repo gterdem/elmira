@@ -13,18 +13,21 @@ local helper = require("tests.helper")
 describe("Options/Rotation (the Rotation section)", function()
   local Rotation, ns, realUserBuilds
 
-  -- `catalogUpdated` is deliberately the REAL one: it is the function Core/UserBuilds uses to stamp
-  -- `derivedAt`, so the stale-parent banner has to ask it the same question. Faking it here would
-  -- let the two drift into a banner that silently stops appearing, which is the drift the shared
-  -- definition exists to prevent. Only `find`/`list` are fakes.
+  -- The fakes are laid OVER the real Core/UserBuilds (freshly loaded per test), never handed over
+  -- as a table of their own: a caller names `ns.UserBuilds.list`, but the module's own functions
+  -- call each other, and only one table can be both. `Rotation.displayName` is the case that made
+  -- this necessary -- it delegates to `UserBuilds.displayName`, which resolves a fork through
+  -- `UserBuilds.find`, so a spec faking `find` on a separate table would have been answering a
+  -- question nobody asked while the real lookup read an empty store.
+  --
+  -- Everything not named here stays REAL, which is the point: `catalogUpdated` is what stamps
+  -- `derivedAt`, so the stale-parent banner has to ask the same function, and `copy` is the deep
+  -- copy the Builder's draft needs (a one-level fake would share every `when` list with the stored
+  -- build, and the rotation would change before Save was pressed).
   local function installUserBuilds(t)
-    t.catalogUpdated = t.catalogUpdated or realUserBuilds.catalogUpdated
-    -- The REAL deep copy, for the same reason: the Builder's draft has to copy a fork exactly as
-    -- deeply as forking one does, and a fake that copied one level would share every `when` list
-    -- with the stored build -- so the rotation would change before Save was pressed.
-    t.copy = t.copy or realUserBuilds.copy
-    ns.UserBuilds = t
-    return t
+    for name, fn in pairs(t) do realUserBuilds[name] = fn end
+    ns.UserBuilds = realUserBuilds
+    return realUserBuilds
   end
 
   local CATALOG = {
@@ -43,8 +46,14 @@ describe("Options/Rotation (the Rotation section)", function()
 
   -- The wizard is the one place that knows an entry is only offerable when the pack ships the build
   -- it names, so the section reuses it rather than re-deriving. Faked here at that seam.
+  -- The tree reads `Wizard.rows` (every catalog entry, each flagged `available`), not the filtered
+  -- `Wizard.choices`. Rows default to available here so a test only says so when unavailability is
+  -- what it is about.
   local function installWizard(rows)
-    ns.Wizard = { choices = function() return rows end }
+    for _, row in ipairs(rows) do
+      if row.available == nil then row.available = true end
+    end
+    ns.Wizard = { rows = function() return rows end }
   end
 
   before_each(function()
@@ -60,31 +69,52 @@ describe("Options/Rotation (the Rotation section)", function()
                    currentQueue = function() return nil end,
                    gateRows = function() return nil, {} end,
                    refresh = function() end }
+    helper.load("Elmira/Core/Colors.lua")
     helper.load("Elmira/Core/Schema.lua")
     helper.load("Elmira/Core/Gates.lua")
     helper.load("Elmira/Core/Palette.lua")
     helper.load("Elmira/Core/Conditions.lua")
+    helper.load("Elmira/Core/Spells.lua")
     helper.load("Elmira/Core/Diagnostics.lua")
     realUserBuilds = helper.load("Elmira/Core/UserBuilds.lua")
     ns.UserBuilds = nil -- each test opts in through installUserBuilds
+    -- Present BEFORE Rotation.lua loads: D35's popups register themselves at file scope, the same
+    -- way any addon's StaticPopupDialogs entry does.
+    _G.StaticPopupDialogs = {}
+    _G.StaticPopup_Show = function(which, arg1, arg2, data)
+      _G.__lastStaticPopup = { which = which, arg1 = arg1, arg2 = arg2, data = data }
+      return { which = which }
+    end
     Rotation = helper.load("Elmira/Options/Rotation.lua")
   end)
 
+  after_each(function()
+    _G.StaticPopupDialogs, _G.StaticPopup_Show, _G.__lastStaticPopup = nil, nil, nil
+  end)
+
   describe("group()", function()
-    it("is one tabbed section holding Rotations, Builder and Share, in that order", function()
+    it("is a tree, named Rotations, with Builder and Share as its last two children", function()
+      installPack()
       local g = Rotation.group()
       assert.equal("group", g.type)
-      assert.equal("tab", g.childGroups)
-      assert.equal("Rotation", g.name)
-      -- Order 0: the front door sorts above the display settings, not at the bottom where
-      -- Import/Export used to live.
+      assert.equal("tree", g.childGroups)
+      assert.equal("Rotations", g.name)
       assert.equal(0, g.order)
-      assert.equal(1, g.args.rotations.order)
-      assert.equal(2, g.args.builder.order)
-      assert.equal(3, g.args.share.order)
+      assert.equal("group", g.args.builder.type)
+      assert.equal("group", g.args.share.type)
+      -- "last two" is an ordering claim, not a naming one: every template/fork page sorts below the
+      -- intro rows and above these, whatever the class ships.
+      for key, row in pairs(g.args) do
+        if key ~= "builder" and key ~= "share" and type(row) == "table" and row.type == "group"
+           and not row.inline then
+          assert.is_true(row.order < g.args.builder.order, key .. " sorts after Builder")
+        end
+      end
+      assert.is_true(g.args.builder.order < g.args.share.order)
     end)
 
     it("gives the Builder a search box and a list of spells and items", function()
+      installPack()
       local args = Rotation.group().args.builder.args
       assert.equal("input", args.search.type)
       assert.equal("group", args.spells.type)
@@ -109,6 +139,8 @@ describe("Options/Rotation (the Rotation section)", function()
     -- A walk rather than a list: a row added tomorrow has to be caught by this too. The `type`
     -- assertion is part of the guard, because a row that lost its type is not one this would see.
     it("renders every description at the same size as the labels around it", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
       local function walk(node, path)
         for key, row in pairs(node.args or {}) do
           local where = path .. "." .. tostring(key)
@@ -123,6 +155,191 @@ describe("Options/Rotation (the Rotation section)", function()
       end
       walk(Rotation.group(), "rotation")
     end)
+  end)
+
+  -- D30. The tree's own shape: templates in catalog order, their forks nested inside them, a
+  -- no-template fork sitting directly under Rotations, and the depth cap that puts a copy of a copy
+  -- under the ORIGINAL template rather than under the fork it happened to be copied from.
+  describe("the tree (D30)", function()
+    before_each(function() installPack() end)
+
+    it("gives every catalog template its own top-level page, in catalog order", function()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+      local args = Rotation.group().args
+      assert.equal("group", args.PALADIN_EXODIN.type)
+      assert.is_falsy(args.PALADIN_EXODIN.inline)
+      assert.equal("group", args.PALADIN_SHOCKADIN.type)
+      assert.is_true(args.PALADIN_EXODIN.order < args.PALADIN_SHOCKADIN.order)
+    end)
+
+    it("nests a fork inside the template it was forked from", function()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      installUserBuilds{
+        list = function() return { "USER_MINE" } end,
+        find = function(pk, key)
+          if key == "USER_MINE" then
+            return { entries = {} }, "fork", { name = "My Exodin", derivedFrom = "PALADIN_EXODIN" }
+          end
+          if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
+        end,
+      }
+      local template = Rotation.group().args.PALADIN_EXODIN
+      assert.is_table(template.args.USER_MINE, "the fork is not nested under its template")
+      assert.equal("My Exodin", template.args.USER_MINE.name)
+    end)
+
+    it("puts a fork with no template directly under Rotations", function()
+      installWizard{}
+      installUserBuilds{
+        list = function() return { "USER_SCRATCH" } end,
+        find = function(_, key)
+          if key == "USER_SCRATCH" then return { entries = {} }, "fork", { name = "Scratch" } end
+        end,
+      }
+      local root = Rotation.group().args
+      assert.is_table(root.USER_SCRATCH)
+      assert.equal("Scratch", root.USER_SCRATCH.name)
+    end)
+
+    -- Depth cap: a copy of a copy nests under the ORIGINAL template, not under the fork it was
+    -- copied from -- otherwise the tree could grow one level deeper every time someone forked a fork.
+    it("nests a copy of a copy under the original template, not under the fork it copied", function()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      installUserBuilds{
+        list = function() return { "USER_A", "USER_B" } end,
+        find = function(pk, key)
+          if key == "USER_A" then
+            return { entries = {} }, "fork", { name = "Copy A", derivedFrom = "PALADIN_EXODIN" }
+          elseif key == "USER_B" then
+            return { entries = {} }, "fork", { name = "Copy of Copy A", derivedFrom = "USER_A" }
+          end
+          if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
+        end,
+      }
+      local template = Rotation.group().args.PALADIN_EXODIN
+      assert.is_table(template.args.USER_A)
+      assert.is_table(template.args.USER_B, "the copy of a copy is missing from the template's page")
+      assert.is_nil(template.args.USER_A.args and template.args.USER_A.args.USER_B,
+        "the copy of a copy nested a level too deep, under the fork instead of the template")
+    end)
+
+    it("Rotation.rootParent resolves a fork-of-a-fork chain to the original template", function()
+      installUserBuilds{
+        find = function(pk, key)
+          if key == "USER_B" then return {}, "fork", { derivedFrom = "USER_A" } end
+          if key == "USER_A" then return {}, "fork", { derivedFrom = "PALADIN_EXODIN" } end
+          if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
+        end,
+      }
+      ns.Display.currentPack = function()
+        return { class = "PALADIN", builds = { PALADIN_EXODIN = {} } }
+      end
+      assert.equal("PALADIN_EXODIN", Rotation.rootParent("USER_B"))
+    end)
+
+    it("Rotation.rootParent answers nil for a fork derived from nothing", function()
+      installUserBuilds{ find = function() return {}, "fork", {} end }
+      assert.is_nil(Rotation.rootParent("USER_SCRATCH"))
+    end)
+
+    -- A key that resolves to NEITHER a shipped build nor a fork record: `fork` itself is nil here,
+    -- not merely one with no `derivedFrom` -- indexing it without the guard would error instead of
+    -- answering "no parent".
+    it("Rotation.rootParent answers nil for a key that is not a build or a fork at all", function()
+      installUserBuilds{ find = function() return nil end }
+      assert.is_nil(Rotation.rootParent("GARBAGE"))
+    end)
+
+    -- A hand-edited SavedVariables file could in principle name itself as its own ancestor; the
+    -- bound in the loop is what stops that from hanging the whole options panel.
+    it("Rotation.rootParent does not hang on a cycle", function()
+      installUserBuilds{ find = function(_, key)
+        if key == "USER_A" then return {}, "fork", { derivedFrom = "USER_B" } end
+        return {}, "fork", { derivedFrom = "USER_A" }
+      end }
+      assert.is_nil(Rotation.rootParent("USER_A"))
+    end)
+
+    it("Rotation.rootParent answers nil for a nil key, rather than erroring", function()
+      assert.is_nil(Rotation.rootParent(nil))
+    end)
+
+    -- Never a real chain (nothing the addon writes grows one), but a hand-edited SavedVariables
+    -- file could -- the bound is what stops that from hanging the whole options panel.
+    it("Rotation.rootParent gives up after enough hops, on a chain that never repeats or resolves",
+      function()
+        installUserBuilds{ find = function(_, key) return {}, "fork", { derivedFrom = key .. "X" } end }
+        assert.is_nil(Rotation.rootParent("USER_START"))
+      end)
+
+    it("says so, without erroring, when the class ships no templates at all", function()
+      installWizard{}
+      local root = Rotation.group().args
+      assert.is_truthy(root.noPack.name:find("No playstyles for", 1, true))
+      assert.equal("execute", root.newRotation.type)
+    end)
+
+    -- One AceConfig node cannot hold two children at the same `order`: whichever sorts second is
+    -- silently invisible in the real dialog. Every branch this pass added -- both templates active
+    -- and not, every Detect.check state, notes/no-notes, a fork nested and a fork that is not, the
+    -- stale-parent banner -- is exercised here at once so a miscounted `a = a + 1` anywhere in the
+    -- tree shows up as a collision rather than as a page nobody happened to open in a test.
+    it("gives every sibling in the tree its own order, across every branch this pass added",
+      function()
+        installPack()
+        ns.Detect = { hasFailures = function(checks)
+          for _, c in ipairs(checks or {}) do if c.ok == false then return true end end
+          return false
+        end }
+        installWizard{
+          { build = "PALADIN_EXODIN", playstyle = "Exodin", recommended = true, phase = "SoD P8",
+            updated = "2026-08-01", summary = "Fast 2H.", notes = "Never holds Exorcism.",
+            source = "https://www.wowhead.com/classic/guide/paladin", fits = false,
+            checks = { { key = "weapon", ok = false, text = "Weapon: 2H (you have 1H)" },
+                       { key = "RUNE_X", ok = true, text = "Rune X engraved" },
+                       { key = "RUNE_Y", ok = nil, text = "Rune Y: could not read your runes" } },
+            runesToEngrave = { "Art of War (feet)" } },
+          { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", experimental = true, fits = true,
+            checks = {} },
+        }
+        -- SHOCKADIN is the one running: exercises the active branch of the card, the header and
+        -- the fork nested under it (no Use button, badged name) in the same pass as EXODIN's
+        -- inactive one above.
+        ns.Display.activeBuild = function() return {}, "USER_ACTIVE", nil end
+        installUserBuilds{
+          list = function() return { "USER_ACTIVE", "USER_MINE", "USER_SCRATCH" } end,
+          find = function(pk, key)
+            if key == "USER_ACTIVE" then
+              return { entries = {} }, "fork", { name = "My Shockadin", derivedFrom = "PALADIN_SHOCKADIN" }
+            elseif key == "USER_MINE" then
+              return { entries = {} }, "fork", { name = "My Exodin", derivedFrom = "PALADIN_EXODIN" }
+            elseif key == "USER_SCRATCH" then
+              return { entries = {} }, "fork", { name = "Scratch" }
+            end
+            if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
+          end,
+        }
+
+        local WIDGETS = { execute = true, description = true, group = true, input = true,
+                          toggle = true, select = true, header = true, color = true, range = true }
+        local function walk(args, path)
+          local seen, orders = 0, {}
+          for key, node in pairs(args) do
+            local at = path .. "." .. tostring(key)
+            assert.is_table(node, at .. " is not a table")
+            assert.is_truthy(WIDGETS[node.type], at .. " has an unknown type " .. tostring(node.type))
+            assert.is_number(node.order, at .. " has no order")
+            assert.is_nil(orders[node.order], at .. " shares an order with " .. tostring(orders[node.order]))
+            orders[node.order] = at
+            seen = seen + 1
+            if node.type == "group" then walk(node.args, at) end
+          end
+          assert.is_true(seen > 0, path .. " is empty")
+        end
+
+        walk(Rotation.group().args, "rotation")
+      end)
   end)
 
 
@@ -181,6 +398,7 @@ describe("Options/Rotation (the Rotation section)", function()
 
     local function installPalette(known)
       helper.load("Elmira/Core/Palette.lua")
+      helper.load("Elmira/Core/Spells.lua")
       ns.Display.currentPack = function()
         return { class = "PALADIN", catalog = { PALADIN = CATALOG }, spells = PACK_SPELLS }
       end
@@ -188,7 +406,10 @@ describe("Options/Rotation (the Rotation section)", function()
       ns.API = { GetState = function()
         return { known = function(_, key) return known and known(key) end }
       end }
-      ns.db = { profile = { paletteAllSlots = false } }
+      -- `char.spells` is the registry `Rotation.syncSpells()` (D55) seeds from the pack every time
+      -- the palette is read -- without it every "Builder palette" test would see an empty list, not
+      -- because the pack has nothing castable but because there is nowhere to register it.
+      ns.db = { profile = { paletteAllSlots = false }, char = { spells = {} } }
       Rotation.setSearch("")
     end
 
@@ -196,7 +417,9 @@ describe("Options/Rotation (the Rotation section)", function()
       installPalette(function() return true end)
       local args = Rotation.group().args.builder.args.spells.args
       local names = {}
-      for _, row in pairs(args) do names[#names + 1] = row.name end
+      for key, row in pairs(args) do
+        if key ~= "add" then names[#names + 1] = row.name end
+      end
       assert.equal(2, #names, "expected Exorcism and Divine Storm, no rune record")
     end)
 
@@ -423,6 +646,88 @@ describe("Options/Rotation (the Rotation section)", function()
       ns.Palette = nil
       assert.same({}, Rotation.paletteSpells())
       assert.same({}, Rotation.paletteItems())
+    end)
+
+    -- D55: registers every castable pack spell into the registry, `source = "pack"` -- observed on
+    -- the STORE itself, not merely on what the palette shows.
+    describe("syncSpells() (D55)", function()
+      it("writes every castable pack spell into the registry as source=pack", function()
+        installPalette(function() return true end)
+        Rotation.syncSpells()
+        assert.same({ key = "EXORCISM", id = 415073, name = "EXORCISM", source = "pack" },
+                    ns.db.char.spells.EXORCISM)
+        assert.equal("pack", ns.db.char.spells.DIVINE_STORM.source)
+        assert.is_nil(ns.db.char.spells.RUNE_DIVINE_STORM, "a rune record is not castable")
+      end)
+
+      it("never overwrites a manually added entry that shares a pack key", function()
+        installPalette(function() return true end)
+        ns.db.char.spells.EXORCISM = { key = "EXORCISM", id = 1, name = "Mine", source = "id" }
+        Rotation.syncSpells()
+        assert.equal("id", ns.db.char.spells.EXORCISM.source)
+      end)
+
+      it("does nothing without a store or without a pack, rather than erroring", function()
+        installPalette(function() return true end)
+        ns.db = nil
+        Rotation.syncSpells()
+        ns.db = { char = { spells = {} } }
+        ns.Display.currentPack = function() return nil end
+        Rotation.syncSpells()
+        assert.same({}, ns.db.char.spells)
+      end)
+
+      it("does nothing without ns.Spells or ns.Palette loaded, rather than erroring", function()
+        installPalette(function() return true end)
+        ns.Palette = nil
+        Rotation.syncSpells()
+        assert.same({}, ns.db.char.spells)
+        helper.load("Elmira/Core/Palette.lua")
+        ns.Spells = nil
+        Rotation.syncSpells()
+        assert.same({}, ns.db.char.spells)
+      end)
+    end)
+
+    -- D58: the Builder's "Add a spell" control reads the registry and offers a manually added,
+    -- non-pack entry too, undimmed.
+    describe("paletteSpells() reads the registry (D58)", function()
+      it("offers a manually added entry that has no pack record, with known left nil", function()
+        installPalette(function() return true end)
+        ns.db.char.spells.SLICE_AND_DICE = { key = "SLICE_AND_DICE", id = 900, name = "Slice and Dice",
+                                              source = "spellbook" }
+        local rows = Rotation.paletteSpells()
+        local found
+        for _, row in ipairs(rows) do if row.key == "SLICE_AND_DICE" then found = row end end
+        assert.is_not_nil(found, "a registry-only entry must still be offered")
+        assert.equal("Slice and Dice", found.label)
+        assert.is_nil(found.known)
+      end)
+    end)
+
+    -- D58's last row: navigation to the Spells page, present whether or not anything matches.
+    describe("the palette's \"Add from spellbook...\" row (D58)", function()
+      it("is the last row, and always present even when nothing matches", function()
+        installPalette(function() return true end)
+        Rotation.setSearch("zzzz")
+        local args = Rotation.group().args.builder.args.spells.args
+        assert.equal("execute", args.add.type)
+        assert.is_truthy(args.add.desc:find("Spells page", 1, true))
+      end)
+
+      it("navigates the open dialog to the Spells root page, not into the draft", function()
+        installPalette(function() return true end)
+        local selected
+        ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
+        local appended = false
+        local realAppend = Rotation.appendSpell
+        Rotation.appendSpell = function(...) appended = true; return realAppend(...) end
+        local args = Rotation.group().args.builder.args.spells.args
+        args.add.func()
+        assert.same({ "Elmira", "spells" }, selected)
+        assert.is_false(appended, "the navigation row must not append anything")
+        Rotation.appendSpell = realAppend
+      end)
     end)
   end)
 
@@ -680,7 +985,8 @@ describe("Options/Rotation (the Rotation section)", function()
     local function installEditor()
       helper.load("Elmira/Core/Slash.lua")
       PACK = newPack()
-      ns.db = { global = { userBuilds = {} }, profile = { paletteAllSlots = false } }
+      ns.db = { global = { userBuilds = {} }, profile = { paletteAllSlots = false },
+                char = { spells = {} } }
       ns.UserBuilds = realUserBuilds
       ns.Detect = { readableName = function(key) return key end }
       state = FakeState.new{ bonuses = { HOLY_POWER_CONSUME = false, HOLY_WRATH_INSTANT = true },
@@ -914,6 +1220,40 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_truthy(args.p1.name:find("line 6", 1, true))
       end)
 
+      -- D65 STOPGAP (review finding on R2): a spell the Spells registry added by id/name/
+      -- spellbook (D54) can be appended here with no matching pack record, and before this fix
+      -- `problems()` said nothing about it -- Save looked enabled, and only the click itself
+      -- refused, after the fact, with this exact message. Mirrors that Schema.validate check so
+      -- Save is greyed out with the reason already on screen.
+      it("flags a line whose spell has no pack record, before Save is ever clicked (D65)", function()
+        Rotation.appendSpell("NOT_A_PACK_SPELL")
+        local problems = Rotation.problems()
+        assert.is_true(#problems > 0)
+        local text = table.concat(problems, " ")
+        assert.is_truthy(text:find("NOT_A_PACK_SPELL", 1, true))
+        assert.is_truthy(text:find("is not in the spells data pack", 1, true))
+        local args = builder().editing.args
+        assert.is_true(args.save.disabled, "Save must be disabled BEFORE the click, not only after it fails")
+      end)
+
+      -- D68 (re-review residual): the `ctx.spells and` clause in D65's own check is
+      -- load-bearing -- without it, a pack whose `spells` table is nil indexes nil the moment any
+      -- entry names a spell, which in AceConfig means the whole Builder page fails to render, not
+      -- just this one line. `make mutants` cannot ever catch this: it deletes whole lines, and
+      -- deleting the WHOLE `if` line here removes the D65 check entirely, which the D65 test above
+      -- already covers as a different failure -- so the clause reads as "covered" while being
+      -- exercised by nothing. Pinned directly rather than by restructuring the condition.
+      it("does not error when the pack's spells table is nil (D68)", function()
+        -- `Rotation.problems()` reads the DRAFT upvalue directly rather than calling
+        -- `Rotation.draft()` itself, so the draft must already exist before this runs -- exactly
+        -- as it does in the real Builder, which always opens through `Rotation.draft()` first.
+        assert.is_not_nil(Rotation.draft(), "the fork under test must produce a draft")
+        PACK.spells = nil
+        local problems
+        assert.has_no.errors(function() problems = Rotation.problems() end)
+        assert.is_table(problems)
+      end)
+
       it("holds on to the reasons a refused save gave, until the next edit", function()
         -- Schema.validate rejects an empty rotation, which no per-condition compile can catch.
         for _ = 1, 5 do Rotation.removeRow(1) end
@@ -931,6 +1271,66 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_false(ok)
         assert.is_true(#reasons > 0)
         assert.same({}, Rotation.problems())
+      end)
+    end)
+
+    -- D83: nothing before this test walked the WHOLE path a player actually takes. D79 and D80 each
+    -- looked right in isolation -- `wordCtx`/`lineRows` widened, `problems()`/`Rotation.save()`
+    -- passing their own specs -- while the fence around this file (R2b's "not in scope") left both
+    -- of them building an UN-merged ctx, so a registry spell greyed Save above a `save()` that would
+    -- have accepted it, and a saved registry line still rendered `off`. This test fails on either
+    -- revert, which no test before it did.
+    describe("a registry spell, the whole way through the Builder (D83)", function()
+      it("appends, reports no problems, enables Save, saves, and renders live with its icon", function()
+        -- The tree only nests a fork under its template when the Wizard names that template as a
+        -- row -- otherwise `byParent["TEMPLATE"]` has nowhere to attach, and `args.TEMPLATE` (read
+        -- below) would not exist for a reason unrelated to anything D79-D83 touch.
+        installWizard({ { build = "TEMPLATE", playstyle = "Template", fits = true } })
+        -- Exactly what Options/Spells.lua's "add by id" writes: a registry entry the PACK has never
+        -- heard of, keyed by its own slugged name rather than any pack key.
+        local key = ns.Spells.add(ns.db.char.spells, { id = 9001, name = "Divine Steed", source = "id" })
+        assert.is_truthy(key)
+        assert.is_nil(PACK.spells[key], "the pack must not already carry this key or the test proves nothing")
+
+        assert.is_true(Rotation.appendSpell(key))
+        assert.same({}, Rotation.problems(),
+          "D79: a registry spell must not be flagged as unresolvable")
+        assert.is_false(builder().editing.args.save.disabled,
+          "D79: Save must be enabled for a line naming a registry spell")
+
+        assert.is_true(Rotation.save())
+
+        local rows = Rotation.lineRows(forkKey)
+        local last = rows[#rows]
+        assert.equal(key, last.spell)
+        assert.not_equal("off", last.mark,
+          "D80: a saved registry line must not read as \"cannot happen on this character\"")
+
+        -- The icon: the same seam D72 already wired (`ns.Display.spellIcon`), asked with the SAME
+        -- key `lineRows` just carried through -- proving D80 handed the render layer a key it can
+        -- actually look up, not a placeholder that happens to satisfy `#rows`.
+        ns.Display.spellIcon = function(k) return k == key and "tex:registry" or nil end
+        local lineArgs = Rotation.group().args.TEMPLATE.args[forkKey].args.lines.args
+        local rendered = lineArgs["l" .. #rows].name
+        assert.is_truthy(rendered:find("|Ttex:registry:0|t", 1, true),
+          "the rendered row must carry the registry spell's icon")
+      end)
+
+      -- `make mutants` guard: deleting D80's merge line entirely leaves `ctx.spells` NIL, not merely
+      -- un-merged -- and `Schema.validate`'s spell-key check (`ctx.spells and ctx.spells[key] == nil`)
+      -- is itself skipped whenever `ctx.spells` is absent, so a genuinely unknown key would wrongly
+      -- validate and every line would compile "off"-free either way. Checking one registry line's
+      -- mark alone cannot tell a merged ctx from a missing one; a build that names a spell in NEITHER
+      -- the pack NOR the registry can, because only a present (whichever shape) `ctx.spells` refuses it.
+      it("still refuses the whole compile when a line names a spell nowhere at all", function()
+        local build = realUserBuilds.find(PACK, forkKey)
+        build.entries[#build.entries + 1] = { spell = "NOWHERE_AT_ALL" }
+        ns.forgetCompiled(build)
+        local rows = Rotation.lineRows(forkKey)
+        assert.equal(#build.entries, #rows)
+        for _, row in ipairs(rows) do
+          assert.equal("off", row.mark, "one unresolvable key must refuse the WHOLE build, not just its own line")
+        end
       end)
     end)
 
@@ -1246,17 +1646,31 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_nil(args.r1.args.status.name:find("mana at least 40%", 1, true))
       end)
 
-      it("renders the marker and the reason as an ASCII line under each row", function()
+      -- D43: a texture dot, not the ASCII fallback (>> !! .. -- ++) -- row 1 is "firing" (queueOf(1)),
+      -- which maps to the green indicator.
+      it("renders the marker as a texture dot, and the reason beside it", function()
         queue = queueOf(1)
         local status = builder().list.args.r1.args.status
         assert.equal("description", status.type)
         assert.equal("full", status.width)
-        assert.is_truthy(status.name:find(">>", 1, true))
-        -- The client's font has no U+25CF; every marker would draw as the same empty box.
-        for _, look in pairs(Rotation.MARKS) do
-          assert.is_nil(look.mark:find("[\128-\255]"), look.mark)
+        assert.is_truthy(status.name:find("|TInterface\\COMMON\\Indicator-Green:12|t", 1, true))
+        assert.is_nil(status.name:find(">>", 1, true), "the ASCII fallback is still present")
+      end)
+
+      -- D43's texture-dot mechanism, D73's colour map (2026-09-07 owner ruling, reversed from R1):
+      -- firing green, waiting amber/yellow ("can fire, just not this instant"), blocked/off/unsaved
+      -- grey ("cannot happen on this character right now"). Each is a real |T...|t texture escape,
+      -- not a glyph the client's font would draw as an empty box.
+      it("maps every state to the D73-decided indicator texture", function()
+        local expectFile = {
+          firing = "Indicator-Green", blocked = "Indicator-Gray",
+          waiting = "Indicator-Yellow", off = "Indicator-Gray", unsaved = "Indicator-Gray",
+        }
+        for markState, file in pairs(expectFile) do
+          local look = Rotation.MARKS[markState]
+          assert.is_truthy(look.mark:find("|TInterface\\COMMON\\" .. file .. ":", 1, true), markState)
+          assert.is_truthy(look.mark:find("|t", 1, true), markState)
         end
-        assert.is_nil(status.name:find("[\128-\255]"))
       end)
 
       it("answers nothing, not an error, when there is no rotation at all", function()
@@ -1275,7 +1689,8 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_truthy(lines[1]:find("|Ttex:ex:0|t", 1, true))
         assert.is_truthy(lines[2]:find("target: yes", 1, true))
         assert.is_truthy(lines[2]:find("mana 100%", 1, true))
-        assert.is_truthy(lines[3]:find(">>", 1, true), "the legend explains the markers")
+        assert.is_truthy(lines[3]:find("|TInterface\\COMMON\\Indicator-Green:12|t", 1, true),
+          "the legend explains the markers")
         assert.is_truthy(lines[4]:find("last time the queue changed", 1, true))
       end)
 
@@ -1726,20 +2141,22 @@ describe("Options/Rotation (the Rotation section)", function()
           :find("DIVINE_STORM (3 HP)", 1, true))
       end)
 
-      -- It hangs off the stale-parent banner, which is the moment ADR-0010 asks for a diff.
-      it("appears under the banner on the Rotations tab, and only once the parent has moved on",
+      -- It hangs off the stale-parent banner on the fork's own page (D36), which is the moment
+      -- ADR-0010 asks for a diff.
+      it("appears under the banner on the fork's page, and only once the parent has moved on",
         function()
           forkOf(nil)
           realUserBuilds.find(PACK, forkKey).entries[1].when = nil
-          local lines = table.concat(Rotation.statusLines(), " | ")
+          installWizard{ { build = "TEMPLATE", playstyle = "Template", checks = {}, fits = true } }
+          local stale = Rotation.group().args.TEMPLATE.args[forkKey].args.stale
+          assert.is_table(stale, "no stale-parent banner at all")
+          local lines = table.concat({ stale.args.banner.name, stale.args.d1.name }, " | ")
           assert.is_truthy(lines:find("has been updated since you forked it", 1, true))
           assert.is_truthy(lines:find("Different conditions on: EXORCISM", 1, true))
 
           -- Same fork, taken from the CURRENT template: no banner, and so no diff either.
           ns.db.global.userBuilds[forkKey].derivedAt = "2026-08-01"
-          local current = table.concat(Rotation.statusLines(), " | ")
-          assert.is_nil(current:find("has been updated", 1, true))
-          assert.is_nil(current:find("Different conditions", 1, true))
+          assert.is_nil(Rotation.group().args.TEMPLATE.args[forkKey].args.stale)
         end)
 
       it("says nothing for a template, or a fork of nothing, or a parent that is gone", function()
@@ -1846,51 +2263,37 @@ describe("Options/Rotation (the Rotation section)", function()
       end
       ns.Display.refresh = function() end
       ns.Adapter = { today = function() return "2026-09-05" end }
+      ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
     end
 
     it("forks the template and activates the fork, in one call", function()
       install()
-      local forked, applied, repaints = nil, nil, 0
-      installUserBuilds{ fork = function(_, k, o) forked = { k, o.today }; return "USER_MINE" end }
-      ns.Wizard = { apply = function(k) applied = k; return true end }
+      local forked, repaints = nil, 0
+      installUserBuilds{ fork = function(_, k, o) forked = { k, o.today }; return "USER_MINE" end,
+                        find = function() return {} end }
       ns.Display.refresh = function() repaints = repaints + 1 end
 
       local ok, key = Rotation.customize("PALADIN_EXODIN")
       assert.is_true(ok)
       assert.equal("USER_MINE", key)
       assert.same({ "PALADIN_EXODIN", "2026-09-05" }, forked)
-      assert.equal("USER_MINE", applied, "the fork was made but never activated")
+      assert.equal("USER_MINE", ns.db.profile.activeBuild, "the fork was made but never activated")
       assert.equal(1, repaints)
     end)
 
-    it("is what the Customize button on a template row does", function()
+    it("is what the Copy and edit button on a template page does, once named", function()
       install()
       local forked
-      installUserBuilds{ fork = function(_, k) forked = k; return "USER_MINE" end }
-      ns.Wizard = { apply = function() return true end }
+      installUserBuilds{ fork = function(_, k, o) forked = { k, o.name }; return "USER_MINE" end }
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
-      local button = Rotation.group().args.rotations.args.templates.args.t1.args.customize
-      assert.equal("execute", button.type)
-      assert.equal("Customize", button.name)
-      button.func()
-      assert.equal("PALADIN_EXODIN", forked)
-    end)
-
-    it("describes what the button will do before it is pressed", function()
-      install()
-      installUserBuilds{ fork = function() return "USER_MINE" end }
-      ns.Wizard = { apply = function() return true end }
-      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
-      local button = Rotation.group().args.rotations.args.templates.args.t1.args.customize
-      assert.is_truthy(button.desc:find("editable copy", 1, true))
-      assert.is_truthy(button.desc:find("switches to it", 1, true))
+      Rotation.copyAndUse("PALADIN_EXODIN", "My Exodin")
+      assert.same({ "PALADIN_EXODIN", "My Exodin" }, forked)
     end)
 
     it("hands the class pack to the fork", function()
       install()
       local gotClass
       installUserBuilds{ fork = function(pk) gotClass = pk and pk.class; return "USER_MINE" end }
-      ns.Wizard = { apply = function() return true end }
       Rotation.customize("PALADIN_EXODIN")
       assert.equal("PALADIN", gotClass)
     end)
@@ -1903,12 +2306,12 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal("unknown template", err)
     end)
 
-    -- The fork still exists in that case, and is on the Rotations tab: saying so beats a click that
-    -- appears to have done nothing.
+    -- The fork still exists in that case, and is on the tree either way: saying so beats a click
+    -- that appears to have done nothing.
     it("reports when the fork was made but could not be activated", function()
       install()
       installUserBuilds{ fork = function() return "USER_MINE" end }
-      ns.Wizard = { apply = function() return false, "no profile" end }
+      ns.db = nil -- Rotation.use refuses with no profile
       local ok, err = Rotation.customize("PALADIN_EXODIN")
       assert.is_false(ok)
       assert.equal("no profile", err)
@@ -1923,129 +2326,921 @@ describe("Options/Rotation (the Rotation section)", function()
     end)
   end)
 
-  describe("statusLines()", function()
-    it("says so plainly when nothing is active", function()
-      ns.Display.activeBuild = function() return nil, nil end
-      assert.same({ "No rotation is active yet." }, Rotation.statusLines())
-    end)
-
-    -- The truncation bug: `local _, key = cond and Display.activeBuild()` reads the SECOND return,
-    -- which an `and` expression discards. It rendered as "No rotation is active yet." forever.
-    it("names the running rotation, reading activeBuild's second return", function()
-      installPack()
-      local lines = Rotation.statusLines()
-      assert.equal("Running: Exodin", lines[1])
-    end)
-
-    it("names the template a fork came from", function()
-      installPack()
-      ns.Display.activeBuild = function() return {}, "USER_MINE", nil end
-      installUserBuilds{ find = function() return {}, "fork",
-                        { name = "My Exodin", derivedFrom = "PALADIN_EXODIN",
-                          derivedAt = "2026-08-01" } end }
-      local lines = Rotation.statusLines()
-      assert.equal("Running: My Exodin", lines[1])
-      assert.equal("Yours, forked from Exodin.", lines[2])
-      assert.is_nil(lines[3])
-    end)
-
-    -- Display.activeBuild returns `nil, key, reason` when the build fails to compile: the key
-    -- survives, the rotation does not. Reading the key alone printed "Running: Exodin" while
-    -- nothing was queued -- the panel's headline stating a falsehood.
-    it("says a selected build could not be loaded, rather than calling it Running", function()
-      installPack()
-      ns.Display.activeBuild = function()
-        return nil, "PALADIN_EXODIN", "build 'PALADIN_EXODIN' failed to compile (2 problem(s))"
+  -- D34. The one function that writes a selection.
+  describe("use()", function()
+    local function install()
+      ns.Display.currentPack = function()
+        return { class = "PALADIN", catalog = { PALADIN = CATALOG },
+                 builds = { PALADIN_EXODIN = {} } }
       end
-      local lines = Rotation.statusLines()
-      assert.equal(1, #lines)
-      assert.is_nil(lines[1]:find("Running", 1, true))
-      assert.is_truthy(lines[1]:find("Exodin", 1, true))
-      assert.is_truthy(lines[1]:find("could not be loaded", 1, true))
-      assert.is_truthy(lines[1]:find("failed to compile", 1, true))
+      ns.Display.refresh = function() end
+      ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
+    end
+
+    it("pins the build and records the catalog version seen", function()
+      install()
+      ns.Display.currentPack = function()
+        return { class = "PALADIN", catalogVersion = 3, catalog = { PALADIN = CATALOG },
+                 builds = { PALADIN_EXODIN = {} } }
+      end
+      ns.Wizard = { catalogVersion = function(p) return p.catalogVersion end }
+      assert.is_true(Rotation.use("PALADIN_EXODIN"))
+      assert.equal("PALADIN_EXODIN", ns.db.profile.activeBuild)
+      assert.equal(3, ns.db.char.setupDone)
     end)
 
-    it("still names the build when the failure carries no reason", function()
-      installPack()
-      ns.Display.activeBuild = function() return nil, "PALADIN_EXODIN", nil end
-      assert.is_truthy(Rotation.statusLines()[1]:find("Exodin", 1, true))
-    end)
-
-    -- ADR-0010: a template updated by a release since the fork was taken is offered as a diff,
-    -- never rebased. Saying it happened is the half that is useful on its own.
-    it("reports a parent that has been updated since the fork", function()
-      installPack()
-      ns.Display.activeBuild = function() return {}, "USER_MINE", nil end
-      installUserBuilds{ find = function() return {}, "fork",
-                        { name = "My Exodin", derivedFrom = "PALADIN_EXODIN",
-                          derivedAt = "2026-07-01" } end }
-      local lines = Rotation.statusLines()
-      assert.is_truthy(lines[3]:find("has been updated since you forked it", 1, true))
-      assert.is_truthy(lines[3]:find("2026-08-01", 1, true))
-    end)
-
-    -- Partial-module guard, the same asymmetry as forkRows' `list` check: a UserBuilds that can
-    -- answer `find` but not `catalogUpdated` must lose the staleness line, not the whole panel.
-    it("drops the staleness line rather than erroring when catalogUpdated is missing", function()
-      installPack()
-      ns.Display.activeBuild = function() return {}, "USER_MINE", nil end
-      ns.UserBuilds = { find = function() return {}, "fork",
-                        { name = "Mine", derivedFrom = "PALADIN_EXODIN",
-                          derivedAt = "2026-01-01" } end }
-      local lines = Rotation.statusLines()
-      assert.equal("Yours, forked from Exodin.", lines[2])
-      assert.is_nil(lines[3])
-    end)
-
-    it("says nothing about a parent when the fork is not derived from one", function()
-      installPack()
-      ns.Display.activeBuild = function() return {}, "USER_MINE", nil end
-      installUserBuilds{ find = function() return {}, "fork", { name = "Scratch" } end }
-      local lines = Rotation.statusLines()
-      assert.equal("Yours, not derived from a template.", lines[2])
-      -- Stops there: the parent lines below it would name a template that does not exist.
-      assert.is_nil(lines[3])
-    end)
-
-    -- The lookup is class-scoped: db.global is shared across characters, so a fork only belongs to
-    -- this one because find() is handed the pack. Dropping the pack silently widens that.
-    it("hands the class pack to the fork lookup", function()
-      installPack()
-      -- Every call, not the last: displayName() does its own lookup with its own pack, so asserting
-      -- on a single captured value passes even when statusLines hands over nothing.
-      local classes = {}
-      ns.Display.activeBuild = function() return {}, "USER_MINE", nil end
-      installUserBuilds{ find = function(pk)
-        classes[#classes + 1] = (pk and pk.class) or "<no pack>"
-        return {}, "fork", {}
+    it("pins one of the user's own rotations, not just a shipped template", function()
+      install()
+      installUserBuilds{ find = function(_, key)
+        return key == "USER_MINE" and { key = "USER_MINE", entries = {} } or nil
       end }
-      Rotation.statusLines()
-      assert.is_true(#classes > 0, "the fork lookup was never reached")
-      for _, class in ipairs(classes) do assert.equal("PALADIN", class) end
+      assert.is_true(Rotation.use("USER_MINE"))
+      assert.equal("USER_MINE", ns.db.profile.activeBuild)
     end)
 
-    it("renders the status block as one description row per line", function()
-      installPack()
-      local args = Rotation.group().args.rotations.args.status.args
-      assert.equal("description", args.line1.type)
-      assert.equal(1, args.line1.order)
-      assert.equal("full", args.line1.width)
-      assert.equal("medium", args.line1.fontSize)
-      assert.equal("Running: Exodin", args.line1.name)
-      assert.is_nil(args.line2)
+    it("still refuses a key that is neither a template nor one of your rotations", function()
+      install()
+      installUserBuilds{ find = function() return nil end }
+      local ok, why = Rotation.use("USER_GHOST")
+      assert.is_false(ok)
+      assert.truthy(why:find("unknown build", 1, true))
+      assert.is_false(ns.db.profile.activeBuild)
     end)
 
-    it("renders one row per line when there are several", function()
-      installPack()
-      ns.Display.activeBuild = function() return {}, "USER_MINE", nil end
-      installUserBuilds{ list = function() return {} end,
-                        find = function() return {}, "fork",
-                        { name = "Mine", derivedFrom = "PALADIN_EXODIN" } end }
-      local args = Rotation.group().args.rotations.args.status.args
-      assert.equal(2, args.line2.order)
-      assert.equal("Yours, forked from Exodin.", args.line2.name)
+    it("refuses everything when the class has no data pack", function()
+      install()
+      ns.Display.currentPack = function() return nil end
+      installUserBuilds{ find = function() return { key = "USER_MINE" } end }
+      local ok, why = Rotation.use("USER_MINE")
+      assert.is_false(ok)
+      assert.truthy(why:find("unknown build", 1, true))
+    end)
+
+    it("does nothing but say so with no profile at all", function()
+      install()
+      ns.db = nil
+      local ok, why = Rotation.use("PALADIN_EXODIN")
+      assert.is_false(ok)
+      assert.equal("no profile", why)
+    end)
+
+    -- D34: unlike the old wizard's plain print, using a rotation announces it -- the whole point of
+    -- the "Rotation changed" category -- by its DISPLAY name, never the raw storage key.
+    it("announces the switch by display name", function()
+      install()
+      installUserBuilds{}   -- the REAL name lookup: the sentence is built from the storage key
+      local said = {}
+      ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+      Rotation.use("PALADIN_EXODIN")
+      assert.equal(1, #said)
+      assert.equal("rotation", said[1][1])
+      assert.equal("Now using Exodin.", said[1][2])
+    end)
+
+    it("does not announce and does not error when Announce is not loaded", function()
+      install()
+      ns.Announce = nil
+      assert.is_true(Rotation.use("PALADIN_EXODIN"))
+    end)
+
+    it("refreshes the display", function()
+      install()
+      local refreshed = 0
+      ns.Display.refresh = function() refreshed = refreshed + 1 end
+      Rotation.use("PALADIN_EXODIN")
+      assert.equal(1, refreshed)
+    end)
+
+    it("notifies the options registry so the tree redraws the new 'in use' marker", function()
+      install()
+      local notified = 0
+      _G.LibStub = function() return { NotifyChange = function() notified = notified + 1 end } end
+      Rotation.use("PALADIN_EXODIN")
+      _G.LibStub = nil
+      assert.equal(1, notified)
     end)
   end)
+
+  -- D35. Naming a new rotation: the popups' PURE half (what to write), driven directly rather than
+  -- through a fake StaticPopup -- the popup registration itself is covered in options_spec-adjacent
+  -- fashion below, against the REAL StaticPopupDialogs table this file loads Rotation.lua against.
+  describe("naming a rotation (D35)", function()
+    local function install()
+      ns.Display.currentPack = function()
+        return { class = "PALADIN", catalog = { PALADIN = CATALOG }, builds = {} }
+      end
+      ns.Display.refresh = function() end
+      ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
+    end
+
+    describe("createAndUse()", function()
+      it("creates an empty fork with no template and switches to it", function()
+        install()
+        local created, gotClass
+        installUserBuilds{ create = function(pk, name) created, gotClass = name, pk and pk.class; return "USER_NEW" end,
+                          find = function() return {} end }
+        local ok, key = Rotation.createAndUse("My rotation")
+        assert.is_true(ok)
+        assert.equal("USER_NEW", key)
+        assert.equal("My rotation", created)
+        assert.equal("PALADIN", gotClass)
+        assert.equal("USER_NEW", ns.db.profile.activeBuild)
+      end)
+
+      it("refuses a blank name", function()
+        install()
+        local ok, err = Rotation.createAndUse("   ")
+        assert.is_false(ok)
+        assert.truthy(err:find("name", 1, true))
+      end)
+
+      it("passes through the reason when the builds module refuses to create", function()
+        install()
+        installUserBuilds{ create = function() return nil, "no saved variables" end }
+        local ok, err = Rotation.createAndUse("My rotation")
+        assert.is_false(ok)
+        assert.equal("no saved variables", err)
+        assert.is_false(ns.db.profile.activeBuild, "a failed create still switched something on")
+      end)
+
+      it("says so rather than erroring when the builds module cannot create", function()
+        install()
+        ns.UserBuilds = {}
+        local ok, err = Rotation.createAndUse("My rotation")
+        assert.is_false(ok)
+        assert.truthy(err:find("not loaded", 1, true))
+      end)
+    end)
+
+    describe("copyAndUse()", function()
+      it("forks the named template under the typed name and switches to it", function()
+        install()
+        local forked, gotClass
+        installUserBuilds{ fork = function(pk, k, o) forked, gotClass = { k, o.name }, pk and pk.class; return "USER_MINE" end,
+                          find = function() return {} end }
+        local ok, key = Rotation.copyAndUse("PALADIN_EXODIN", "My Exodin")
+        assert.is_true(ok)
+        assert.equal("USER_MINE", key)
+        assert.same({ "PALADIN_EXODIN", "My Exodin" }, forked)
+        assert.equal("PALADIN", gotClass)
+      end)
+
+      it("refuses a blank name, distinctly from a missing builds module", function()
+        install()
+        local ok, err = Rotation.copyAndUse("PALADIN_EXODIN", "")
+        assert.is_false(ok)
+        assert.equal("a rotation needs a name", err)
+      end)
+
+      it("refuses a name that is only whitespace", function()
+        install()
+        local ok, err = Rotation.copyAndUse("PALADIN_EXODIN", "   ")
+        assert.is_false(ok)
+        assert.equal("a rotation needs a name", err)
+      end)
+
+      it("passes through the reason when the builds module refuses to fork", function()
+        install()
+        installUserBuilds{ fork = function() return nil, "unknown template" end }
+        local ok, err = Rotation.copyAndUse("PALADIN_NOPE", "My Exodin")
+        assert.is_false(ok)
+        assert.equal("unknown template", err)
+      end)
+
+      it("says so rather than erroring when the builds module cannot fork", function()
+        install()
+        ns.UserBuilds = {}
+        local ok, err = Rotation.copyAndUse("PALADIN_EXODIN", "My Exodin")
+        assert.is_false(ok)
+        assert.truthy(err:find("not loaded", 1, true))
+      end)
+    end)
+
+    describe("prefill names", function()
+      it("suggests '<template> (mine)' the first time", function()
+        install()
+        installUserBuilds{ list = function() return {} end }
+        assert.equal("Exodin (mine)", Rotation.copyPrefillName("Exodin"))
+      end)
+
+      it("hands the class pack to the fork lookup, not a stray nil", function()
+        install()
+        local gotClass
+        installUserBuilds{ list = function(pk) gotClass = pk and pk.class; return {} end }
+        Rotation.copyPrefillName("Exodin")
+        assert.equal("PALADIN", gotClass)
+      end)
+
+      it("suggests '<template> (mine 2)' once '(mine)' is taken", function()
+        install()
+        installUserBuilds{ list = function() return { "USER_A" } end,
+          find = function(_, key) return {}, "fork", { name = "Exodin (mine)" } end }
+        assert.equal("Exodin (mine 2)", Rotation.copyPrefillName("Exodin"))
+      end)
+
+      it("suggests 'My rotation' the first time, then 'My rotation 2'", function()
+        install()
+        installUserBuilds{ list = function() return {} end }
+        assert.equal("My rotation", Rotation.newRotationPrefillName())
+        installUserBuilds{ list = function() return { "USER_A" } end,
+          find = function() return {}, "fork", { name = "My rotation" } end }
+        assert.equal("My rotation 2", Rotation.newRotationPrefillName())
+      end)
+
+      -- One collision alone cannot tell "counts up" from "always guesses 2"; a second one can.
+      it("keeps counting past 2 when '(mine 2)' is ALSO taken", function()
+        install()
+        installUserBuilds{ list = function() return { "USER_A", "USER_B" } end,
+          find = function(_, key)
+            if key == "USER_A" then return {}, "fork", { name = "Exodin (mine)" } end
+            return {}, "fork", { name = "Exodin (mine 2)" }
+          end }
+        assert.equal("Exodin (mine 3)", Rotation.copyPrefillName("Exodin"))
+      end)
+
+      it("keeps counting past 2 for New rotation too", function()
+        install()
+        installUserBuilds{ list = function() return { "USER_A", "USER_B" } end,
+          find = function(_, key)
+            if key == "USER_A" then return {}, "fork", { name = "My rotation" } end
+            return {}, "fork", { name = "My rotation 2" }
+          end }
+        assert.equal("My rotation 3", Rotation.newRotationPrefillName())
+      end)
+    end)
+
+    -- D35's mechanism itself: one StaticPopup for New/Copy, driven by `data.templateKey`, and a
+    -- second for Rename. Never AceGUI (a real frame, per the artifact); registered once, at file
+    -- scope, the way every addon's StaticPopupDialogs entry is.
+    describe("the popups themselves", function()
+      local function box(text)
+        local b = { text = text }
+        function b:GetText() return self.text end
+        function b:SetText(t) self.text = t end
+        function b:HighlightText() self.highlighted = true end
+        return b
+      end
+
+      -- D61d: a harness that reproduces Blizzard's REAL `StaticPopup_Show` sequence -- registration
+      -- lookup, Show with data, OnShow, the post-OnShow edit-box clear (exactly where D61b's bug
+      -- lived), the accept click (button1 or Enter), and OnHide -- rather than calling OnShow/
+      -- OnAccept by hand the way every test above this point still does. Installed only inside this
+      -- describe block: it REPLACES the file's outer, dumber `_G.StaticPopup_Show` stub for the
+      -- tests below, and `after_each` puts that one back so nothing elsewhere in this file notices.
+      local outerShow
+      local function harness()
+        local shown
+        local function newFrame(which)
+          -- Blizzard's real StaticPopup frames sit at a low frame level (well under AceGUI's
+          -- Frame's 100) inside DIALOG strata -- D62's whole point is that level, not just strata,
+          -- decides who draws on top within a strata.
+          local frame = { which = which, strata = "DIALOG", level = 5 }
+          local editBox = { text = "" }
+          function editBox:SetText(t) self.text = t or "" end
+          function editBox:GetText() return self.text end
+          function editBox:HighlightText() self.highlighted = true end
+          function editBox:GetParent() return frame end
+          frame.editBox = editBox
+          function frame:SetFrameStrata(s) self.strata = s end
+          function frame:GetFrameStrata() return self.strata end
+          function frame:SetFrameLevel(l) self.level = l end
+          function frame:GetFrameLevel() return self.level end
+          local hideHooks = {}
+          function frame:HookScript(event, fn)
+            if event == "OnHide" then hideHooks[#hideHooks + 1] = fn end
+          end
+          frame.button1 = { Click = function()
+            local dialog = _G.StaticPopupDialogs[frame.which]
+            if dialog and dialog.OnAccept then dialog.OnAccept(frame, frame.data) end
+          end }
+          function frame:Hide()
+            for _, fn in ipairs(hideHooks) do fn(self) end
+          end
+          return frame
+        end
+        _G.StaticPopup_Show = function(which, arg1, arg2, data)
+          _G.__lastStaticPopup = { which = which, arg1 = arg1, arg2 = arg2, data = data }
+          local dialog = _G.StaticPopupDialogs[which]
+          if not dialog then return nil end
+          shown = newFrame(which)
+          shown.data = data
+          if dialog.OnShow then dialog.OnShow(shown, data) end
+          -- The exact Blizzard behaviour D61b exists to answer: the edit box is cleared AFTER
+          -- OnShow returns, on every real Show, so a prefill written only from inside OnShow never
+          -- survives to be seen.
+          shown.editBox:SetText("")
+          return shown
+        end
+        return {
+          shown = function() return shown end,
+          pressEnter = function()
+            local dialog = _G.StaticPopupDialogs[shown.which]
+            if dialog.EditBoxOnEnterPressed then dialog.EditBoxOnEnterPressed(shown.editBox) end
+          end,
+          click = function() shown.button1.Click() end,
+          hide = function() shown:Hide() end,
+        }
+      end
+      before_each(function() outerShow = _G.StaticPopup_Show end)
+      after_each(function() _G.StaticPopup_Show = outerShow end)
+
+      it("openNewRotationPopup shows the shared dialog, prefilled, with no templateKey", function()
+        install()
+        installUserBuilds{ list = function() return {} end }
+        assert.is_true(Rotation.openNewRotationPopup())
+        assert.equal("ELMIRA_NAME_ROTATION", _G.__lastStaticPopup.which)
+        assert.equal("My rotation", _G.__lastStaticPopup.data.prefill)
+        assert.is_nil(_G.__lastStaticPopup.data.templateKey)
+      end)
+
+      it("openCopyPopup shows the same dialog, carrying which template to fork", function()
+        install()
+        installUserBuilds{ list = function() return {} end }
+        assert.is_true(Rotation.openCopyPopup("PALADIN_EXODIN", "Exodin"))
+        assert.equal("ELMIRA_NAME_ROTATION", _G.__lastStaticPopup.which)
+        assert.equal("Exodin (mine)", _G.__lastStaticPopup.data.prefill)
+        assert.equal("PALADIN_EXODIN", _G.__lastStaticPopup.data.templateKey)
+      end)
+
+      it("openRenamePopup shows the rename dialog, prefilled with the current name", function()
+        install()
+        assert.is_true(Rotation.openRenamePopup("USER_MINE", "My Exodin"))
+        assert.equal("ELMIRA_RENAME_ROTATION", _G.__lastStaticPopup.which)
+        assert.equal("My Exodin", _G.__lastStaticPopup.arg1)
+        assert.equal("My Exodin", _G.__lastStaticPopup.data.prefill)
+        assert.equal("USER_MINE", _G.__lastStaticPopup.data.renameKey)
+      end)
+
+      -- D71: the source-link popup, the same shared layer as the three above it.
+      it("openSourcePopup shows the show-source dialog with the full url prefilled", function()
+        install()
+        assert.is_true(Rotation.openSourcePopup("https://www.wowhead.com/classic/guide/paladin"))
+        assert.equal("ELMIRA_SHOW_SOURCE", _G.__lastStaticPopup.which)
+        assert.equal("https://www.wowhead.com/classic/guide/paladin",
+                     _G.__lastStaticPopup.data.prefill)
+      end)
+
+      it("openSourcePopup does not error on a non-string source", function()
+        install()
+        assert.has_no.errors(function() Rotation.openSourcePopup(12345) end)
+        assert.equal("12345", _G.__lastStaticPopup.data.prefill)
+      end)
+
+      it("every open*Popup reports false without erroring when StaticPopup is unavailable", function()
+        install()
+        _G.StaticPopupDialogs, _G.StaticPopup_Show = nil, nil
+        assert.is_false(Rotation.openNewRotationPopup())
+        assert.is_false(Rotation.openCopyPopup("PALADIN_EXODIN", "Exodin"))
+        assert.is_false(Rotation.openRenamePopup("USER_MINE", "My Exodin"))
+        assert.is_false(Rotation.openSourcePopup("https://example.com"))
+      end)
+
+      -- D61, driven through the harness's REAL sequence rather than a hand-built `self`. Every one
+      -- of these FAILS against the pre-D61 code: proof this is testing the integration, not just
+      -- the handler functions the way the tests above (and, before D61, every popup test) did.
+      describe("D61: the real StaticPopup sequence", function()
+        it("D61b: the prefill survives the post-OnShow clear", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local h = harness()
+          Rotation.openNewRotationPopup()
+          assert.equal("My rotation", h.shown().editBox:GetText())
+          assert.is_true(h.shown().editBox.highlighted)
+        end)
+
+        -- OnShow ALSO highlights (its own fallback prefill), so the assertion above alone cannot
+        -- tell "prefillNow highlighted it" from "OnShow already had". Remove OnShow's own chance to
+        -- and prove prefillNow does it on its own.
+        it("D61b: highlights the text on its own, even without OnShow's help", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local h = harness()
+          _G.StaticPopupDialogs.ELMIRA_NAME_ROTATION.OnShow = nil
+          Rotation.openNewRotationPopup()
+          assert.equal("My rotation", h.shown().editBox:GetText())
+          assert.is_true(h.shown().editBox.highlighted)
+        end)
+
+        it("D61b: Copy and edit's prefill survives too", function()
+          install()
+          local h = harness()
+          Rotation.openCopyPopup("PALADIN_EXODIN", "Exodin")
+          assert.equal("Exodin (mine)", h.shown().editBox:GetText())
+        end)
+
+        it("D61b: Rename's prefill survives too", function()
+          install()
+          local h = harness()
+          Rotation.openRenamePopup("USER_MINE", "My Exodin")
+          assert.equal("My Exodin", h.shown().editBox:GetText())
+        end)
+
+        it("D71: the source popup's full url survives the post-OnShow clear too, and is highlighted",
+          function()
+            install()
+            local h = harness()
+            Rotation.openSourcePopup("https://www.wowhead.com/classic/guide/paladin")
+            assert.equal("https://www.wowhead.com/classic/guide/paladin", h.shown().editBox:GetText())
+            assert.is_true(h.shown().editBox.highlighted)
+          end)
+
+        -- D62 (review finding on D61a): strata ALONE is not enough -- AceGUI's options Frame
+        -- sits at FULLSCREEN_DIALOG, FRAME LEVEL 100, and SetFrameStrata never touches level, so
+        -- two frames sharing one strata still draw by level. This is the assertion strata-only
+        -- specs could not make: it fails against a fix that only calls SetFrameStrata.
+        it("D62: raises both the strata AND the frame level above 100, restores both on hide", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local h = harness()
+          Rotation.openNewRotationPopup()
+          assert.equal("FULLSCREEN_DIALOG", h.shown():GetFrameStrata())
+          assert.is_true(h.shown():GetFrameLevel() > 100,
+            "level must clear AceGUI's Frame (100), or the popup still draws behind it")
+          h.hide()
+          assert.equal("DIALOG", h.shown():GetFrameStrata())
+          assert.equal(5, h.shown():GetFrameLevel(), "level must return to what it was")
+        end)
+
+        it("D62: Copy and edit's popup is raised past level 100 too", function()
+          install()
+          local h = harness()
+          Rotation.openCopyPopup("PALADIN_EXODIN", "Exodin")
+          assert.equal("FULLSCREEN_DIALOG", h.shown():GetFrameStrata())
+          assert.is_true(h.shown():GetFrameLevel() > 100)
+        end)
+
+        it("D62: Rename's popup is raised past level 100 too", function()
+          install()
+          local h = harness()
+          Rotation.openRenamePopup("USER_MINE", "My Exodin")
+          assert.equal("FULLSCREEN_DIALOG", h.shown():GetFrameStrata())
+          assert.is_true(h.shown():GetFrameLevel() > 100)
+        end)
+
+        -- D71's own popup MUST use the exact same raise -- the spec that names the trap this pass
+        -- was warned about: a strata-only fix would open it behind the options window exactly like
+        -- the naming popups before D62/D67 actually fixed them.
+        it("D71: the source popup is raised past level 100 too, and restores its own level on hide",
+          function()
+            install()
+            local h = harness()
+            Rotation.openSourcePopup("https://www.wowhead.com/classic/guide/paladin")
+            assert.equal("FULLSCREEN_DIALOG", h.shown():GetFrameStrata())
+            assert.is_true(h.shown():GetFrameLevel() > 100)
+            h.hide()
+            assert.equal("DIALOG", h.shown():GetFrameStrata())
+            assert.equal(5, h.shown():GetFrameLevel())
+          end)
+
+        it("D62: does nothing (no error) on a frame with no GetFrameLevel/SetFrameLevel at all", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local frame = { strata = "DIALOG", editBox = { SetText = function() end } }
+          function frame:SetFrameStrata(s) self.strata = s end
+          _G.StaticPopup_Show = function() return frame end
+          assert.has_no.errors(function() Rotation.openNewRotationPopup() end)
+          assert.equal("DIALOG", frame.strata, "must not have raised strata without a level to match it")
+        end)
+
+        -- D63 (same review): the OnHide restore is on a SHARED frame -- StaticPopup1-4 are reused
+        -- by every addon's popups -- so an unconditional restore would force DIALOG/its own level
+        -- back down the next time some OTHER addon shows a popup on the same frame, even though
+        -- Elmira never touched THAT showing. Gated on `elmiraRaised`, set only by our own raise and
+        -- cleared only by our own restore.
+        it("D63: does not touch a hide it never raised for, even though the hook still fires", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local hideFns = {}
+          local frame = { strata = "DIALOG", level = 5, editBox = { SetText = function() end } }
+          function frame:SetFrameStrata(s) self.strata = s end
+          function frame:GetFrameStrata() return self.strata end
+          function frame:SetFrameLevel(l) self.level = l end
+          function frame:GetFrameLevel() return self.level end
+          function frame:HookScript(event, fn) if event == "OnHide" then hideFns[#hideFns + 1] = fn end end
+          _G.StaticPopup_Show = function() return frame end
+
+          Rotation.openNewRotationPopup() -- our own raise: elmiraRaised = true
+          for _, fn in ipairs(hideFns) do fn(frame) end -- our own hide: restores, clears the flag
+          assert.equal("DIALOG", frame.strata)
+          assert.equal(5, frame.level)
+
+          -- Some OTHER addon now shows its own popup on this SAME shared frame, entirely without
+          -- going through Elmira's open*Popup -- our hook is still attached (HookScript chains and
+          -- never unregisters) and fires anyway when THEIRS hides.
+          frame.strata, frame.level = "FULLSCREEN", 250
+          for _, fn in ipairs(hideFns) do fn(frame) end
+          assert.equal("FULLSCREEN", frame.strata, "a hide Elmira never raised must not be touched")
+          assert.equal(250, frame.level)
+        end)
+
+        -- D67 (re-review residual): the old `level < 100` / `level > 100` thresholds
+        -- were asymmetric at 0 -- a frame starting there went to 100 and never came back down,
+        -- mutating a shared Blizzard frame permanently. The fix stores the pre-raise level and
+        -- restores exactly it, at every starting level, with no threshold at all.
+        describe("D67: the round trip is exact at every starting level, not just above 100", function()
+          local function frameAt(startLevel)
+            local hideFns = {}
+            local frame = { strata = "DIALOG", level = startLevel,
+                             editBox = { SetText = function() end } }
+            function frame:SetFrameStrata(s) self.strata = s end
+            function frame:GetFrameStrata() return self.strata end
+            function frame:SetFrameLevel(l) self.level = l end
+            function frame:GetFrameLevel() return self.level end
+            function frame:HookScript(event, fn)
+              if event == "OnHide" then hideFns[#hideFns + 1] = fn end
+            end
+            frame.fireHide = function() for _, fn in ipairs(hideFns) do fn(frame) end end
+            return frame
+          end
+
+          it("returns to level 0 exactly (the reviewer's own probe: 0 -> 100 -> 100 was the bug)", function()
+            install()
+            installUserBuilds{ list = function() return {} end }
+            local frame = frameAt(0)
+            _G.StaticPopup_Show = function() return frame end
+            Rotation.openNewRotationPopup()
+            assert.is_true(frame.level > 100, "must still clear AceGUI's Frame from level 0")
+            frame.fireHide()
+            assert.equal(0, frame.level, "must return to 0, not stay raised")
+          end)
+
+          it("returns to a level already above 100 exactly, not to 100 minus a fixed offset", function()
+            install()
+            installUserBuilds{ list = function() return {} end }
+            local frame = frameAt(150)
+            _G.StaticPopup_Show = function() return frame end
+            Rotation.openNewRotationPopup()
+            assert.is_true(frame.level > 150, "must still raise further above wherever it started")
+            frame.fireHide()
+            assert.equal(150, frame.level, "must return to its OWN original level, not a guessed one")
+          end)
+
+          it("does not re-capture the already-raised level as the original on a second open before hiding", function()
+            install()
+            installUserBuilds{ list = function() return {} end }
+            local frame = frameAt(0)
+            _G.StaticPopup_Show = function() return frame end
+            Rotation.openNewRotationPopup()
+            Rotation.openNewRotationPopup() -- same frame shown again before it ever hid
+            frame.fireHide()
+            assert.equal(0, frame.level, "the SECOND raise must not have overwritten the stored original")
+          end)
+        end)
+
+        -- The guard that keeps a reused shared frame (StaticPopup1-4) from picking up a SECOND
+        -- hide-hook every time this addon shows one -- observed directly on one persistent frame
+        -- object, since the harness above (correctly) hands back a fresh one per Show.
+        it("D61a: never stacks a second hide-hook on a frame the client reuses", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local hookCalls = 0
+          local frame = { strata = "DIALOG", level = 5, editBox = { SetText = function() end } }
+          function frame:SetFrameStrata(s) self.strata = s end
+          function frame:GetFrameStrata() return self.strata end
+          function frame:SetFrameLevel(l) self.level = l end
+          function frame:GetFrameLevel() return self.level end
+          function frame:HookScript() hookCalls = hookCalls + 1 end
+          _G.StaticPopup_Show = function() return frame end
+          Rotation.openNewRotationPopup()
+          Rotation.openNewRotationPopup()
+          assert.equal(1, hookCalls)
+        end)
+
+        -- StaticPopup1-4 are frames Blizzard can hide and re-show without this addon ever seeing a
+        -- second OnHide fire in between; the guard against a stacked hook (`elmiraStrataHooked`)
+        -- must still leave hiding idempotent -- one restore, not an error, not a second attempt.
+        it("D61a: hiding the same popup twice stays at DIALOG, without erroring", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local h = harness()
+          Rotation.openNewRotationPopup()
+          assert.equal("FULLSCREEN_DIALOG", h.shown():GetFrameStrata())
+          h.hide()
+          assert.has_no.errors(function() h.hide() end)
+          assert.equal("DIALOG", h.shown():GetFrameStrata())
+        end)
+
+        it("D61c: pressing Enter in the edit box creates the rotation, exactly like clicking Create", function()
+          install()
+          local created
+          installUserBuilds{ create = function(_, name) created = name; return "USER_NEW" end,
+                            find = function() return {} end }
+          local h = harness()
+          Rotation.openNewRotationPopup()
+          h.shown().editBox:SetText("Typed via keyboard")
+          h.pressEnter()
+          assert.equal("Typed via keyboard", created)
+        end)
+
+        it("D61c: clicking Create and switch with the prefilled name actually creates it", function()
+          install()
+          local created
+          installUserBuilds{ create = function(_, name) created = name; return "USER_NEW" end,
+                            find = function() return {} end }
+          local h = harness()
+          Rotation.openNewRotationPopup()
+          h.click()
+          assert.equal("My rotation", created)
+        end)
+
+        -- The exact D61c failure: an empty name (D61b's own bug, before its fix) refused silently.
+        -- Now it must say so.
+        it("D61c: an empty name reports the failure instead of doing nothing", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local said = {}
+          ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+          local h = harness()
+          Rotation.openNewRotationPopup()
+          h.shown().editBox:SetText("")
+          h.click()
+          assert.equal(1, #said)
+          assert.equal("warning", said[1][1])
+          assert.is_truthy(said[1][2]:find("could not create", 1, true))
+        end)
+
+        it("D61c: pressing Enter on the rename popup renames too, exactly like clicking Rename", function()
+          install()
+          local renamed
+          ns.UserBuilds = { rename = function(k, n) renamed = { k, n }; return true end }
+          local h = harness()
+          Rotation.openRenamePopup("USER_MINE", "My Exodin")
+          h.shown().editBox:SetText("Renamed via keyboard")
+          h.pressEnter()
+          assert.same({ "USER_MINE", "Renamed via keyboard" }, renamed)
+        end)
+
+        it("D61c: a rename failure reports through announceFailure too", function()
+          install()
+          local said = {}
+          ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+          ns.UserBuilds = { rename = function() return false, "not one of your rotations" end }
+          local h = harness()
+          Rotation.openRenamePopup("USER_MINE", "My Exodin")
+          h.click()
+          assert.equal(1, #said)
+          assert.is_truthy(said[1][2]:find("could not rename", 1, true))
+        end)
+      end)
+
+      describe("ELMIRA_NAME_ROTATION", function()
+        local dialog
+        before_each(function() dialog = _G.StaticPopupDialogs.ELMIRA_NAME_ROTATION end)
+
+        it("prefills the edit box from the data it was shown with, and highlights it", function()
+          local shown = box("")
+          local self = { editBox = shown, data = { prefill = "My rotation" } }
+          dialog.OnShow(self)
+          assert.equal("My rotation", shown.text)
+          assert.is_true(shown.highlighted)
+        end)
+
+        it("creates an empty rotation when shown with no templateKey", function()
+          install()
+          local created
+          installUserBuilds{ create = function(_, name) created = name; return "USER_NEW" end,
+                            find = function() return {} end }
+          dialog.OnAccept({ editBox = box("My rotation"), data = {} })
+          assert.equal("My rotation", created)
+        end)
+
+        it("forks the named template when shown WITH a templateKey", function()
+          install()
+          local forked
+          installUserBuilds{ fork = function(_, k, o) forked = { k, o.name }; return "USER_MINE" end,
+                            find = function() return {} end }
+          dialog.OnAccept({ editBox = box("My Exodin"), data = { templateKey = "PALADIN_EXODIN" } })
+          assert.same({ "PALADIN_EXODIN", "My Exodin" }, forked)
+        end)
+
+        -- StaticPopup hands `self` alone to OnShow/OnAccept in the real client; `data` only arrives
+        -- as a second argument from some callers, so both read it off `self.data` as a fallback.
+        it("reads data off self.data when it is not handed separately", function()
+          install()
+          local created
+          installUserBuilds{ create = function(_, name) created = name; return "USER_NEW" end,
+                            find = function() return {} end }
+          local shown = box("")
+          dialog.OnShow({ editBox = shown, data = { prefill = "From self.data" } })
+          assert.equal("From self.data", shown.text)
+          dialog.OnAccept({ editBox = box("Typed name"), data = {} })
+          assert.equal("Typed name", created)
+        end)
+
+        it("says what it is for, with Create and switch / Cancel buttons", function()
+          assert.equal("Name this rotation:", dialog.text)
+          assert.equal("Create and switch", dialog.button1)
+          assert.equal("Cancel", dialog.button2)
+          assert.is_true(dialog.hasEditBox)
+        end)
+      end)
+
+      describe("ELMIRA_RENAME_ROTATION", function()
+        local dialog
+        before_each(function() dialog = _G.StaticPopupDialogs.ELMIRA_RENAME_ROTATION end)
+
+        it("prefills the edit box with the current name, and highlights it", function()
+          local shown = box("")
+          dialog.OnShow({ editBox = shown, data = { prefill = "My Exodin" } })
+          assert.equal("My Exodin", shown.text)
+          assert.is_true(shown.highlighted)
+        end)
+
+        it("renames through Rotation.rename", function()
+          install()
+          local renamed
+          ns.UserBuilds = { rename = function(k, n) renamed = { k, n }; return true end }
+          dialog.OnAccept({ editBox = box("New name"), data = { renameKey = "USER_MINE" } })
+          assert.same({ "USER_MINE", "New name" }, renamed)
+        end)
+
+        it("does nothing when shown with no renameKey at all, rather than erroring", function()
+          local ran
+          ns.UserBuilds = { rename = function() ran = true end }
+          assert.has_no.errors(function()
+            dialog.OnAccept({ editBox = box("New name"), data = {} })
+          end)
+          assert.is_nil(ran)
+        end)
+
+        it("says what it is for, with a Rename button", function()
+          assert.equal("Rename \"%s\":", dialog.text)
+          assert.equal("Rename", dialog.button1)
+          assert.is_true(dialog.hasEditBox)
+        end)
+      end)
+
+      -- D71: no OnAccept at all -- this popup exists only to be read from and copied out of.
+      describe("ELMIRA_SHOW_SOURCE", function()
+        local dialog
+        before_each(function() dialog = _G.StaticPopupDialogs.ELMIRA_SHOW_SOURCE end)
+
+        it("prefills the edit box with the full url, and highlights it for copying", function()
+          local shown = box("")
+          dialog.OnShow({ editBox = shown,
+                          data = { prefill = "https://www.wowhead.com/classic/guide/paladin" } })
+          assert.equal("https://www.wowhead.com/classic/guide/paladin", shown.text)
+          assert.is_true(shown.highlighted)
+        end)
+
+        it("says what it is for, with only a Close button", function()
+          assert.equal("Copy this link:", dialog.text)
+          assert.equal("Close", dialog.button1)
+          assert.is_nil(dialog.button2)
+          assert.is_true(dialog.hasEditBox)
+        end)
+      end)
+
+      -- Loading the file twice (every spec's before_each) must not stack a second OnAccept behind
+      -- the first, or a rename would silently fire twice for one click.
+      it("does not re-register the dialogs on a second load", function()
+        local first = _G.StaticPopupDialogs.ELMIRA_NAME_ROTATION
+        Rotation = helper.load("Elmira/Options/Rotation.lua")
+        assert.equal(first, _G.StaticPopupDialogs.ELMIRA_NAME_ROTATION)
+      end)
+
+      -- Same guard for the newer dialog: reloading this file (every spec's before_each) must not
+      -- stack a second registration on top of the first.
+      it("does not re-register ELMIRA_SHOW_SOURCE on a second load either", function()
+        local first = _G.StaticPopupDialogs.ELMIRA_SHOW_SOURCE
+        Rotation = helper.load("Elmira/Options/Rotation.lua")
+        assert.equal(first, _G.StaticPopupDialogs.ELMIRA_SHOW_SOURCE)
+      end)
+    end)
+
+    describe("rename()", function()
+      it("renames through UserBuilds and notifies the tree", function()
+        install()
+        local renamed, notified = nil, 0
+        ns.UserBuilds = { rename = function(k, n) renamed = { k, n }; return true end }
+        _G.LibStub = function() return { NotifyChange = function() notified = notified + 1 end } end
+        local ok = Rotation.rename("USER_MINE", "New name")
+        _G.LibStub = nil
+        assert.is_true(ok)
+        assert.same({ "USER_MINE", "New name" }, renamed)
+        assert.equal(1, notified)
+      end)
+
+      it("reports failure without erroring when the module is absent", function()
+        install()
+        ns.UserBuilds = nil
+        local ok, err = Rotation.rename("USER_MINE", "New name")
+        assert.is_false(ok)
+        assert.truthy(err:find("not loaded", 1, true))
+      end)
+    end)
+
+    describe("remove()", function()
+      it("removes the fork and notifies the tree so the deleted page disappears", function()
+        install()
+        local removedKey, notified = nil, 0
+        ns.UserBuilds = { remove = function(k) removedKey = k; return true end }
+        _G.LibStub = function() return { NotifyChange = function() notified = notified + 1 end } end
+        assert.is_true(Rotation.remove("USER_MINE"))
+        _G.LibStub = nil
+        assert.equal("USER_MINE", removedKey)
+        assert.equal(1, notified)
+      end)
+
+      it("says so rather than erroring when the builds module is absent", function()
+        install()
+        ns.UserBuilds = nil
+        assert.is_false(Rotation.remove("USER_MINE"))
+      end)
+
+      -- D35: deleting the rotation you are running leaves none in use.
+      it("clears activeBuild and refreshes when the removed rotation was running", function()
+        install()
+        ns.db.profile.activeBuild = "USER_MINE"
+        ns.Display.activeBuild = function() return {}, "USER_MINE", nil end
+        local refreshed = 0
+        ns.Display.refresh = function() refreshed = refreshed + 1 end
+        ns.UserBuilds = { remove = function() return true end }
+        Rotation.remove("USER_MINE")
+        assert.is_false(ns.db.profile.activeBuild)
+        assert.equal(1, refreshed)
+      end)
+
+      it("leaves an unrelated active build alone", function()
+        install()
+        ns.db.profile.activeBuild = "USER_OTHER"
+        ns.UserBuilds = { remove = function() return true end }
+        Rotation.remove("USER_MINE")
+        assert.equal("USER_OTHER", ns.db.profile.activeBuild)
+      end)
+
+      it("reports false without erroring when the module cannot remove", function()
+        install()
+        ns.UserBuilds = { remove = function() return false end }
+        assert.is_false(Rotation.remove("USER_MINE"))
+      end)
+    end)
+  end)
+
+  -- D33/D36's "Rotation, top to bottom": the same Core/Gates evaluation the Builder's own status
+  -- column runs, generalised to whichever key is being VIEWED.
+  describe("lineRows()", function()
+    local function installBuild(entries)
+      ns.Display.currentPack = function()
+        return { class = "PALADIN", spells = { EXORCISM = {} },
+                 builds = { PALADIN_EXODIN = { entries = entries } } }
+      end
+      installUserBuilds{ find = realUserBuilds.find }
+    end
+
+    before_each(function()
+      ns.compileBuild = function(build) return { entries = build.entries } end
+    end)
+
+    it("is empty, not an error, for an unknown key", function()
+      installBuild({})
+      assert.same({}, Rotation.lineRows("NOPE"))
+    end)
+
+    it("marks a disabled line off", function()
+      installBuild{ { spell = "EXORCISM", disabled = true } }
+      ns.compileBuild = function() return { entries = {} } end -- Schema.compile drops disabled rows
+      local rows = Rotation.lineRows("PALADIN_EXODIN")
+      assert.equal(1, #rows)
+      assert.equal("off", rows[1].mark)
+    end)
+
+    it("marks a line blocked when the gate says it cannot fire for this character", function()
+      installBuild{ { spell = "EXORCISM" } }
+      ns.compileBuild = function(build)
+        return { entries = { { index = 1, spell = "EXORCISM" } } }
+      end
+      ns.API = { GetState = function() return {} end }
+      ns.Gates = { evaluate = function() return { { index = 1, active = false, reasons = { "needs a rune" } } } end }
+      local rows = Rotation.lineRows("PALADIN_EXODIN")
+      assert.equal("blocked", rows[1].mark)
+    end)
+
+    it("marks a line firing when nothing gates it", function()
+      installBuild{ { spell = "EXORCISM" } }
+      ns.compileBuild = function() return { entries = { { index = 1, spell = "EXORCISM" } } } end
+      ns.API = { GetState = function() return {} end }
+      ns.Gates = { evaluate = function() return { { index = 1, active = true, reasons = {} } } end }
+      local rows = Rotation.lineRows("PALADIN_EXODIN")
+      assert.equal("firing", rows[1].mark)
+    end)
+
+    -- D72: the row carries the spell key so the renderer can resolve its icon through the adapter.
+    it("carries the entry's spell key", function()
+      installBuild{ { spell = "EXORCISM" } }
+      ns.compileBuild = function() return { entries = { { index = 1, spell = "EXORCISM" } } } end
+      local rows = Rotation.lineRows("PALADIN_EXODIN")
+      assert.equal("EXORCISM", rows[1].spell)
+    end)
+
+    it("treats a build that failed to compile as switched off rather than erroring", function()
+      installBuild{ { spell = "EXORCISM" } }
+      ns.compileBuild = function() return nil end
+      local rows = Rotation.lineRows("PALADIN_EXODIN")
+      assert.equal("off", rows[1].mark)
+    end)
+  end)
+
 
   describe("templateRows()", function()
     it("is empty, not an error, before a class pack is loaded", function()
@@ -2061,97 +3256,514 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_false(rows[2].active)
     end)
 
-    -- The catalog is read-only and shipped-only (ADR-0005, hard rule 7). A template row carrying a
-    -- set/get would be an edit surface on it.
-    it("renders templates as read-only rows", function()
+    -- D32's inline card, on the root page, made to READ as a card (D69): the group's own `name` is
+    -- the title now, not an empty string with a name row underneath repeating it.
+    it("titles the card with the playstyle name, an Open button, summary, difficulty and a source line",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", difficulty = "medium",
+                         updated = "2026-08-01", summary = "Fast 2H.",
+                         source = "https://www.wowhead.com/classic/guide/paladin",
+                         recommended = true, fits = true } }
+        local card = Rotation.group().args.card1
+        assert.equal("group", card.type)
+        assert.is_true(card.inline)
+        -- The title IS the card's own bordered-pane heading (AceGUIContainer-InlineGroup.lua), the
+        -- observable D69 exists to fix.
+        assert.is_truthy(card.name:find("Exodin", 1, true))
+        assert.equal("execute", card.args.open.type)
+        assert.is_nil(card.args.open.set)
+        assert.equal("Open", card.args.open.name)
+        -- D69: the button no longer repeats the name the title already says.
+        assert.is_falsy(card.args.open.name:find("Exodin", 1, true))
+        assert.equal("Fast 2H.", card.args.summary.name)
+        -- D70: difficulty is now on the meta line.
+        assert.is_truthy(card.args.meta.name:find("medium", 1, true))
+        assert.is_truthy(card.args.meta.name:find("2026%-08%-01"))
+        assert.is_truthy(card.args.meta.name:find("recommended", 1, true))
+        -- D71: the source is no longer concatenated into that same line...
+        assert.is_falsy(card.args.meta.name:find("wowhead", 1, true))
+        -- ...it has its own line, phrased so the subject is unambiguous, and a link button.
+        assert.is_truthy(card.args.source.name:find("Source:", 1, true))
+        assert.is_truthy(card.args.source.name:find("wowhead%.com"))
+        assert.equal("execute", card.args.link.type)
+        -- This row IS the one running (top before_each's default activeBuild), so there is no Use
+        -- button at all -- the sequence is Open, summary, meta, source, link.
+        assert.is_nil(card.args.use)
+        assert.equal(1, card.args.open.order)
+        assert.equal(2, card.args.summary.order)
+        assert.equal(3, card.args.meta.order)
+        assert.equal(4, card.args.source.order)
+        assert.equal(5, card.args.link.order)
+      end)
+
+    -- Clicking Open navigates to the template's own page (D32), never a second `Open` of the panel.
+    it("navigates to the template's own page when its Open button is clicked", function()
       installPack()
-      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", difficulty = "medium",
-                       updated = "2026-08-01", fits = true } }
-      local row = Rotation.group().args.rotations.args.templates.args.t1
-      assert.equal("group", row.type)
-      assert.equal("description", row.args.what.type)
-      assert.is_nil(row.args.what.set)
-      assert.is_truthy(row.args.what.name:find("Exodin", 1, true))
-      assert.is_truthy(row.args.what.name:find("2026-08-01", 1, true))
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      local selected
+      ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
+      Rotation.group().args.card1.args.open.func()
+      assert.same({ "Elmira", "rotation", "PALADIN_EXODIN" }, selected)
     end)
 
-    -- The row model carries `active`; the marker is what the player actually sees. Testing only the
-    -- model leaves the render free to mark every row the same.
-    it("marks the running template's row and leaves the others unmarked", function()
+    -- D71: the link button opens the SAME StaticPopup layer as D35/D61/D67, never a second one, with
+    -- the FULL url (not the shortened host the source line shows).
+    it("opens the source URL popup, in full, when the card's link button is clicked", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true,
+                       source = "https://www.wowhead.com/classic/guide/paladin" } }
+      local link = Rotation.group().args.card1.args.link
+      assert.equal("Shows the full web address in a box you can select and copy.", link.desc)
+      link.func()
+      assert.equal("ELMIRA_SHOW_SOURCE", _G.__lastStaticPopup.which)
+      assert.equal("https://www.wowhead.com/classic/guide/paladin", _G.__lastStaticPopup.data.prefill)
+    end)
+
+    it("has no source line or link button at all when the catalog entry carries no source", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      local card = Rotation.group().args.card1
+      assert.is_nil(card.args.source)
+      assert.is_nil(card.args.link)
+    end)
+
+    -- The Wizard.lua heading, reused word for word so a player never sees it change.
+    it("states level, class and weapon in the detection line", function()
+      installPack()
+      installWizard{}
+      ns.Wizard.detection = function()
+        return { class = "Paladin", level = 60, weapon = { type = "two-hander" } }
+      end
+      local line = Rotation.group().args.detection.name
+      assert.is_truthy(line:find("Level 60 Paladin, holding a two%-hander", 1))
+      assert.is_truthy(line:find("Pick how you want to play", 1, true))
+    end)
+
+    it("falls back to '?' and 'unknown' piece by piece when detection cannot answer", function()
+      installPack()
+      installWizard{}
+      ns.Wizard.detection = function() return {} end
+      local line = Rotation.group().args.detection.name
+      assert.is_truthy(line:find("Level %? %?, holding a"))
+      assert.is_truthy(line:find("unknown", 1, true))
+    end)
+
+    -- The row model carries `active`; the marker is what the player actually sees.
+    it("badges the running template's TITLE, and offers Use on the others", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
                      { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
-      local args = Rotation.group().args.rotations.args.templates.args
-      assert.is_truthy(args.t1.args.what.name:find(">>", 1, true))
-      assert.is_nil(args.t2.args.what.name:find(">>", 1, true))
-      assert.is_truthy(args.t2.args.what.name:find("--", 1, true))
+      local args = Rotation.group().args
+      assert.is_truthy(args.card1.name:find("in use", 1, true))
+      assert.is_nil(args.card1.args.use, "the active row still offers a Use button")
+      assert.is_falsy(args.card2.name:find("in use", 1, true))
+      assert.equal("execute", args.card2.args.use.type)
+      assert.equal("Use", args.card2.args.use.name)
+      assert.is_nil(args.card2.args.use.desc, "a fitting row still explains a reason it does not have")
+      assert.is_nil(args.card2.args.use.confirm)
+      -- With a Use button present, it takes position 2 and everything after it shifts down one.
+      assert.equal(1, args.card2.args.open.order)
+      assert.equal(2, args.card2.args.use.order)
+      assert.equal(3, args.card2.args.summary.order)
+      assert.equal(4, args.card2.args.meta.order)
     end)
 
-    it("says on the row when a template needs gear or runes you do not have", function()
+    -- D44: the Use button actually switches the rotation when clicked -- not just that the button
+    -- looks right, but that its own `func` runs `Rotation.use` and the switch takes.
+    it("actually switches to the rotation when the Use button is clicked", function()
       installPack()
-      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = false } }
-      local row = Rotation.group().args.rotations.args.templates.args.t1
-      assert.is_truthy(row.args.what.name:find("needs gear or runes", 1, true))
+      ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+      local said = {}
+      ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+      Rotation.group().args.card2.args.use.func()
+      assert.equal("PALADIN_SHOCKADIN", ns.db.profile.activeBuild)
+      assert.equal(1, #said, "only the success announcement, no failure warning")
+      assert.equal("rotation", said[1][1])
     end)
 
-    -- Wizard.choices reaches the catalog and Detect; an error there must not take the whole panel
+    -- D44: `Rotation.use` returns `false, reason` and this call site used to drop it, so a failed
+    -- click looked exactly like a dead button. It must say why instead.
+    it("announces the reason instead of doing nothing when the Use button fails to activate",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                       { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+        -- No ns.db in this describe block's default state, so Rotation.use refuses with "no profile".
+        local said = {}
+        ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+        Rotation.group().args.card2.args.use.func()
+        assert.equal(1, #said)
+        assert.equal("warning", said[1][1])
+        assert.is_truthy(said[1][2]:find("could not set that playstyle", 1, true))
+        assert.is_truthy(said[1][2]:find("no profile", 1, true))
+      end)
+
+    it("does not error when Announce is not loaded and the Use button fails", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+      ns.Announce = nil
+      Rotation.group().args.card2.args.use.func()
+    end)
+
+    -- Never a literal AceConfig `disabled`: `requires` is advisory (hard rule 8), so a card that
+    -- does not fit still offers a button, worded and confirmed rather than refused.
+    it("offers 'Use this anyway', confirmed, when a template needs gear or runes you do not have",
+      function()
+        installPack()
+        ns.Display.activeBuild = function() return nil, nil end -- nothing active: the row must not be badged
+        ns.Detect = { hasFailures = function(checks)
+          for _, c in ipairs(checks or {}) do if c.ok == false then return true end end
+          return false
+        end }
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = false,
+                         checks = { { key = "weapon", ok = false, text = "Weapon: 2H (you have 1H)" } } } }
+        local use = Rotation.group().args.card1.args.use
+        assert.equal("Use this anyway", use.name)
+        assert.is_nil(use.disabled)
+        assert.is_true(use.confirm)
+        assert.equal("Weapon: 2H (you have 1H)", use.confirmText)
+        assert.equal("Weapon: 2H (you have 1H)", use.desc)
+      end)
+
+    -- D48. Two catalog entries ship with `available = false` today (seal twisting, seal stacking):
+    -- the tree used to drop them, so the owner's answer to "where is seal twisting?" was silence.
+    -- Present, muted, and explained -- and still usable, because rule 8 forbids a hard gate.
+    describe("a playstyle the pack cannot run yet (D48)", function()
+      local function installTwist()
+        installPack()
+        ns.Display.activeBuild = function() return nil, nil end
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                       { build = "PALADIN_TWIST", playstyle = "Seal twisting", available = false,
+                         summary = "Highest ceiling.", fits = true } }
+      end
+
+      it("still gives it a page in the tree, with its name muted", function()
+        installTwist()
+        local page = Rotation.group().args.PALADIN_TWIST
+        assert.is_table(page, "an unavailable playstyle is missing from the tree entirely")
+        assert.is_nil(page.disabled, "`disabled` hides the page, and the page is the explanation")
+        assert.equal(ns.Colors.wrap(ns.Colors.MUTED, "Seal twisting"), page.name)
+        -- and the one that IS runnable is not muted
+        assert.equal("Exodin", Rotation.group().args.PALADIN_EXODIN.name)
+      end)
+
+      it("mutes its card's TITLE on the root page too, so the tree and the list agree", function()
+        installTwist()
+        local args = Rotation.group().args
+        assert.equal(ns.Colors.wrap(ns.Colors.MUTED, "Seal twisting"), args.card2.name)
+        assert.equal("Exodin", args.card1.name)
+      end)
+
+      it("says why on its own page, in words, above the summary", function()
+        installTwist()
+        local about = Rotation.group().args.PALADIN_TWIST.args.about.args
+        assert.is_table(about.blocked, "the page never explains why the name is muted")
+        assert.is_truthy(about.blocked.name:find("no rotation has shipped", 1, true))
+        assert.is_true(about.blocked.order < about.summary.order)
+        assert.is_nil(Rotation.group().args.PALADIN_EXODIN.args.about.args.blocked)
+      end)
+
+      it("keeps a Use button, worded and confirmed with that same reason", function()
+        installTwist()
+        local use = Rotation.group().args.PALADIN_TWIST.args.header.args.use
+        assert.equal("Use this anyway", use.name)
+        assert.is_nil(use.disabled)
+        assert.is_true(use.confirm)
+        assert.is_truthy(use.confirmText:find("no rotation has shipped", 1, true))
+        assert.equal(use.confirmText, use.desc)
+        assert.equal("Use", Rotation.group().args.PALADIN_EXODIN.args.header.args.use.name)
+      end)
+
+      -- The reason it cannot run comes first: "you need a two-hander" is true and beside the point
+      -- when there is no rotation behind the name at all.
+      it("prefers 'nothing shipped' over a failing requirement as the reason", function()
+        installPack()
+        ns.Display.activeBuild = function() return nil, nil end
+        ns.Detect = { hasFailures = function() return true end }
+        installWizard{ { build = "PALADIN_TWIST", playstyle = "Seal twisting", available = false,
+                         fits = false,
+                         checks = { { key = "weapon", ok = false, text = "Weapon: 2H (you have 1H)" } } } }
+        local use = Rotation.group().args.card1.args.use
+        assert.is_truthy(use.confirmText:find("no rotation has shipped", 1, true))
+      end)
+
+      it("does not claim the character is ready for a rotation that does not exist", function()
+        installTwist()
+        local needs = Rotation.group().args.PALADIN_TWIST.args.needs.args
+        assert.equal("Nothing extra needed from you.", needs.none.name)
+        assert.equal("Nothing extra needed -- this rotation is ready to go.",
+                     Rotation.group().args.PALADIN_EXODIN.args.needs.args.none.name)
+      end)
+    end)
+
+    -- Wizard.rows reaches the catalog and Detect; an error there must not take the whole panel
     -- down with it, or one bad catalog entry means no settings window at all.
     it("renders an empty list rather than propagating a wizard error", function()
       installPack()
-      ns.Wizard = { choices = function() error("bad catalog entry") end }
+      ns.Wizard = { rows = function() error("bad catalog entry") end }
       assert.same({}, Rotation.templateRows())
     end)
 
-    it("tags a row with its difficulty and marks an experimental one", function()
+    -- D70: the difficulty the catalog carries (Classes/Paladin.lua etc.) reaches the card, which
+    -- used to drop it entirely.
+    it("tags a card's meta line with its difficulty and marks an experimental one", function()
       installPack()
       installWizard{ { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", difficulty = "hard",
                        experimental = true, fits = true } }
-      local name = Rotation.group().args.rotations.args.templates.args.t1.args.what.name
-      assert.is_truthy(name:find("hard", 1, true))
-      assert.is_truthy(name:find("experimental", 1, true))
+      local meta = Rotation.group().args.card1.args.meta.name
+      assert.is_truthy(meta:find("experimental", 1, true))
+      assert.is_truthy(meta:find("hard", 1, true))
     end)
 
-    it("says templates cannot be edited, and names the way to get a copy", function()
+    -- A catalog `source` is always a URL string in practice; a malformed one must not error the
+    -- whole panel over a punctuation problem in a guide link.
+    it("does not error when a catalog source is not a URL-shaped string at all", function()
       installPack()
-      installWizard{}
-      local note = Rotation.group().args.rotations.args.note
-      assert.equal("description", note.type)
-      assert.equal(3, note.order)
-      assert.equal("full", note.width)
-      assert.is_truthy(note.name:find("read-only", 1, true))
-      assert.is_truthy(note.name:find("Customize", 1, true))
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true, source = 12345 } }
+      assert.has_no.errors(function() return Rotation.group() end)
     end)
 
-    it("says so when the class ships no templates", function()
+    it("says so when the class ships no templates, and still offers New rotation", function()
       installPack()
       installWizard{}
-      assert.is_truthy(Rotation.group().args.rotations.args.templates.args.none.name
-        :find("No templates ship", 1, true))
+      local root = Rotation.group().args
+      assert.is_truthy(root.noPack.name:find("No playstyles for", 1, true))
+      assert.equal("execute", root.newRotation.type)
+      assert.is_nil(root.header, "a header for an empty catalog names nothing")
+    end)
+
+    it("names the class and catalog phase in the root page's header", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true, phase = "SoD P8" } }
+      assert.is_truthy(Rotation.group().args.header.name:find("PALADIN", 1, true))
+      assert.is_truthy(Rotation.group().args.header.name:find("SoD P8", 1, true))
+    end)
+
+    -- Absolute positions, not just "each is unique": a shift here would leave every row still
+    -- distinct from the others (the uniqueness test above would not notice), only reordered on
+    -- screen from what the artifact specifies -- detection, then New rotation, then the header.
+    it("puts detection, New rotation and the header in that exact order", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      local args = Rotation.group().args
+      assert.equal(1, args.detection.order)
+      assert.equal(2, args.newRotation.order)
+      assert.equal(3, args.header.order)
+      assert.equal(4, args.card1.order)
+    end)
+
+    it("puts New rotation right after detection when the class has no catalog", function()
+      installPack()
+      installWizard{}
+      local args = Rotation.group().args
+      assert.equal(1, args.detection.order)
+      assert.equal(2, args.newRotation.order)
+      assert.equal(3, args.noPack.order)
+    end)
+
+    -- D33: the template's OWN page, a tree node -- header, explanation and the needs/lines blocks.
+    describe("the template's own page", function()
+      it("has a header naming it, badged when it is the one running, with a Copy and edit button",
+        function()
+          installPack()
+          installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+          local page = Rotation.group().args.PALADIN_EXODIN
+          assert.equal("Exodin", page.name)
+          local header = page.args.header.args
+          assert.is_truthy(header.name.name:find("Exodin", 1, true))
+          assert.is_truthy(header.name.name:find("in use", 1, true))
+          assert.is_nil(header.use)
+          assert.equal("execute", header.copy.type)
+          assert.equal("Copy and edit", header.copy.name)
+          assert.equal("Makes your own editable copy of this template, under a name you choose.",
+                       header.copy.desc)
+          assert.equal(1, header.name.order)
+          assert.equal(2, header.copy.order)
+          header.copy.func()
+          assert.equal("PALADIN_EXODIN", _G.__lastStaticPopup.data.templateKey)
+        end)
+
+      it("offers Use before Copy and edit when the template is not the one running", function()
+        installPack()
+        ns.Display.activeBuild = function() return nil, nil end
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        local header = Rotation.group().args.PALADIN_EXODIN.args.header.args
+        assert.equal("execute", header.use.type)
+        assert.equal(1, header.name.order)
+        assert.equal(2, header.use.order)
+        assert.equal(3, header.copy.order)
+      end)
+
+      it("lists what the rotation needs, one row per check plus the rune shopping list", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = false,
+          checks = { { key = "weapon", ok = false, text = "Weapon: 2H (you have 1H)" },
+                     { key = "RUNE_X", ok = true, text = "Art of War engraved" },
+                     { key = "RUNE_Y", ok = nil, text = "Rune Y: could not read your runes" } },
+          runesToEngrave = { "Art of War (feet)" } } }
+        local needs = Rotation.group().args.PALADIN_EXODIN.args.needs
+        assert.equal("What this rotation needs", needs.name)
+        assert.is_truthy(needs.args.n1.name:find("Weapon: 2H", 1, true))
+        -- D43: the three marks are the same indicator textures as the rotation lines below, one per
+        -- Detect.check verdict (ok=false/true/nil) -- not a second, ASCII marker style on this page.
+        assert.is_truthy(needs.args.n1.name:find("|TInterface\\COMMON\\Indicator-Yellow:12|t", 1, true))
+        assert.is_truthy(needs.args.n2.name:find("Art of War engraved", 1, true))
+        assert.is_truthy(needs.args.n2.name:find("|TInterface\\COMMON\\Indicator-Green:12|t", 1, true))
+        assert.is_truthy(needs.args.n3.name:find("could not read your runes", 1, true))
+        assert.is_truthy(needs.args.n3.name:find("|TInterface\\COMMON\\Indicator-Gray:12|t", 1, true))
+        assert.is_truthy(needs.args.shopping.name:find("Art of War %(feet%)"))
+        assert.is_truthy(needs.args.shopping.name:find("Rune Broker", 1, true))
+        assert.equal(1, needs.args.n1.order)
+        assert.equal(2, needs.args.n2.order)
+        assert.equal(3, needs.args.n3.order)
+        assert.equal(4, needs.args.shopping.order)
+      end)
+
+      it("says nothing extra is needed when every check passes", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true, checks = {} } }
+        local needs = Rotation.group().args.PALADIN_EXODIN.args.needs
+        assert.is_truthy(needs.args.none.name:find("ready to go", 1, true))
+      end)
+
+      -- D71 (2026-09-07, follow-up): the template's own page is where the card's Open
+      -- button lands, so it must get the same split the card did -- date/difficulty together, the
+      -- source unambiguous and on its own line with a link button, never concatenated.
+      it("explains itself with the catalog's summary and notes, a meta line, then a separate source line",
+        function()
+          installPack()
+          installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true,
+            summary = "Fast 2H.", notes = "Never holds Exorcism.", difficulty = "medium",
+            updated = "2026-08-01", source = "https://www.wowhead.com/classic/guide/paladin" } }
+          local about = Rotation.group().args.PALADIN_EXODIN.args.about.args
+          assert.equal("Fast 2H.", about.summary.name)
+          assert.equal("Never holds Exorcism.", about.notes.name)
+          -- D70: difficulty joins the meta line here too.
+          assert.is_truthy(about.meta.name:find("medium", 1, true))
+          assert.is_truthy(about.meta.name:find("2026%-08%-01"))
+          -- The source is no longer concatenated onto that same line...
+          assert.is_falsy(about.meta.name:find("wowhead", 1, true))
+          -- ...it has its own line, phrased unambiguously, and a Copy link button.
+          assert.is_truthy(about.source.name:find("Source:", 1, true))
+          assert.is_truthy(about.source.name:find("wowhead%.com"))
+          assert.equal("execute", about.link.type)
+          assert.equal(1, about.summary.order)
+          assert.equal(2, about.notes.order)
+          assert.equal(3, about.meta.order)
+          assert.equal(4, about.source.order)
+          assert.equal(5, about.link.order)
+        end)
+
+      it("opens the source popup, in full, from the template page's own link button too", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true,
+          source = "https://www.wowhead.com/classic/guide/paladin" } }
+        local link = Rotation.group().args.PALADIN_EXODIN.args.about.args.link
+        assert.equal("Shows the full web address in a box you can select and copy.", link.desc)
+        link.func()
+        assert.equal("ELMIRA_SHOW_SOURCE", _G.__lastStaticPopup.which)
+        assert.equal("https://www.wowhead.com/classic/guide/paladin", _G.__lastStaticPopup.data.prefill)
+      end)
+
+      it("has no source line or link button on the template page when there is no source", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        local about = Rotation.group().args.PALADIN_EXODIN.args.about.args
+        assert.is_nil(about.source)
+        assert.is_nil(about.link)
+      end)
+
+      it("skips summary and notes entirely when the catalog entry has neither", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        local about = Rotation.group().args.PALADIN_EXODIN.args.about.args
+        assert.is_nil(about.summary)
+        assert.is_nil(about.notes)
+        assert.equal(1, about.meta.order)
+      end)
+
+      it("renders the compiled rotation, top to bottom, from lineRows()", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        Rotation.lineRows = function(key)
+          assert.equal("PALADIN_EXODIN", key)
+          return { { index = 1, mark = "firing", label = "Exorcism", summary = "always" } }
+        end
+        local lines = Rotation.group().args.PALADIN_EXODIN.args.lines
+        assert.equal("Rotation, top to bottom", lines.name)
+        assert.is_truthy(lines.args.l1.name:find("Exorcism", 1, true))
+        -- D43: the firing mark is the green texture dot, not the ASCII ">>".
+        assert.is_truthy(lines.args.l1.name:find("|TInterface\\COMMON\\Indicator-Green:12|t", 1, true))
+        assert.is_truthy(lines.args.l1.name:find("always", 1, true))
+      end)
+
+      -- D72 (2026-09-07 in-game round): "improvement should be adding the skill icons before their
+      -- names" -- resolved through the ADAPTER (Display.spellIcon), the same seam mirrorLines and
+      -- the Builder's own listArgs already use, never a direct WoW API call from this module.
+      it("shows the spell's icon before its name on each line", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        ns.Display.spellIcon = function(key) return key == "EXORCISM" and "tex:ex" or nil end
+        Rotation.lineRows = function()
+          return { { index = 1, mark = "firing", label = "Exorcism", summary = "always",
+                     spell = "EXORCISM" } }
+        end
+        local lines = Rotation.group().args.PALADIN_EXODIN.args.lines
+        assert.is_truthy(lines.args.l1.name:find("|Ttex:ex:0|t", 1, true))
+      end)
+
+      -- A spell with no resolvable icon (unknown key, or an item line with no `spell` at all) must
+      -- render with no icon and correct spacing -- never a broken texture escape or a shifted column.
+      it("renders with no icon, and no broken texture escape, when the spell has none", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        ns.Display.spellIcon = function() return nil end
+        Rotation.lineRows = function()
+          return { { index = 1, mark = "firing", label = "Mystery", summary = "always",
+                     spell = "UNKNOWN" } }
+        end
+        local lines = Rotation.group().args.PALADIN_EXODIN.args.lines
+        -- Exactly one texture escape survives: the status mark itself (always present). A second
+        -- one would be a broken/blank icon texture left behind by a bad resolution.
+        local _, textureCount = lines.args.l1.name:gsub("|T", "")
+        assert.equal(1, textureCount)
+        assert.is_truthy(lines.args.l1.name:find("Mystery", 1, true))
+      end)
     end)
   end)
 
   describe("forkRows()", function()
     it("says so when you have made none", function()
       installPack()
-      assert.is_truthy(Rotation.group().args.rotations.args.mine.args.none.name
-        :find("not made a rotation of your own", 1, true))
+      installWizard{}
+      assert.is_truthy(Rotation.group().args.newRotation.desc)
     end)
 
     -- The other truncation bug: `local _, _, fork = ns.UserBuilds and find(...)` discarded the fork
     -- record, so every row rendered as "not from a template".
     it("lists each fork with the template it came from", function()
       installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
       installUserBuilds{
         list = function() return { "USER_MINE" } end,
-        find = function() return {}, "fork",
-               { name = "My Exodin", derivedFrom = "PALADIN_EXODIN" } end,
+        find = function(pk, key)
+          if key == "USER_MINE" then
+            return {}, "fork", { name = "My Exodin", derivedFrom = "PALADIN_EXODIN" }
+          end
+          if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
+        end,
       }
       local rows = Rotation.forkRows()
       assert.equal(1, #rows)
       assert.equal("My Exodin", rows[1].name)
       assert.equal("PALADIN_EXODIN", rows[1].derivedFrom)
-      assert.is_truthy(Rotation.group().args.rotations.args.mine.args.f1.name
-        :find("from Exodin", 1, true))
+      local fork = Rotation.group().args.PALADIN_EXODIN.args.USER_MINE
+      assert.equal("My Exodin", fork.name)
+      assert.is_truthy(fork.args.header.args.from.name:find("Exodin", 1, true))
     end)
 
     it("carries the key and marks the running fork active", function()
@@ -2168,21 +3780,34 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_false(rows[2].active)
     end)
 
-    it("marks the running fork's row and leaves the others unmarked", function()
+    it("badges the running fork's page and offers Use on the others", function()
       installPack()
       ns.Display.activeBuild = function() return {}, "USER_MINE", nil end
       installUserBuilds{
         list = function() return { "USER_MINE", "USER_OTHER" } end,
         find = function(_, key) return {}, "fork", { name = key } end,
       }
-      local args = Rotation.group().args.rotations.args.mine.args
-      assert.is_truthy(args.f1.name:find(">>", 1, true))
-      assert.is_nil(args.f2.name:find(">>", 1, true))
-      assert.is_truthy(args.f2.name:find("--", 1, true))
+      local root = Rotation.group().args
+      local mine = root.USER_MINE.args.header.args
+      local other = root.USER_OTHER.args.header.args
+      assert.is_truthy(mine.name.name:find("in use", 1, true))
+      assert.is_nil(mine.use)
+      assert.is_falsy(other.name.name:find("in use", 1, true))
+      assert.equal("execute", other.use.type)
+      -- Active: name, from, rename, delete (no Use). Not active: Use slots in between.
+      assert.equal(1, mine.name.order)
+      assert.equal(2, mine.from.order)
+      assert.equal(3, mine.rename.order)
+      assert.equal(4, mine.delete.order)
+      assert.equal(1, other.name.order)
+      assert.equal(2, other.from.order)
+      assert.equal(3, other.use.order)
+      assert.equal(4, other.rename.order)
+      assert.equal(5, other.delete.order)
     end)
 
-    -- Same widening the statusLines test guards: db.global is shared across characters, so the
-    -- pack is what keeps a mage out of a paladin's forks.
+    -- Same widening the D30 tree tests guard: db.global is shared across characters, so the pack is
+    -- what keeps a mage out of a paladin's forks.
     it("hands the class pack to every fork lookup", function()
       installPack()
       local classes = {}
@@ -2213,31 +3838,114 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal("PALADIN", gotClass)
     end)
 
-    it("labels a fork that came from no template, as a read-only row", function()
+    it("gives a fork with no template its own page directly under Rotations, with Rename and Delete",
+      function()
+        installPack()
+        installUserBuilds{ list = function() return { "USER_SCRATCH" } end,
+                          find = function() return {}, "fork", { name = "Scratch" } end }
+        local page = Rotation.group().args.USER_SCRATCH
+        assert.equal("Scratch", page.name)
+        local header = page.args.header.args
+        assert.is_truthy(header.from.name:find("yours", 1, true))
+        assert.equal("execute", header.rename.type)
+        assert.equal("Rename", header.rename.name)
+        assert.equal("execute", header.delete.type)
+        assert.equal("Delete", header.delete.name)
+        assert.is_true(header.delete.confirm)
+        assert.equal("execute", header.use.type)
+        assert.equal(1, header.name.order)
+        assert.equal(2, header.from.order)
+        assert.equal(3, header.use.order)
+        assert.equal(4, header.rename.order)
+        assert.equal(5, header.delete.order)
+      end)
+
+    it("gives a fork's page an Edit button that activates it and jumps to the Builder", function()
       installPack()
-      installUserBuilds{ list = function() return { "USER_SCRATCH" } end,
-                        find = function() return {}, "fork", { name = "Scratch" } end }
-      local row = Rotation.group().args.rotations.args.mine.args.f1
-      assert.equal("description", row.type)
-      assert.equal(1, row.order)
-      assert.equal("full", row.width)
-      assert.is_nil(row.set)
-      assert.is_truthy(row.name:find("not from a template", 1, true))
+      ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
+      installUserBuilds{
+        list = function() return { "USER_SCRATCH" } end,
+        find = function() return { entries = {} }, "fork", { name = "Scratch" } end,
+      }
+      local selected
+      ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
+      local edit = Rotation.group().args.USER_SCRATCH.args.edit
+      assert.equal("Opens this rotation in the Builder.", edit.desc)
+      edit.func()
+      assert.equal("USER_SCRATCH", ns.db.profile.activeBuild)
+      assert.same({ "Elmira", "rotation", "builder" }, selected)
+    end)
+
+    it("does not re-activate the fork's Edit button when it is already the one running", function()
+      installPack()
+      ns.db = { profile = { activeBuild = "USER_SCRATCH" }, char = { setupDone = 0 } }
+      ns.Display.activeBuild = function() return {}, "USER_SCRATCH", nil end
+      installUserBuilds{
+        list = function() return { "USER_SCRATCH" } end,
+        find = function() return { entries = {} }, "fork", { name = "Scratch" } end,
+      }
+      local selected, used = nil, 0
+      ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
+      local realUse = Rotation.use
+      Rotation.use = function(...) used = used + 1; return realUse(...) end
+      Rotation.group().args.USER_SCRATCH.args.edit.func()
+      Rotation.use = realUse
+      assert.equal(0, used, "Use ran again on the rotation already active")
+      assert.same({ "Elmira", "rotation", "builder" }, selected)
+    end)
+
+    -- D44: this Edit button used to navigate to the Builder REGARDLESS of whether activation
+    -- succeeded, so a failed activation silently opened the Builder on a different rotation. It
+    -- must say why and stay put instead.
+    it("announces the reason and does NOT navigate when Edit fails to activate the fork", function()
+      installPack()
+      ns.db = nil -- Rotation.use refuses with no profile
+      installUserBuilds{
+        list = function() return { "USER_SCRATCH" } end,
+        find = function() return { entries = {} }, "fork", { name = "Scratch" } end,
+      }
+      local selected
+      ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
+      local said = {}
+      ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+      Rotation.group().args.USER_SCRATCH.args.edit.func()
+      assert.is_nil(selected, "Edit navigated to the Builder despite a failed activation")
+      assert.equal(1, #said)
+      assert.equal("warning", said[1][1])
+      assert.is_truthy(said[1][2]:find("could not set that playstyle", 1, true))
+      assert.is_truthy(said[1][2]:find("no profile", 1, true))
     end)
   end)
 
+
+  -- D47: the answer itself moved to Core/UserBuilds (Display announces a build change and may not
+  -- reach into Options for the words). What is left here is the delegation and its one guard, so
+  -- these drive the real Core function through the panel rather than a stub of it.
   describe("displayName()", function()
     it("prefers the catalog's playstyle name over the raw key", function()
       installPack()
+      installUserBuilds{}
       assert.equal("Exodin", Rotation.displayName("PALADIN_EXODIN"))
+    end)
+
+    it("names one of your own rotations by the name you typed", function()
+      installPack()
+      installUserBuilds{ find = function() return {}, "fork", { name = "My Exodin" } end }
+      assert.equal("My Exodin", Rotation.displayName("USER_MINE"))
     end)
 
     it("falls back to the key, because a blank row is worse than an ugly one", function()
       installPack()
+      installUserBuilds{}
       assert.equal("PALADIN_UNKNOWN", Rotation.displayName("PALADIN_UNKNOWN"))
     end)
 
-    it("answers for a non-string rather than erroring", function()
+    -- Every other lookup in this file guards the same way: the panel is data and closures, and a
+    -- row asked for its name before Core is up must render an ugly one, not error.
+    it("answers with the key, and never errors, when the builds module is not loaded", function()
+      installPack()
+      ns.UserBuilds = nil
+      assert.equal("PALADIN_EXODIN", Rotation.displayName("PALADIN_EXODIN"))
       assert.equal("?", Rotation.displayName(nil))
     end)
   end)

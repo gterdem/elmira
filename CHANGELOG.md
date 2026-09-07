@@ -1,5 +1,86 @@
 # Changelog
 ## Unreleased
+- **Fixed: the Rotations page's playstyle cards read as one wall of text.** Each card is now a
+  titled, bordered panel — its name is the border's own heading, not a repeated row inside it — with
+  its difficulty shown again, and the source split onto its own unambiguous line ("Source: …") with a
+  "Copy link" button that opens the full web address in a copyable popup, in front of the settings
+  window. A playstyle's own page (what you get from a card's Open button) gets the same treatment:
+  difficulty on its summary line, the source on its own line with the same Copy link button.
+- **New: spell icons appear before each line in a rotation's "top to bottom" list**, matching the
+  Builder's own rotation list and the queue mirror.
+- **Changed: the status dots' colours are swapped.** Grey now means a line cannot happen on this
+  character right now (missing gear or a rune, or switched off); amber means it can fire, it is just
+  waiting on a condition (cooldown, target health, and so on).
+- **New: a Spells page**, right after Rotations, listing every spell, buff or debuff your rotations
+  use — added automatically as you use them — with three ways to add anything else: from your
+  spellbook, by spell ID (previewing what it resolves to before you commit), or by name (only for a
+  spell this character has learned or seen; anything else is refused, in red, and never stored). Each
+  spell gets its own page saying where it came from and which of your rotations use it; on-screen
+  cues for individual spells are coming in a later update. The Builder's own "Add a spell" list now
+  reads this registry, with an "Add from spellbook…" row at the end that jumps straight to it.
+- **New: combo points are a power you can write a condition against**, alongside Mana, Rage and
+  Energy — for classes with no shipped rotation pack yet, this is what makes a finisher condition
+  ("5 combo points") expressible at all.
+- **Fixed: New rotation, Copy and edit and Rename were all unusable.** Their popup always rendered
+  behind the settings window, its name box was always empty however it was opened, and the button
+  (and Enter) silently did nothing when the box came back empty. The popup now shows properly in
+  front of the window while it is open, and puts itself back exactly the way it found things
+  afterwards — including never touching another addon's own popups, since the popup frame is shared
+  with the rest of the game. The suggested name survives being shown, Enter accepts the box exactly
+  like clicking the button does, and a name that still cannot be used now says why instead of doing
+  nothing.
+- **Fixed: the Builder's Save button could look enabled for a line it was about to refuse anyway.**
+  If a line names a spell this character cannot resolve — a rotation you built on one character that
+  names a spell only that character registered, opened on another — Save now greys out and names the
+  line, before you click it, instead of after.
+- **Fixed: a spell you registered yourself (by ID, by name, or from your spellbook) now actually
+  works in a rotation.** Saving a line naming one used to be refused outright even after the Spells
+  page had accepted it; it now saves, and the rotation reads its cooldown, usability and whether you
+  know it exactly the way it does for one of your class's own spells. If your class ever ships that
+  same spell under its own name, the shipped one always wins. A rotation exported from one character
+  and imported on another that never registered the spell is refused with a plain reason rather than
+  silently dropping the line.
+- **Fixed: `/elm config` opened on the Rotations page instead of General.**
+- **New: the Rotation page is now a tree, and it is the whole front door.** Rotations replaces the
+  old Rotations/Builder/Share tabs: every catalog playstyle for your class is its own page (what it
+  needs, its rotation top to bottom, a Copy and edit button), your own copies nest under the
+  template they came from, and Builder and Share sit at the end of the same list. A root page lists
+  every playstyle with a summary and a Use button, and offers New rotation for building one from
+  scratch. Playstyles Elmira has no rotation for yet (seal twisting, seal stacking) are listed too,
+  greyed, on a page that says so — rather than being missing with no explanation.
+- **New: Use switches your rotation and says so on screen**, by name — never the internal key a
+  fork is stored under. The rotation already running shows "in use" instead of a button. If it
+  cannot switch (no character loaded, an unknown rotation), the button says why instead of doing
+  nothing, and Edit on a fork no longer opens the Builder on the wrong rotation when that happens.
+- **New: name your own rotations.** New rotation and Copy and edit open a small popup with a
+  suggested name (colliding names count up); Rename and Delete live on a rotation's own page.
+  Deleting the one you are running leaves none in use rather than a display quietly stuck on a
+  build that no longer exists.
+- **Removed: the setup wizard window.** Choosing a playstyle is the Rotations tree now. In its
+  place, a first-run popup offers to open it the first time a character has no rotation chosen, and
+  a status line reminds you the same way if you dismiss it. `/elm setup` still works, as an alias of
+  `/elm rotation`. "Run setup again" is gone from the General page.
+- **New: the queue strip shows a one-line reminder when nothing is chosen yet**, with a click that
+  opens the Rotations tree. Off by its own toggle if you would rather not see it; never shown in
+  combat.
+- **Fixed: a rotation-change announcement could show the internal `USER_...` storage key** instead
+  of the name you gave your own rotation.
+- **Changed: Notifications is one page.** What used to be an "Announcements" tab is now the whole
+  page: the Log sits at the bottom, and each kind of message — Rotation changes, Problems, Status,
+  Long cooldowns used — is one row with Chat/Screen/Sound switches and, for Long cooldowns used,
+  Party and Raid switches too (previously one switch covered both, and always guessed which). Every
+  switch's tooltip says when that kind of message actually happens. Peripheral cues and Cue sounds
+  stay exactly where they were, reachable from the same page.
+- **New: a sound per kind of message**, not one shared sound for everything — turn Sound on for a
+  row to pick which one plays for it. Left alone, it plays whatever the row below used to.
+- **Changed: chat lines go to every chat window that shows System messages**, not a tab picked once
+  and forgotten. The old "Chat window" dropdown is gone.
+- **Changed: several plain chat prints are now Status or Problems announcements** — a rotation that
+  failed to apply, a missing data pack, the rotation queue being disabled, ItemRack not being found,
+  and the settings window failing to remember its size — so they show up in the Log and follow your
+  routing instead of always landing in your main chat window.
+- **Changed: the message Log now keeps the newest 20 lines** (was 200) to match what the page
+  actually shows, and the "N lines dropped" counter is gone with it.
 - **New: the settings window opens big enough to read, and remembers itself.** 960x680 rather than
   700x500, drawn 20% larger, and the size and place you leave it in come back after a reload. A
   **Panel scale** slider on the new General page changes it as you drag.
@@ -45,11 +126,11 @@
   one from the palette and every condition change go to a draft; Save writes it and repaints the
   display, Discard puts it back. Anything the rotation compiler cannot read is listed underneath the
   Save button, which stays greyed out until it is fixed.
-- **New: every line says what it is doing right now.** A marker per line — firing now and in which
-  slot, not active for you (with the gear or rune it needs), waiting (with the condition it is
-  waiting for), switched off, or not saved yet — and the queue itself mirrored above the list with
-  your target, its health, the enemies around you and your mana. It refreshes when the queue
-  changes, and never while you are typing into a box.
+- **New: every line says what it is doing right now.** A coloured indicator dot per line — green
+  firing now and in which slot, amber not active for you (with the gear or rune it needs), grey
+  waiting (with the condition it is waiting for), switched off, or not saved yet — and the queue
+  itself mirrored above the list with your target, its health, the enemies around you and your
+  mana. It refreshes when the queue changes, and never while you are typing into a box.
 - **New: click a spell or an equipment slot in the palette to add it** to the bottom of the rotation
   you are editing. `Remove` on a line takes it back out.
 - **Changed: a line now says what it waits for instead of counting.** "2 conditions" said the same

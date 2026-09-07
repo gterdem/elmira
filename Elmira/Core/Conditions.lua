@@ -37,9 +37,11 @@ Conditions.WEAPON_KINDS = { "2H", "1H", "Shield" }
 Conditions.CREATURE_TYPES = {
   "Beast", "Critter", "Demon", "Dragonkin", "Elemental", "Giant", "Humanoid", "Mechanical", "Undead",
 }
--- The three the adapter can resolve (Adapters/Vanilla.lua S:power). Anything else falls through to
--- Mana there, so offering it would be offering a silent lie.
-Conditions.POWERS = { "MANA", "RAGE", "ENERGY" }
+-- What the adapter can resolve (Adapters/Vanilla.lua S:power). Anything else falls through to Mana
+-- there, so offering it would be offering a silent lie. COMBO_POINTS joined the other three at R2
+-- (D59), owner-decided 2026-09-07: without it a pack-less rogue -- the case R2 exists to serve --
+-- had no way to write "5 combo points" at all, pack or no pack.
+Conditions.POWERS = { "MANA", "RAGE", "ENERGY", "COMBO_POINTS" }
 
 -- ---------------------------------------------------------------- fields
 --

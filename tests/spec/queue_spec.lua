@@ -133,6 +133,9 @@ describe("Display.Queue", function()
     ns.db = { profile = {
       enabled = true, depth = 3, scale = 1.0, locked = true, learning = false,
       showQueue = true, animate = true,
+      -- Every test in this file is about a rotation that IS running; D38's placeholder (own
+      -- describe block below) is the one place that unsets this.
+      activeBuild = "PALADIN_EXODIN", showPlaceholder = true,
       anchor = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },
       glow = { enabled = false, style = "PIXEL", barGlow = false },
     } }
@@ -325,6 +328,120 @@ describe("Display.Queue", function()
       Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
       assert.is_false(container().shown)
       assert.is_true(ns.db.profile.enabled)
+    end)
+  end)
+
+  -- D38: the strip's own nudge while nothing is chosen yet. `wantsPlaceholder` reads
+  -- `profile.activeBuild`, never the `key` Render was handed -- several tests above call
+  -- `Queue.Render` with no key at all to mean "do not care", and treating that as "no rotation"
+  -- would have shown the placeholder throughout the rest of this file.
+  describe("the 'no rotation yet' placeholder (D38)", function()
+    before_each(function()
+      ns.db.profile.activeBuild = false
+      ns.API = { GetState = function() return FakeState.new{ now = clockNow, inCombat = false } end }
+    end)
+
+    it("shows in place of the icons while nothing is chosen, out of combat", function()
+      Queue.Create()
+      Queue.Render({ { spell = "EXORCISM" } })
+      assert.is_true(container().shown)
+      assert.is_true(container().placeholder.shown)
+      for _, b in ipairs(icons()) do assert.is_false(b.shown, "an icon is still showing") end
+    end)
+
+    it("says what it is and what to do", function()
+      Queue.Create()
+      assert.equal("Elmira: no rotation yet. Click to choose.", container().placeholder.text)
+    end)
+
+    it("clicking it opens the Rotations tree", function()
+      Queue.Create()
+      Queue.Render({})
+      local opened
+      ns.Options = { Open = function(...) opened = { ... } end }
+      container().scripts.OnMouseUp(container(), "LeftButton")
+      assert.same({ "rotation" }, opened)
+    end)
+
+    it("a right-click, or a click while it is not showing, does nothing", function()
+      Queue.Create()
+      ns.db.profile.activeBuild = "PALADIN_EXODIN"
+      Queue.Render({})   -- the placeholder is hidden again now that a build is active
+      local opened = 0
+      ns.Options = { Open = function() opened = opened + 1 end }
+      container().scripts.OnMouseUp(container(), "LeftButton")
+      ns.db.profile.activeBuild = false
+      Queue.Render({})
+      container().scripts.OnMouseUp(container(), "RightButton")
+      assert.equal(0, opened)
+    end)
+
+    it("never shows in combat, whatever the toggle says", function()
+      Queue.Create()
+      ns.API = { GetState = function() return FakeState.new{ now = clockNow, inCombat = true } end }
+      -- `visible=false` is the ordinary "hidden, out of combat" reading; in combat, with nothing
+      -- chosen, there is genuinely nothing to draw either way -- unlike the out-of-combat case,
+      -- which is exactly the one the placeholder exists to override.
+      Queue.Render({ { spell = "EXORCISM" } }, nil, false)
+      assert.is_false(container().placeholder.shown)
+      assert.is_false(container().shown)
+    end)
+
+    it("is switched off by its own toggle, not folded into any other setting", function()
+      Queue.Create()
+      ns.db.profile.showPlaceholder = false
+      Queue.Render({}, nil, false)
+      assert.is_false(container().placeholder.shown)
+      assert.is_false(container().shown)
+    end)
+
+    it("disappears, and the icons come back, the moment a rotation is chosen", function()
+      Queue.Create()
+      Queue.Render({})
+      assert.is_true(container().placeholder.shown)
+      ns.db.profile.activeBuild = "PALADIN_EXODIN"
+      Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.is_false(container().placeholder.shown)
+      -- All `depth` (3) slots are shown -- alpha, not visibility, is what tells an empty one from a
+      -- real suggestion -- so this is the icons coming back at all, not the placeholder's Hide-all.
+      local n = 0
+      for _, b in ipairs(icons()) do if b.shown then n = n + 1 end end
+      assert.equal(3, n)
+    end)
+
+    it("is anchored to the left of the strip", function()
+      Queue.Create()
+      assert.same({ "LEFT", container(), "LEFT", 4, 0 }, container().placeholder.point)
+    end)
+
+    -- The click handler answers from its OWN remembered flag, not from the frame's visibility, so
+    -- it must not go on believing the placeholder is up once something has hidden the whole strip.
+    it("forgets it was showing once the display itself is switched off", function()
+      Queue.Create()
+      Queue.Render({})
+      assert.is_true(container().placeholder.shown)
+      ns.db.profile.showQueue = false
+      Queue.Render({})
+      local opened = 0
+      ns.Options = { Open = function() opened = opened + 1 end }
+      container().scripts.OnMouseUp(container(), "LeftButton")
+      assert.equal(0, opened, "the click still thought the placeholder was showing")
+    end)
+
+    -- `rendered` is what the transition plan diffs against; left holding the placeholder's "nothing
+    -- on screen" would make the first REAL render believe icons are leaving that were never drawn.
+    it("forgets a pending cast and what was on screen while the placeholder is up", function()
+      Queue.Create()
+      ns.db.profile.activeBuild = "PALADIN_EXODIN" -- this describe's before_each turns it off
+      Queue.Render({ { spell = "EXORCISM" }, { spell = "JUDGEMENT" } }, "PALADIN_EXODIN", true)
+      Queue.noteCast(415073) -- EXORCISM's shipped id (`stubBuild`, above)
+      ns.db.profile.activeBuild = false
+      Queue.Render({}) -- placeholder now up: the pending cast and `rendered` both have to go, or
+      -- the NEXT real render reads as EXORCISM popping off screen -- exactly the "pops the icon the
+      -- player actually cast" transition (above) -- rather than as a fresh rotation's first paint.
+      ns.db.profile.activeBuild = "PALADIN_EXODIN"
+      Queue.Render({ { spell = "JUDGEMENT" }, { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.equal(0, ghosts()[1].anim.played, "a stale pending cast popped through the placeholder")
     end)
   end)
 

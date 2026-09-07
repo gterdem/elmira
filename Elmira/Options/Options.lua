@@ -537,15 +537,39 @@ local function numberRow(order, name, key, minimum, maximum, step, desc)
   }
 end
 
--- ============================================================ Announcements (F37)
--- The Log first, then where each kind of message goes. That order is the point: a player who has
--- just been told something and missed it looks here, and finds the message before finding the
--- switches that would have made it louder.
+-- ============================================================ Notifications (F37, D21-D29)
+-- One page, not a tab of its own (2026-09-07 Notifications pass): the whole of what used to be the
+-- "Announcements" sub-page is now the content of Notifications itself, with the Log at the bottom.
+-- The Log first among that content, then where each kind of message goes: a player who has just
+-- been told something and missed it looks here, and finds the message before finding the switches
+-- that would have made it louder. Peripheral cues and Cue sounds stay exactly where they were
+-- (siblings under Notifications) until the Rotations overhaul gives them a home of their own.
 local LOG_LINES = 20
+
+-- D22: the same sentence, on every toggle in a category's row -- chat, screen, sound, party and
+-- raid alike -- because what a user needs to know before flipping a switch is WHEN this kind of
+-- message happens, not which pipe carries it. Verbatim from the "When it fires" column of the
+-- Notifications artifact (e1fc0af9), not authored here.
+local WHEN_IT_FIRES = {
+  rotation = "Your gear, runes or buffs change and a line in your rotation becomes usable or stops "
+          .. "being usable",
+  cooldown = "You cast a spell with a cooldown of 2 minutes or longer (the threshold slider sits "
+          .. "under this row)",
+  warning  = "Elmira cannot do its job: no visible bar button holds the spell, or a display "
+          .. "component errored",
+  status   = "First login before setup, after a catalog update, and when Learning mode rewrites "
+          .. "two other settings",
+}
 
 local function announceGroup()
   local args = {}
   local A = ns.Announce
+
+  args.intro = {
+    type = "description", order = 0, fontSize = "medium",
+    name = L["Everything Elmira says out loud, and how loudly: pick a chat, a screen message, a "
+          .. "sound, or nothing at all, for each kind."],
+  }
 
   args.logHeader = {
     type = "description", order = 1, fontSize = "medium",
@@ -553,14 +577,6 @@ local function announceGroup()
            ns.Colors.wrap(ns.Colors.MUTED,
              L["everything Elmira has said, newest first — kept whatever the routing below says"]),
   }
-  local dropped = (A and A.dropped()) or 0
-  if dropped > 0 then
-    args.logDropped = {
-      type = "description", fontSize = "medium", order = 29,
-      name = ns.Colors.wrap(ns.Colors.MUTED,
-        string.format(L["%d older line(s) have been dropped."], dropped)),
-    }
-  end
   local rows = (A and A.log(LOG_LINES)) or {}
   if #rows == 0 then
     args.logEmpty = {
@@ -572,12 +588,12 @@ local function announceGroup()
     local cat = A.category(row.category)
     args["log" .. i] = {
       type = "description", fontSize = "medium", order = 1 + i,
-      name = ns.Colors.wrap(ns.Colors.MUTED, (cat and cat.label) or row.category) .. "  " ..
+      name = ns.Colors.wrap(ns.Colors.MUTED, L[(cat and cat.label) or row.category]) .. "  " ..
              ns.Colors.wrap((cat and ns.Colors[cat.color]) or ns.Colors.MUTED, A.plain(row.text)),
     }
   end
   args.logClear = {
-    type = "execute", order = 30, name = L["Clear the log"],
+    type = "execute", order = 30, name = L["Clear messages"],
     func = function() if A then A.clear() end end,
   }
 
@@ -586,50 +602,108 @@ local function announceGroup()
   }
   for i, cat in ipairs((A and A.CATEGORIES) or {}) do
     local channels = {}
-    -- The Log is not offered: it is the record, not a channel. Party is offered only where the
-    -- category is shareable IN CODE -- a rotation change is about your bars, not the group's.
+    local when = WHEN_IT_FIRES[cat.key]
+    -- The Log is not offered: it is the record, not a channel. Party/Raid are offered only where
+    -- the category is shareable IN CODE -- a rotation change is about your bars, not the group's.
     --
     -- Ordered by Announce.CHANNELS rather than by pairs(), which put the toggles in a different
     -- order for every category and a different order again on another Lua build.
-    local names = { chat = L["Chat"], screen = L["Screen"], sound = L["Sound"],
-                    party = L["Party / raid"] }
+    local names = { chat = L["Chat"], screen = L["Screen"], sound = L["Sound"] }
     local order = 0
     for _, channel in ipairs(A.CHANNELS) do
       local label = names[channel]
-      if channel == "party" and not cat.shareable then label = nil end
       if label then
-      order = order + 1
-      channels[channel] = {
-        type = "toggle", order = order, name = label, width = 0.7,
-        get = function() return A.routes(cat.key)[channel] == true end,
-        set = function(_, v)
-          local a = profile().announce
-          -- Read the EFFECTIVE routing before storing anything: creating the row first makes
-          -- A.routes see an empty stored table and stop falling back, so switching one channel on
-          -- would switch every other channel for that category off.
-          local stored = a.routes[cat.key]
-          if not stored then
-            stored = A.routes(cat.key)
-            a.routes[cat.key] = stored
-          end
-          stored[channel] = v
-        end,
-      }
+        order = order + 1
+        channels[channel] = {
+          type = "toggle", order = order, name = label, width = 0.7, desc = when,
+          get = function() return A.routes(cat.key)[channel] == true end,
+          set = function(_, v)
+            local a = profile().announce
+            -- Read the EFFECTIVE routing before storing anything: creating the row first makes
+            -- A.routes see an empty stored table and stop falling back, so switching one channel
+            -- on would switch every other channel for that category off.
+            local stored = a.routes[cat.key]
+            if not stored then
+              stored = A.routes(cat.key)
+              a.routes[cat.key] = stored
+            end
+            stored[channel] = v
+          end,
+        }
+        if channel == "sound" then
+          -- D24: which sound plays for THIS category, revealed only while its Sound toggle is on.
+          channels.soundPick = {
+            type = "select", order = order + 0.5, name = L["Sound"],
+            desc = L["Which sound plays for this kind of message. Left alone, it uses the sound "
+                  .. "below."],
+            hidden = function() return A.routes(cat.key).sound ~= true end,
+            values = function() return ns.Announcers and ns.Announcers.sounds() or {} end,
+            get = function()
+              local a = profile().announce
+              local per = a.sounds and a.sounds[cat.key]
+              if per and per ~= "" then return per end
+              return a.sound or "None"
+            end,
+            set = function(_, v)
+              local a = profile().announce
+              a.sounds = a.sounds or {}
+              a.sounds[cat.key] = v
+            end,
+          }
+        end
       end
     end
+    if cat.shareable then
+      -- D22: two flags, not one -- "cooldowns used" reaching a five-man says nothing about whether
+      -- it belongs in a twenty-man raid.
+      order = order + 1
+      channels.party = {
+        type = "toggle", order = order, name = L["Party"], width = 0.7, desc = when,
+        get = function() return A.routes(cat.key).party == true end,
+        set = function(_, v)
+          local a = profile().announce
+          local stored = a.routes[cat.key]
+          if not stored then stored = A.routes(cat.key); a.routes[cat.key] = stored end
+          stored.party = v
+        end,
+      }
+      order = order + 1
+      channels.raid = {
+        type = "toggle", order = order, name = L["Raid"], width = 0.7, desc = when,
+        get = function() return A.routes(cat.key).raid == true end,
+        set = function(_, v)
+          local a = profile().announce
+          local stored = a.routes[cat.key]
+          if not stored then stored = A.routes(cat.key); a.routes[cat.key] = stored end
+          stored.raid = v
+        end,
+      }
+    end
+    if cat.key == "cooldown" then
+      -- D23: the same slider as before, moved to sit directly under the row it answers for.
+      order = order + 1
+      channels.floor = {
+        type = "range", order = order, name = L["Only cooldowns longer than"],
+        desc = L["Cooldowns used is only said for abilities with at least this long a cooldown. "
+              .. "Below about two minutes it is a line almost every fight -- Crusader Strike would "
+              .. "announce itself every six seconds."],
+        min = 0, max = 600, step = 15,
+        get = function() return A.cooldownFloor() end,
+        set = function(_, v) profile().announce.cooldownFloor = v end,
+      }
+    end
     args["cat" .. cat.key] = {
-      type = "group", order = 40 + i, name = ns.Colors.wrap(ns.Colors[cat.color], cat.label),
+      type = "group", order = 40 + i, name = ns.Colors.wrap(ns.Colors[cat.color], L[cat.label]),
       inline = true, args = channels,
     }
   end
 
   args.where = { type = "header", order = 60, name = L["How they look"] }
-  args.chatWindow = {
-    type = "select", order = 61, name = L["Chat window"],
-    desc = L["Which of your chat tabs Elmira prints into."],
-    values = function() return ns.Announcers and ns.Announcers.chatWindows() or {} end,
-    get = function() return profile().announce.chatWindow or 0 end,
-    set = function(_, v) profile().announce.chatWindow = v end,
+  -- D25: no more "which of my tabs" select -- a stored index went stale the moment a tab was
+  -- renamed or closed. Elmira now finds the tabs itself.
+  args.chatInfo = {
+    type = "description", order = 61, fontSize = "medium",
+    name = L["Chat lines appear in any chat window that shows System messages."],
   }
   args.font = {
     type = "select", order = 62, name = L["Screen font"],
@@ -656,12 +730,6 @@ local function announceGroup()
       if ns.Announcers then ns.Announcers.ApplyFont() end
     end,
   }
-  args.sound = {
-    type = "select", order = 65, name = L["Sound"],
-    values = function() return ns.Announcers and ns.Announcers.sounds() or {} end,
-    get = function() return profile().announce.sound end,
-    set = function(_, v) profile().announce.sound = v end,
-  }
   -- Locking on the General page also ends move mode (see `locked.set`), but the toggle still has
   -- to say why it refuses to turn back on rather than silently doing nothing while locked.
   local function positionsLocked() return ns.Queue and ns.Queue.isLocked() == true end
@@ -674,17 +742,6 @@ local function announceGroup()
     disabled = positionsLocked,
     get = function() return ns.Announcers and ns.Announcers.isMoving() or false end,
     set = function(_, v) if ns.Announcers then ns.Announcers.SetMoving(v) end end,
-  }
-  args.cooldownFloor = {
-    type = "range", order = 68, name = L["Only cooldowns longer than"],
-    -- Answers "what counts as a cooldown", which was unanswerable from the panel: the category
-    -- existed, could be routed to party, and nothing said what would ever appear in it.
-    desc = L["Cooldowns used is only said for abilities with at least this long a cooldown. Below "
-          .. "about two minutes it is a line almost every fight -- Crusader Strike would announce "
-          .. "itself every six seconds."],
-    min = 0, max = 600, step = 15,
-    get = function() return ns.Announce and ns.Announce.cooldownFloor() or 120 end,
-    set = function(_, v) profile().announce.cooldownFloor = v end,
   }
   args.test = {
     type = "execute", order = 67, name = L["Test each kind"],
@@ -1062,7 +1119,11 @@ local function chainClose(dialog)
     -- goes back to the pool, so this is the last moment the numbers exist.
     local savedOK, savedErr = pcall(Options.SaveWindow, widget)
     if not savedOK then
-      ns.log("Elmira: could not remember the options window's size: %s", tostring(savedErr))
+      -- D45 (2026-09-07 R1b): the D26 conversions this pass re-homes -- a status line, not a plain
+      -- print, once Announce is loaded; falls back to the log the way they all do.
+      local text = string.format(
+        L["Elmira: could not remember the options window's size: %s"], tostring(savedErr))
+      if ns.Announce then ns.Announce.emit("status", text) else ns.log("%s", text) end
     end
     -- BEFORE prior(): prior is AceConfigDialog's own FrameOnClose, which releases this widget back
     -- to AceGUI's pool for the next addon to acquire (D15). Undecorate has to run while the frame
@@ -1099,6 +1160,64 @@ local function installRefreshHook(dialog)
     end)
   end
   return true
+end
+
+-- D31. `FeedGroup` builds a TreeGroup widget only once -- at the very root (isRoot=true,
+-- container == the standalone Frame, AceConfigDialog-3.0.lua:1721 "assume tree group by default" /
+-- 1743-1751) -- because every group under it whose OWN `childGroups` is not "tab"/"select" recurses
+-- into the SAME tree as nested nodes (`BuildGroups`/`BuildSubGroups`, ~1005-1071: `(v.childGroups or
+-- "tree") == "tree"`). Every LATER click re-feeds a group's content INTO that tree widget directly
+-- -- `GroupSelected` (~1559-1578) hands its own `widget` (the tree) to `FeedGroup` as `container` --
+-- so `container` IS the tree on every call but the very first, and IS the standalone Frame (with the
+-- tree as its one child) on that first call.
+local function findTreeWidget(container)
+  if not container then return nil end
+  if container.type == "TreeGroup" then return container end
+  if container.children then
+    for _, child in ipairs(container.children) do
+      if child.type == "TreeGroup" then return child end
+    end
+  end
+  return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
+end
+
+-- Never mutates AceConfigDialog.tooltip (the skill reference's own warning): that table is one
+-- instance shared by every Ace3 addon's options window, and clearing it here would silence the
+-- tooltip everywhere, not just for us. What IS ours alone is the tree WIDGET this hook just found --
+-- `EnableButtonTooltips(false)` (AceConfigDialog-3.0.lua:1724) already silences the widget's OWN
+-- tooltip (`Button_OnEnter`, AceGUIContainer-TreeGroup.lua:200-213, gated on `self.enabletooltips`),
+-- but `TreeOnButtonEnter` (AceConfigDialog-3.0.lua:1485-1524), registered as this SAME widget's
+-- `OnButtonEnter` callback (line 1730), is a SECOND, unconditional tooltip that ignores that flag --
+-- so it is the callback itself that has to go, on this one widget.
+local function installTreeHook(dialog)
+  if not (dialog and hooksecurefunc) then return end
+  if not dialog.elmiraTreeHooked then
+    dialog.elmiraTreeHooked = true
+    hooksecurefunc(dialog, "FeedGroup", function(self, appName, _options, container, _rootframe, path)
+      if appName ~= "Elmira" then return end
+      local tree = findTreeWidget(container)
+      if not tree then return end
+      if tree.SetCallback then tree:SetCallback("OnButtonEnter", nil) end
+      -- Clicking a row only SELECTS it (AceGUIContainer-TreeGroup.lua's `Button_OnClick`, ~181-191);
+      -- only the tiny "+" or a double-click flips `status.groups[value]` open (`Expand_OnClick` /
+      -- `Button_OnDoubleClick`, ~173-198) -- so a template with forks nested under it looked
+      -- unclicked ("menu click never activates") until that arrow was found and clicked separately.
+      -- Marking the just-selected node's OWN uniquevalue open is the same write `SelectGroup` already
+      -- makes for a path it drives itself (AceConfigDialog-3.0.lua:471-474 `treestatus.groups
+      -- [treevalue] = true`); this is the other path there is -- an ordinary click.
+      if path and #path > 0 and tree.RefreshTree then
+        local status = self.GetStatusTable and self:GetStatusTable(appName, {})
+        -- `tree:SetStatusTable` (AceConfigDialog-3.0.lua:1738) always runs before any node can be
+        -- clicked in the real client, which is what leaves `.groups` already there; initialised
+        -- here too rather than assumed, so this hook cannot depend on running after that one.
+        if status then
+          status.groups = status.groups or {}
+          status.groups[table.concat(path, "\001")] = true
+        end
+        tree:RefreshTree()
+      end
+    end)
+  end
 end
 
 -- The General page's read-only command list. Built from `Slash.availableEntries()`, which already
@@ -1144,21 +1263,15 @@ function Options.table()
           -- `Options.Open` re-uses AceConfigDialog's own already-open frame (its `Open` only
           -- creates a new one when `OpenFrames[appName]` is nil) and sets its path, so this is a
           -- SelectGroup, not a reopen.
+          -- D39: "Run setup again" is gone along with the wizard window. Choosing or changing a
+          -- rotation IS the Rotations tree now; this button is the only front-door needed.
           chooseRotation = {
             type = "execute", order = 2, name = L["Choose your rotation"],
             desc = L["Jumps straight to picking or editing your rotation."],
             func = function() Options.Open("rotation") end,
           },
-          -- Demoted below the button above: the wizard is scheduled for removal once the Rotation
-          -- page fully replaces it, so it no longer gets the front-page spot.
-          setup = {
-            type = "execute", order = 3, name = L["Run setup again"],
-            desc = L["Pick a playstyle for this character."],
-            func = function() if ns.Wizard then ns.Wizard.Open() end end,
-            hidden = function() return ns.Wizard == nil end,
-          },
           minimap = {
-            type = "toggle", order = 4, name = L["Show minimap button"],
+            type = "toggle", order = 3, name = L["Show minimap button"],
             desc = L["Shows Elmira's launcher button on the minimap."],
             get = function()
               local m = ns.db and ns.db.global and ns.db.global.minimap
@@ -1170,7 +1283,7 @@ function Options.table()
             end,
           },
           locked = {
-            type = "toggle", order = 5, name = L["Lock all positions"],
+            type = "toggle", order = 4, name = L["Lock all positions"],
             desc = L["Locks the queue strip and the on-screen message. Same as /elm lock."],
             get = function() return (ns.Queue and ns.Queue.isLocked()) == true end,
             set = function(_, v)
@@ -1400,21 +1513,20 @@ function Options.table()
         },
       },
       -- One heading for everything that TELLS you something, as against the sections above, which
-      -- are about what the display shows. Announcements, flares and cue sounds were three peers of
-      -- "Queue" and "Action bars", which put "how the addon talks to me" and "what the addon draws"
-      -- in one flat list.
+      -- are about what the display shows. D28 (2026-09-07 Notifications pass): what used to be the
+      -- "Announcements" tab is now this page's own content -- `childGroups` is gone, so there is no
+      -- longer a group control to pick it from -- while Peripheral cues and Cue sounds stay exactly
+      -- where they were (still reachable as their own nodes) until the Rotations overhaul gives
+      -- indicators a home of their own.
       notifications = {
-        type = "group", order = 4, name = L["Notifications"], childGroups = "tree",
-        args = {
-          announce = {
-            type = "group", order = 1, name = L["Announcements"],
-            args = announceGroup(),
-          },
-          overlay = {
+        type = "group", order = 4, name = L["Notifications"],
+        args = (function()
+          local args = announceGroup()
+          args.overlay = {
             type = "group", order = 2, name = L["Peripheral cues"],
             args = overlayGroup(),
-          },
-          sounds = {
+          }
+          args.sounds = {
             type = "group", order = 3, name = L["Cue sounds"],
             args = {
               enabled = {
@@ -1424,10 +1536,14 @@ function Options.table()
                 set = function(_, v) profile().sounds.enabled = v end,
               },
             },
-          },
-        },
+          }
+          return args
+        end)(),
       },
       rotation = ns.Rotation and ns.Rotation.group() or nil,
+      -- R2 (D52): directly after Rotations, ordered 0.5 against Rotations' own 0 -- the Spells
+      -- registry is the thing a rotation or a cue draws from, so it reads as the next section over.
+      spells = ns.SpellsPage and ns.SpellsPage.group() or nil,
     },
   }
 end
@@ -1504,12 +1620,26 @@ function Options.Open(...)
     -- very call it wraps. That is what makes a refresh Options.Open never triggered (the range
     -- slider's OnMouseUp, AceConfigDialog-3.0.lua:856-862) still decorate and re-chain OnClose.
     local hooked = installRefreshHook(Options.dialog)
+    -- Independent of the refresh hook above: FeedGroup fires on every navigation, not only on Open,
+    -- so this one is installed unconditionally rather than gating anything on it.
+    installTreeHook(Options.dialog)
     Options.dialog:Open("Elmira")
     -- SelectGroup, not a second Open with the path: it moves the SAME frame's selection onto the
     -- requested section without ever making it the window's root, so General, Queue, Rotation and
     -- the rest of the left menu stay on screen.
+    --
+    -- D61e (2026-09-07 in-game round), comment corrected at D64: `/elm config` landed on Rotations,
+    -- not General, on a FRESH status table (first open of a session) -- Rotations registers at
+    -- `order = 0`, General at `order = 1`, and AceConfigDialog's tree selects the lowest-order group
+    -- when nothing has been selected yet. From the second open onward, AceConfigDialog itself
+    -- remembers and re-applies the last selected group (`status.groups.selected`,
+    -- AceConfigDialog-3.0.lua:1746), so leaving this SelectGroup out would have fixed only the first
+    -- open and then let whatever the player last clicked win from then on. Called unconditionally
+    -- instead: a caller that asks for no path at all always means General, first open or the tenth.
     if select("#", ...) > 0 then
       Options.dialog:SelectGroup("Elmira", ...)
+    else
+      Options.dialog:SelectGroup("Elmira", "general")
     end
     if not hooked then
       -- No hooksecurefunc on this client (never true in-game; only reachable if the global is

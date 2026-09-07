@@ -40,6 +40,10 @@ describe("Display.Announcers", function()
       return pt[1], pt[2], pt[3], pt[4], pt[5]
     end
     return setmetatable(f, { __index = function(_, k)
+      -- D25's capability tiers must see a GENUINE absence, not this fixture's usual "any
+      -- capitalised method is a harmless no-op" convenience -- otherwise every fake frame would
+      -- silently "have" ContainsMessageGroup and the messageTypeList tier could never be reached.
+      if k == "ContainsMessageGroup" then return nil end
       if type(k) == "string" and k:match("^%u") then return function() end end
       return nil
     end })
@@ -69,13 +73,15 @@ describe("Display.Announcers", function()
       return f
     end
     _G.UIParent = fakeFrame("Frame", "UIParent")
-    chat = { default = fakeFrame("ChatFrame", "DEFAULT"), two = fakeFrame("ChatFrame", "ChatFrame2") }
+    -- ChatFrame1 IS the default chat frame, same object, same as the real client: D25 asks every
+    -- chat window whether it shows System messages rather than trusting a stored index.
+    chat = { default = fakeFrame("ChatFrame", "ChatFrame1"), two = fakeFrame("ChatFrame", "ChatFrame2") }
     _G.DEFAULT_CHAT_FRAME = chat.default
+    _G.ChatFrame1 = chat.default
     _G.ChatFrame2 = chat.two
-    _G.NUM_CHAT_WINDOWS = 3
-    _G.GetChatWindowInfo = function(i)
-      return ({ [1] = "General", [2] = "Addons", [3] = "" })[i]
-    end
+    _G.NUM_CHAT_WINDOWS = 2
+    local chatGroups = { [chat.default] = { SYSTEM = true }, [chat.two] = {} }
+    _G.ChatFrame_ContainsMessageGroup = function(f, group) local t = chatGroups[f]; return t and t[group] end
     _G.SendChatMessage = function(text, channel) sent[#sent + 1] = { text = text, channel = channel } end
     _G.PlaySoundFile = function(path) played[#played + 1] = path end
     _G.IsInGroup = function() return true end
@@ -89,20 +95,21 @@ describe("Display.Announcers", function()
     ns.db = {
       profile = {
         announce = {
-          chatWindow = 0, sound = "None",
+          sound = "None", sounds = {},
           screen = { font = "Friz Quadrata TT", size = 18, duration = 4,
                      anchor = { point = "TOP", relPoint = "TOP", x = 0, y = -140 } },
           routes = {},
         },
       },
-      global = { announceLog = {}, announceDropped = 0 },
+      global = { announceLog = {} },
     }
     ns.Announce.use{ now = function() return 1 end, inCombat = function() return false end }
   end)
 
   after_each(function()
-    _G.CreateFrame, _G.UIParent, _G.DEFAULT_CHAT_FRAME, _G.ChatFrame2 = nil, nil, nil, nil
-    _G.NUM_CHAT_WINDOWS, _G.GetChatWindowInfo, _G.SendChatMessage = nil, nil, nil
+    _G.CreateFrame, _G.UIParent, _G.DEFAULT_CHAT_FRAME, _G.ChatFrame1, _G.ChatFrame2 =
+      nil, nil, nil, nil, nil
+    _G.NUM_CHAT_WINDOWS, _G.ChatFrame_ContainsMessageGroup, _G.SendChatMessage = nil, nil, nil
     _G.PlaySoundFile, _G.IsInGroup, _G.IsInRaid, _G.LibStub = nil, nil, nil, nil
   end)
 
@@ -262,7 +269,7 @@ describe("Display.Announcers", function()
   end)
 
   describe("the chat sink", function()
-    it("prints into the default frame until a tab is chosen", function()
+    it("prints into the window that shows System messages", function()
       assert.is_true(Announcers.chat(cat("warning"), row("careful")))
       assert.equal(1, #chat.default.messages)
       assert.equal(0, #chat.two.messages)
@@ -270,20 +277,75 @@ describe("Display.Announcers", function()
 
     it("says nothing on a client with no chat frame at all", function()
       _G.DEFAULT_CHAT_FRAME = nil
+      _G.ChatFrame1 = nil
       assert.is_false(Announcers.chat(cat("warning"), row("careful")))
     end)
 
-    it("prints into the tab the player picked", function()
-      ns.db.profile.announce.chatWindow = 2
-      Announcers.chat(cat("warning"), row("careful"))
-      assert.equal(1, #chat.two.messages)
-      assert.equal(0, #chat.default.messages)
-    end)
-
-    it("falls back to the default frame when that tab has gone", function()
-      ns.db.profile.announce.chatWindow = 7
+    -- D25: no stored index any more -- Elmira asks every tab whether it shows System messages, so
+    -- a tab the player configured that way gets the line even if it is not the default one.
+    it("prints into every tab that shows System messages, not only the default", function()
+      local chatGroups = { [chat.default] = { SYSTEM = true }, [chat.two] = { SYSTEM = true } }
+      _G.ChatFrame_ContainsMessageGroup = function(f, g) return chatGroups[f] and chatGroups[f][g] end
       Announcers.chat(cat("warning"), row("careful"))
       assert.equal(1, #chat.default.messages)
+      assert.equal(1, #chat.two.messages)
+    end)
+
+    it("falls back to the default frame when nothing shows System messages", function()
+      _G.ChatFrame_ContainsMessageGroup = function() return nil end
+      Announcers.chat(cat("warning"), row("careful"))
+      assert.equal(1, #chat.default.messages)
+    end)
+
+    -- D25 (corrected): nothing on the live Classic Era install actually calls the global helper
+    -- (grepped every installed addon, zero hits) -- so it is one of THREE tiers, not the only one,
+    -- and each has to be provable on its own with the OTHER two absent.
+    describe("the three capability tiers, each on its own", function()
+      before_each(function()
+        -- Every tier below starts from "none of the three can answer" and adds back exactly one.
+        _G.ChatFrame_ContainsMessageGroup = nil
+      end)
+
+      it("tier A: the frame's OWN ContainsMessageGroup method, when the global does not exist", function()
+        function chat.default:ContainsMessageGroup(group) return group == "SYSTEM" end
+        function chat.two:ContainsMessageGroup(group) return group == "PARTY" end
+        Announcers.chat(cat("warning"), row("careful"))
+        assert.equal(1, #chat.default.messages)
+        assert.equal(0, #chat.two.messages)
+      end)
+
+      it("tier B: the global ChatFrame_ContainsMessageGroup, when no frame has its own method", function()
+        local chatGroups = { [chat.default] = { SYSTEM = true }, [chat.two] = {} }
+        _G.ChatFrame_ContainsMessageGroup = function(f, g) return chatGroups[f] and chatGroups[f][g] end
+        Announcers.chat(cat("warning"), row("careful"))
+        assert.equal(1, #chat.default.messages)
+        assert.equal(0, #chat.two.messages)
+      end)
+
+      -- The ground truth the other two wrap (Details reads it directly): a plain Lua list, so the
+      -- compare has to be case-insensitive rather than assuming Blizzard's own casing.
+      -- Deliberately the NON-default frame matches here: DEFAULT_CHAT_FRAME is chat.default (see
+      -- the top-level before_each), so a broken tier C that never matches anything would still put
+      -- the line in chat.default via the fallback -- this shape is the only one that tells "tier C
+      -- matched" apart from "tier C found nothing and the fallback fired".
+      it("tier C: chatFrame.messageTypeList, when neither method nor global exists", function()
+        chat.two.messageTypeList = { "SAY", "system" }     -- lowercase: the compare is case-insensitive
+        Announcers.chat(cat("warning"), row("careful"))
+        assert.equal(0, #chat.default.messages)
+        assert.equal(1, #chat.two.messages)
+      end)
+
+      it("falls back to the default frame when none of the three tiers can answer for anything", function()
+        Announcers.chat(cat("warning"), row("careful"))
+        assert.equal(1, #chat.default.messages)
+      end)
+
+      it("prefers the frame's own method over the global when both exist", function()
+        function chat.default:ContainsMessageGroup() return false end   -- method says no...
+        _G.ChatFrame_ContainsMessageGroup = function() return true end  -- ...global would say yes
+        Announcers.chat(cat("warning"), row("careful"))
+        assert.equal(0, #chat.default.messages)
+      end)
     end)
 
     it("prefixes with the brand and colours by category", function()
@@ -297,12 +359,10 @@ describe("Display.Announcers", function()
       assert.is_truthy(text:find("|r: ") or text:find("Elmira: "))
     end)
 
-    it("lists the player's named tabs and nothing unnamed", function()
-      local windows = Announcers.chatWindows()
-      assert.equal("General", windows[1])
-      assert.equal("Addons", windows[2])
-      assert.is_nil(windows[3])                 -- an unnamed tab is not a place to print
-      assert.is_not_nil(windows[0])             -- and there is always the default
+    it("lists every chat window that shows System messages", function()
+      local windows = Announcers.systemChatFrames()
+      assert.equal(1, #windows)
+      assert.equal(chat.default, windows[1])
     end)
   end)
 
@@ -330,6 +390,21 @@ describe("Display.Announcers", function()
       assert.equal(0, #played)
     end)
 
+    -- D24: a category with its own sound overrides the shared one; a category that has never
+    -- touched the per-kind select still falls back to it.
+    it("plays a category's own sound when one is set", function()
+      ns.db.profile.announce.sound = "None"
+      ns.db.profile.announce.sounds.warning = "Elmira chime"
+      assert.is_true(Announcers.sound(cat("warning")))
+      assert.same({ "Interface\\AddOns\\Media\\chime.ogg" }, played)
+    end)
+
+    it("falls back to the shared sound for a category with no override", function()
+      ns.db.profile.announce.sound = "Elmira chime"
+      assert.is_true(Announcers.sound(cat("status")))
+      assert.same({ "Interface\\AddOns\\Media\\chime.ogg" }, played)
+    end)
+
     it("lists the fonts the player's media packs provide", function()
       local fonts = Announcers.fonts()
       assert.equal("Friz Quadrata TT", fonts["Friz Quadrata TT"])
@@ -349,38 +424,62 @@ describe("Display.Announcers", function()
     end)
   end)
 
-  -- The only channel other people see. Both gates matter, and neither is a user setting.
+  -- The only channel other people see. D22 split one "party" flag into two (party/raid); this
+  -- sink re-reads the CURRENT routing itself, since it is the only place group membership can be
+  -- read (Core/Announce's dispatch only knows "at least one of the two is on").
   describe("the party sink", function()
     it("refuses a category that is not shareable, whatever the routing says", function()
+      ns.db.profile.announce.routes.rotation = { party = true, raid = true }
+      ns.db.profile.announce.routes.warning = { party = true, raid = true }
       assert.is_false(Announcers.party(cat("rotation"), row("Divine Storm is now active")))
       assert.is_false(Announcers.party(cat("warning"), row("careful")))
       assert.equal(0, #sent)
     end)
 
     it("says nothing on a client with no way to send", function()
+      ns.db.profile.announce.routes.cooldown = { party = true }
       _G.SendChatMessage = nil
       assert.is_false(Announcers.party(cat("cooldown"), row("Avenging Wrath")))
     end)
 
-    it("sends a shareable one to the party", function()
+    it("sends to the party when routed there and in one", function()
+      ns.db.profile.announce.routes.cooldown = { party = true }
       assert.is_true(Announcers.party(cat("cooldown"), row("Avenging Wrath")))
       assert.same({ text = "Avenging Wrath", channel = "PARTY" }, sent[1])
     end)
 
-    it("sends to the raid when in one", function()
+    it("does not fire to the party when only raid is switched on", function()
+      ns.db.profile.announce.routes.cooldown = { raid = true }
+      assert.is_false(Announcers.party(cat("cooldown"), row("Avenging Wrath")))
+      assert.equal(0, #sent)
+    end)
+
+    it("sends to the raid when routed there and in one", function()
+      ns.db.profile.announce.routes.cooldown = { raid = true }
       _G.IsInRaid = function() return true end
-      Announcers.party(cat("cooldown"), row("Avenging Wrath"))
+      assert.is_true(Announcers.party(cat("cooldown"), row("Avenging Wrath")))
       assert.equal("RAID", sent[1].channel)
+    end)
+
+    -- The flag that matters is the one matching the group the player is ACTUALLY in: being in a
+    -- raid with only `party` switched on must not leak into raid chat.
+    it("does not fire to the raid when only party is switched on, while in a raid", function()
+      ns.db.profile.announce.routes.cooldown = { party = true }
+      _G.IsInRaid = function() return true end
+      assert.is_false(Announcers.party(cat("cooldown"), row("Avenging Wrath")))
+      assert.equal(0, #sent)
     end)
 
     -- SendChatMessage to PARTY while solo is an error in the client, not a no-op.
     it("says nothing at all while solo", function()
+      ns.db.profile.announce.routes.cooldown = { party = true }
       _G.IsInGroup = function() return false end
       assert.is_false(Announcers.party(cat("cooldown"), row("Avenging Wrath")))
       assert.equal(0, #sent)
     end)
 
     it("strips our colours and icons, which other people cannot render", function()
+      ns.db.profile.announce.routes.cooldown = { party = true }
       Announcers.party(cat("cooldown"),
         row("|TInterface\\Icons\\X:0|t |cffFFD37AAvenging Wrath|r"))
       assert.equal("Avenging Wrath", sent[1].text)

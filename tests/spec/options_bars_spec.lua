@@ -186,20 +186,22 @@ describe("Options (action bars)", function()
     assert.equal("notifications", seen[orders[6]])
   end)
 
-  it("groups announcements, flares and cue sounds under Notifications, each exactly once", function()
+  -- D28 (2026-09-07 Notifications pass): Notifications is a single page now -- what used to be the
+  -- "Announcements" sub-group is inlined directly into this group's own args, so there is no
+  -- `childGroups` left to pick it from. Peripheral cues and Cue sounds stay exactly where they were
+  -- (still reachable as their own nodes) until the Rotations overhaul gives indicators a home.
+  it("has no group control of its own -- Announcements is inlined, cues and sounds stay put", function()
     local notifications = Options.table().args.notifications
-    assert.equal("tree", notifications.childGroups)
-    local seen, orders = {}, {}
-    for key, g in pairs(notifications.args) do
-      assert.is_number(g.order, key .. " has no order")
-      assert.is_nil(seen[g.order], key .. " shares order " .. tostring(g.order))
-      seen[g.order] = key
-      orders[#orders + 1] = g.order
-    end
-    table.sort(orders)
-    assert.equal("announce", seen[orders[1]])
-    assert.equal("overlay", seen[orders[2]])
-    assert.equal("sounds", seen[orders[3]])
+    assert.is_nil(notifications.childGroups)
+    assert.is_nil(notifications.args.announce)
+    local overlay, sounds = notifications.args.overlay, notifications.args.sounds
+    assert.equal("group", overlay.type)
+    assert.equal(2, overlay.order)
+    assert.equal("group", sounds.type)
+    assert.equal(3, sounds.order)
+    -- And the inlined content is really there, not merely absent from the old wrapper.
+    assert.is_not_nil(notifications.args.intro)
+    assert.is_not_nil(notifications.args.logHeader)
   end)
 
   describe("the bar glow toggle", function()

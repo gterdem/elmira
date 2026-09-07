@@ -35,6 +35,10 @@ local MAX_SLOTS = 5     -- PRD F5: 1-5, default 3
 local rendered, pendingCast, lastKey -- mutants: equivalent deletion only makes these globals
 local pendingCastAt = nil -- mutants: equivalent deletion only makes it a global
 
+-- D38: whether the placeholder is on screen right now, so its own click handler can answer without
+-- asking the frame -- which a parent that is itself about to hide can misreport.
+local placeholderShown = false -- mutants: equivalent deletion only makes it a global; luacheck catches that
+
 -- How long a cast stays armed while the queue has not moved. `noteCast` forces a recompute so the
 -- pop lands with the press, but that render usually happens BEFORE the spell's cooldown registers,
 -- so the queue is still identical and there is nothing to pop. Clearing the cast there -- which is
@@ -319,8 +323,35 @@ function Queue.Create()
 
   for i = 1, MAX_SLOTS do buttons[i] = makeButton(i, container) end
   for i = 1, MAX_SLOTS do ghosts[i] = makeGhost(container) end
+
+  -- D38: the strip's own nudge while nothing is chosen yet. A plain child rather than a button
+  -- template -- the whole container is already mouse-enabled for the drag above, so the click is
+  -- caught there instead of on a second frame that would have to be sized and layered separately.
+  container.placeholder = container:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  container.placeholder:SetPoint("LEFT", container, "LEFT", 4, 0)
+  container.placeholder:SetText(ns.L and ns.L["Elmira: no rotation yet. Click to choose."]
+    or "Elmira: no rotation yet. Click to choose.")
+  container.placeholder:Hide()
+  container:SetScript("OnMouseUp", function(_, button)
+    -- `placeholderShown` rather than `container.placeholder:IsShown()`: WidgetScript visibility can
+    -- lie about a PARENT that is itself hidden, and this is the one flag Render() already computes.
+    if button == "LeftButton" and placeholderShown and ns.Options then
+      ns.Options.Open("rotation")
+    end
+  end)
+
   Queue.Layout()
   return container
+end
+
+-- D38: shown only while NOTHING is chosen (`profile.activeBuild` falsy, the same signal the
+-- first-run popup gates on), behind its own toggle (default on), and never in combat -- a click
+-- target sitting where the queue would be is not something to discover mid-pull.
+local function wantsPlaceholder(p)
+  if p.activeBuild then return false end
+  if p.showPlaceholder == false then return false end
+  local state = ns.API and ns.API.GetState and ns.API.GetState()
+  return not (state and state:inCombat() == true)
 end
 
 -- PRD F15. A preset, deliberately not a mode: it writes depth and scale as real settings the user
@@ -425,14 +456,31 @@ function Queue.Render(queue, key, visible)
   -- `enabled` is the whole display; `showQueue` is this strip alone. Different questions: a player
   -- who watches only the action-bar glow turns the strip off and must keep glowing, which is why
   -- the bar glow is its own renderer (Display/Glow.Render) and no longer released from here.
-  if not p.enabled or p.showQueue == false or visible == false then
+  if not p.enabled or p.showQueue == false then
     container:Hide()
     -- Forget what was on screen. Coming back should look like arriving, not like the icons
     -- teleported in from wherever the rotation happened to be when the strip went away.
+    rendered, pendingCast, pendingCastAt, placeholderShown = nil, nil, nil, false
+    return
+  end
+
+  -- D38: the placeholder overrides the ordinary "no target, out of combat" hiding -- that is the
+  -- whole point of it -- but never overrides `enabled`/`showQueue` above, and never shows in combat.
+  placeholderShown = wantsPlaceholder(p)
+  if visible == false and not placeholderShown then
+    container:Hide()
     rendered, pendingCast, pendingCastAt = nil, nil, nil
     return
   end
   container:Show()
+
+  if placeholderShown then
+    container.placeholder:Show()
+    for i = 1, MAX_SLOTS do buttons[i]:Hide() end
+    rendered, pendingCast, pendingCastAt = nil, nil, nil
+    return
+  end
+  container.placeholder:Hide()
 
   -- Only a real key counts: the hidden path passes nil, which is not a build change.
   if key ~= nil and key ~= lastKey then
@@ -452,6 +500,10 @@ function Queue.Render(queue, key, visible)
 
   for i = 1, depth do
     local b, slot = buttons[i], queue and queue[i]
+    -- Always re-shown: the placeholder above hides every slot outright, and nothing else runs
+    -- between that and the next ordinary render to bring them back (`Layout` only runs on a
+    -- settings change, not on every paint).
+    b:Show()
     b.slot = slot
     if not slot then
       b.icon:SetTexture(nil)

@@ -327,6 +327,43 @@ describe("Core.Init", function()
       assert.equal(1, forgotten)
     end)
 
+    -- D37: the first-run popup's own 2s-after-world-enter timer. A second AceTimer, not a second
+    -- RegisterEvent -- ScheduleTimer has no one-callback-per-name registry to collide with, unlike
+    -- RegisterEvent, so it can safely live inside the SAME PLAYER_ENTERING_WORLD closure the bar map
+    -- already uses.
+    it("schedules Wizard.maybeShowFirstRun 2s after entering the world", function()
+      local calls = {}
+      ns.Wizard.maybeShowFirstRun = function() calls[#calls + 1] = true end
+      NA:OnInitialize()
+      local scheduled
+      NA.ScheduleTimer = function(_, fn, delay) scheduled = { fn = fn, delay = delay } end
+      LibStub("AceEvent-3.0").events:Fire("PLAYER_ENTERING_WORLD")
+      assert.is_table(scheduled, "PLAYER_ENTERING_WORLD never scheduled anything")
+      assert.equal(2, scheduled.delay)
+      assert.equal(0, #calls, "it must not fire before its delay")
+      scheduled.fn()
+      assert.equal(1, #calls)
+    end)
+
+    it("logs and survives when the scheduled first-run popup errors", function()
+      ns.Wizard.maybeShowFirstRun = function() error("popup exploded") end
+      NA:OnInitialize()
+      local scheduled
+      NA.ScheduleTimer = function(_, fn, delay) scheduled = { fn = fn, delay = delay } end
+      LibStub("AceEvent-3.0").events:Fire("PLAYER_ENTERING_WORLD")
+      assert.has_no.errors(scheduled.fn)
+      local found = false
+      for _, msg in ipairs(logged) do if msg:find("first-run popup failed", 1, true) then found = true end end
+      assert.is_true(found, "no log line reported the failure")
+    end)
+
+    it("does not error scheduling the popup when Wizard has no maybeShowFirstRun", function()
+      NA:OnInitialize()
+      assert.has_no.errors(function()
+        LibStub("AceEvent-3.0").events:Fire("PLAYER_ENTERING_WORLD")
+      end)
+    end)
+
     -- A stance, form or Shadowform swap repages the bars. The bar-provider addon watched this event
     -- while core did not, so the provider's map was dropped and core's Blizzard map -- and its
     -- one-shot "no button found" set -- were left stale. Invisible on a paladin, immediate on a
@@ -370,6 +407,9 @@ describe("Core.Init", function()
         log = function() return {} end,
         category = function() return nil end,
         plain = function(t) return t end,
+        -- OnEnable's own null-state warning (D26) goes through this when no data pack is
+        -- registered, which most of this block's tests never bother to do.
+        emit = function(key, text) said[#said + 1] = { key, text } end,
       }
       ns.Announcers = {
         Create = function() registered[#registered + 1] = "create" end,
@@ -549,6 +589,32 @@ describe("Core.Init", function()
       for _, e in ipairs(said) do if e == "flush" then flushed = true end end
       assert.is_true(flushed, "messages held during the fight were never delivered")
     end)
+
+    -- D37: the one retry the first-run popup gets if its 2s timer landed mid-fight.
+    it("re-asks the first-run popup when combat ends", function()
+      local calls = 0
+      ns.Wizard.maybeShowFirstRun = function() calls = calls + 1 end
+      NA:OnInitialize()
+      NA:OnEnable()
+      NA:OnCombatEnd()
+      assert.equal(1, calls)
+    end)
+
+    it("logs and survives when the first-run popup errors on combat end", function()
+      ns.Wizard.maybeShowFirstRun = function() error("popup exploded") end
+      NA:OnInitialize()
+      NA:OnEnable()
+      assert.has_no.errors(function() NA:OnCombatEnd() end)
+      local found = false
+      for _, msg in ipairs(logged) do if msg:find("first-run popup failed", 1, true) then found = true end end
+      assert.is_true(found, "no log line reported the failure")
+    end)
+
+    it("does not error ending combat when Wizard has no maybeShowFirstRun", function()
+      NA:OnInitialize()
+      NA:OnEnable()
+      assert.has_no.errors(function() NA:OnCombatEnd() end)
+    end)
   end)
 
   describe("the player's own casts reach the strip", function()
@@ -642,6 +708,19 @@ describe("Core.Init", function()
         for _, e in ipairs(order) do if e == "register:queue" then return true end end
         return false
       end)())
+    end)
+
+    -- D26 (2026-09-07 Notifications pass): once Announce is loaded, the same event is a "Problems"
+    -- announcement, not only a plain print -- observable through the Log, not through ns.log.
+    it("announces the null-state warning through Announce once it is loaded", function()
+      local Announce = helper.load("Elmira/Core/Announce.lua")
+      NA:OnInitialize()
+      Announce.use{ now = function() return 1 end, inCombat = function() return false end }
+      NA:OnEnable()
+      local rows = Announce.log()
+      assert.equal(1, #rows)
+      assert.equal("warning", rows[1].category)
+      assert.truthy(rows[1].text:find("null state", 1, true))
     end)
 
     it("degrades to a null state, with a DIFFERENT message, when the adapter cannot accept a pack", function()

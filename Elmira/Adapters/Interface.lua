@@ -48,8 +48,17 @@ Interface.CONTRACT = {
 -- `addonMemory` is a DIAGNOSTIC capability rather than a State one: nothing in the rotation depends
 -- on it, but `/elm debug perf` must be able to say "this client will not tell me" instead of falling
 -- back to the whole-heap figure and calling it Elmira's.
+-- `chatMessageGroups` is a PRESENTATION capability, declared for the same reason: Display/Announcers
+-- reaches for a FrameXML helper that this client does not ship, and a fallback nobody has declared
+-- is indistinguishable from a fallback nobody noticed.
+--
+-- `spellNameLookup` is R2's (Core/Spells.lua, D53/D54c): whether this client can resolve a spell ID
+-- from a NAME at all. `GetSpellInfo(id)` is already relied on elsewhere with no flag, but calling it
+-- with a STRING is a genuinely different capability -- the cheat sheet's own deprecation note says
+-- the retail replacement, `C_Spell.GetSpellInfo`, takes an id only, so "resolve by name" is a real
+-- axis a future adapter can answer false on even though this one answers true.
 Interface.CAPABILITIES = { "runes", "setAPI", "swing", "inspect", "nameplates", "engraving", "seal",
-                           "addonMemory" }
+                           "addonMemory", "chatMessageGroups", "spellNameLookup" }
 
 -- Checks that `state` implements every contract member as a callable. Both dot-style
 -- (state.now(state)) and colon-style (state:now()) implementations satisfy this, since both put a

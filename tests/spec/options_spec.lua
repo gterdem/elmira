@@ -141,7 +141,6 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal("Enable Elmira", general.args.enabled.name)
       assert.equal("Choose your rotation", general.args.chooseRotation.name)
       assert.equal("Jumps straight to picking or editing your rotation.", general.args.chooseRotation.desc)
-      assert.equal("Run setup again", general.args.setup.name)
       assert.equal("Show minimap button", general.args.minimap.name)
       assert.equal("Shows Elmira's launcher button on the minimap.", general.args.minimap.desc)
       assert.equal("Lock all positions", general.args.locked.name)
@@ -150,18 +149,10 @@ describe("Options (overlay/peripheral cues)", function()
       assert.is_nil(general.args.showQueue)
     end)
 
-    -- The wizard is the way back to "just pick me a playstyle". It is demoted below the rotation
-    -- shortcut it is scheduled to be replaced by, but still sits near the top of the page.
-    it("opens the wizard from General, and hides the button when there is no wizard", function()
-      local opened = 0
-      local row = args().general.args.setup
-      assert.equal(3, row.order)
-      assert.equal("Pick a playstyle for this character.", row.desc)
-      assert.is_true(row.hidden(), "the button is offered with no wizard behind it")
-      ns.Wizard = { Open = function() opened = opened + 1 end }
-      assert.is_false(args().general.args.setup.hidden())
-      args().general.args.setup.func()
-      assert.equal(1, opened)
+    -- D39: the wizard window and its "Run setup again" button are gone; the Rotations tree is the
+    -- only front door now.
+    it("no longer offers 'Run setup again': the Rotations tree is the one front door", function()
+      assert.is_nil(args().general.args.setup)
     end)
 
     it("orders General's front controls, each exactly once, ahead of the window and slash groups",
@@ -173,8 +164,8 @@ describe("Options (overlay/peripheral cues)", function()
           assert.is_nil(seen[row.order], key .. " shares order " .. tostring(row.order))
           seen[row.order] = key
         end
-        assert.same({ "enabled", "chooseRotation", "setup", "minimap", "locked" },
-                    { seen[1], seen[2], seen[3], seen[4], seen[5] })
+        assert.same({ "enabled", "chooseRotation", "minimap", "locked" },
+                    { seen[1], seen[2], seen[3], seen[4] })
         assert.equal("window", seen[10])
         assert.equal("slash", seen[20])
       end)
@@ -614,7 +605,6 @@ describe("Options (overlay/peripheral cues)", function()
         log = function() return {} end,
         category = function() return nil end,
         plain = function(t) return t end,
-        dropped = function() return 0 end,
         CATEGORIES = {},
         CHANNELS = { "chat", "screen", "sound", "party" },
         routes = function() return {} end,
@@ -733,30 +723,39 @@ describe("Options (overlay/peripheral cues)", function()
 
   -- F37. The Log first, then where each kind of message goes: a player who has just been told
   -- something and missed it looks here, and finds the message before finding the switches.
-  describe("Announcements", function()
+  describe("Notifications (D21-D29, the single-page pass)", function()
+    -- The old `Options.table().args.notifications.args.announce.args` path is gone (D28): the
+    -- content that used to be the "Announcements" sub-page is now the page's own args.
     local function announceArgs()
-      return Options.table().args.notifications.args.announce.args
+      return Options.table().args.notifications.args
     end
 
     before_each(function()
       helper.load("Elmira/Core/Announce.lua")
       ns.db.profile.announce = {
-        chatWindow = 0, sound = "None",
+        sound = "None", sounds = {},
         screen = { font = "Friz Quadrata TT", size = 18, duration = 4,
                    anchor = { point = "TOP", relPoint = "TOP", x = 0, y = -140 } },
         routes = {},
       }
-      ns.db.global = { announceLog = {}, announceDropped = 0 }
+      ns.db.global = { announceLog = {} }
       ns.Announce.use{ now = function() return 1 end, inCombat = function() return false end }
       ns.Queue = { isLocked = function() return false end }
       ns.Announcers = {
-        chatWindows = function() return { [0] = "Default", [2] = "Addons" } end,
         fonts = function() return { ["Friz Quadrata TT"] = "Friz Quadrata TT" } end,
         sounds = function() return { None = "None", Chime = "Chime" } end,
         ApplyFont = function() return true end,
         SetMoving = function() return true end,
         isMoving = function() return false end,
       }
+    end)
+
+    -- D28: the page opens with an intro sentence, ahead of even the Log.
+    it("opens with an intro sentence", function()
+      local intro = announceArgs().intro
+      assert.equal("description", intro.type)
+      assert.equal(0, intro.order)
+      assert.is_true(intro.order < announceArgs().logHeader.order)
     end)
 
     it("says so plainly when nothing has been said yet", function()
@@ -793,13 +792,16 @@ describe("Options (overlay/peripheral cues)", function()
       end
     end)
 
-    -- The Log is the record, not a channel; party is offered only where the category is shareable
-    -- in code, so no amount of clicking can put "my rotation changed" into a group's chat.
-    it("offers party only where the category may leave the client, and never offers the log", function()
+    -- The Log is the record, not a channel; party/raid are offered only where the category is
+    -- shareable in code, so no amount of clicking can put "my rotation changed" into a group's chat.
+    it("offers party and raid only where the category may leave the client, and never the log", function()
       local args = announceArgs()
       assert.is_nil(args.catrotation.args.party)
+      assert.is_nil(args.catrotation.args.raid)
       assert.is_nil(args.catwarning.args.party)
+      assert.is_nil(args.catwarning.args.raid)
       assert.is_not_nil(args.catcooldown.args.party)
+      assert.is_not_nil(args.catcooldown.args.raid)
       assert.is_nil(args.catrotation.args.log)
       assert.is_not_nil(args.catrotation.args.chat)
       assert.is_not_nil(args.catrotation.args.screen)
@@ -829,12 +831,42 @@ describe("Options (overlay/peripheral cues)", function()
       assert.is_true(announceArgs().catrotation.args.screen.get())
     end)
 
-    it("chooses a chat window from the player's own tabs", function()
-      local row = announceArgs().chatWindow
-      assert.equal("Addons", row.values()[2])
-      assert.equal(0, row.get())
-      row.set(nil, 2)
-      assert.equal(2, ns.db.profile.announce.chatWindow)
+    -- D22: party and raid are their own controls, read and written independently, on the one
+    -- category that ever shows them.
+    it("reads and writes the party toggle without touching raid", function()
+      local args = announceArgs().catcooldown.args
+      assert.is_false(args.party.get())
+      args.party.set(nil, true)
+      assert.is_true(args.party.get())
+      assert.is_false(args.raid.get())
+      assert.equal(true, ns.db.profile.announce.routes.cooldown.party)
+    end)
+
+    it("reads and writes the raid toggle without touching party", function()
+      local args = announceArgs().catcooldown.args
+      assert.is_false(args.raid.get())
+      args.raid.set(nil, true)
+      assert.is_true(args.raid.get())
+      assert.is_false(args.party.get())
+      assert.equal(true, ns.db.profile.announce.routes.cooldown.raid)
+    end)
+
+    -- The first touch has to copy the shipped defaults before writing, exactly like the ordinary
+    -- channels do -- otherwise switching raid on would switch chat/screen/sound off for cooldown.
+    it("keeps the other channels when raid is switched on for the first time", function()
+      local args = announceArgs().catcooldown.args
+      args.raid.set(nil, true)
+      assert.is_true(args.raid.get())
+      assert.is_false(args.chat.get())    -- cooldown ships chat off; still off, not nil/on
+    end)
+
+    -- D25: there is no "which of my tabs" select any more -- a plain sentence says how Elmira
+    -- decides, since the decision itself now lives in Display/Announcers, not a stored index here.
+    it("explains how the chat sink picks a window, instead of offering a stale index", function()
+      local row = announceArgs().chatInfo
+      assert.equal("description", row.type)
+      assert.is_truthy(row.name:find("System messages", 1, true))
+      assert.is_nil(announceArgs().chatWindow)
     end)
 
     it("applies the font, size and duration to the frame as they change", function()
@@ -854,14 +886,12 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal("Friz Quadrata TT", args.font.get())
       assert.equal(18, args.size.get())
       assert.equal(4, args.duration.get())
-      assert.equal("None", args.sound.get())
       assert.is_false(args.move.get())
     end)
 
-    it("offers the fonts and sounds the player actually has", function()
+    it("offers the fonts the player actually has", function()
       local args = announceArgs()
       assert.equal("Friz Quadrata TT", args.font.values()["Friz Quadrata TT"])
-      assert.equal("Chime", args.sound.values().Chime)
     end)
 
     it("reflects move mode being on", function()
@@ -881,10 +911,41 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal("Unlock all positions on the General page first.", row.desc())
     end)
 
-    it("chooses a sound", function()
-      announceArgs().sound.set(nil, "Chime")
-      assert.equal("Chime", ns.db.profile.announce.sound)
-      assert.equal("Chime", announceArgs().sound.get())
+    -- D24: the shared "Sound" select under "How they look" is gone; each row picks its own.
+    it("has no shared sound select any more", function()
+      assert.is_nil(announceArgs().sound)
+    end)
+
+    it("reveals a category's own sound select only while its Sound toggle is on", function()
+      local args = announceArgs().catrotation.args
+      assert.is_true(args.soundPick.hidden())    -- Rotation ships with sound off
+      args.sound.set(nil, true)
+      assert.is_false(args.soundPick.hidden())
+    end)
+
+    it("chooses a sound for one category without touching another's", function()
+      local rotation, warning = announceArgs().catrotation.args, announceArgs().catwarning.args
+      rotation.soundPick.set(nil, "Chime")
+      assert.equal("Chime", ns.db.profile.announce.sounds.rotation)
+      assert.equal("Chime", rotation.soundPick.get())
+      -- Falls back to the shared sound until a category has one of its own.
+      assert.equal("None", warning.soundPick.get())
+    end)
+
+    it("builds the per-category sound select as a real select, right after its Sound toggle", function()
+      local args = announceArgs().catrotation.args
+      assert.equal("select", args.soundPick.type)
+      assert.equal("Sound", args.soundPick.name)
+      assert.equal(args.sound.order + 0.5, args.soundPick.order)
+      assert.equal("Chime", args.soundPick.values().Chime)
+    end)
+
+    -- The set() has to survive a profile that has never touched a per-category sound at all --
+    -- not merely one the fixture already gave an empty table.
+    it("creates announce.sounds on first use rather than assuming it exists", function()
+      ns.db.profile.announce.sounds = nil
+      announceArgs().catrotation.args.soundPick.set(nil, "Chime")
+      assert.equal("Chime", ns.db.profile.announce.sounds.rotation)
     end)
 
     it("turns move mode on and reports it", function()
@@ -913,16 +974,16 @@ describe("Options (overlay/peripheral cues)", function()
     it("builds every control as what it claims to be", function()
       local args = announceArgs()
       local expected = {
+        intro      = { type = "description", order = 0 },
         logHeader  = { type = "description", order = 1 },
         logEmpty   = { type = "description", order = 2 },
-        logClear   = { type = "execute", order = 30, name = "Clear the log" },
+        logClear   = { type = "execute", order = 30, name = "Clear messages" },
         routing    = { type = "header", order = 40, name = "Where each kind of message goes" },
         where      = { type = "header", order = 60, name = "How they look" },
-        chatWindow = { type = "select", order = 61, name = "Chat window" },
+        chatInfo   = { type = "description", order = 61 },
         font       = { type = "select", order = 62, name = "Screen font" },
         size       = { type = "range", order = 63, name = "Screen text size" },
         duration   = { type = "range", order = 64, name = "Seconds on screen" },
-        sound      = { type = "select", order = 65, name = "Sound" },
         move       = { type = "toggle", order = 66, name = "Move the on-screen message" },
         test       = { type = "execute", order = 67, name = "Test each kind" },
       }
@@ -935,9 +996,11 @@ describe("Options (overlay/peripheral cues)", function()
       end
       assert.is_truthy(args.logHeader.name:find("Log"))
       assert.equal("medium", args.logHeader.fontSize)
-      assert.is_truthy(args.chatWindow.desc)
       assert.is_truthy(args.move.desc)
       assert.is_truthy(args.test.desc)
+      -- Removed entirely, not merely renamed (D24/D25).
+      assert.is_nil(args.chatWindow)
+      assert.is_nil(args.sound)
     end)
 
     it("bounds the size and duration sliders where a human can read them", function()
@@ -963,33 +1026,59 @@ describe("Options (overlay/peripheral cues)", function()
 
     -- The toggles used to be ordered by pairs(), so they came out in a different order for every
     -- category and a different order again on another Lua build.
-    it("lays the channel toggles out in one fixed order, party last", function()
+    it("lays the channel toggles out in one fixed order, party then raid last", function()
       local args = announceArgs().catcooldown.args
-      for key, row in pairs(args) do
-        assert.equal("toggle", row.type, key .. " is not a toggle")
-        assert.is_not_nil(row.name, key .. " has no label")
+      for _, key in ipairs({ "chat", "screen", "sound", "party", "raid" }) do
+        assert.equal("toggle", args[key].type, key .. " is not a toggle")
+        assert.is_not_nil(args[key].name, key .. " has no label")
       end
       assert.equal(1, args.chat.order)
       assert.equal(2, args.screen.order)
       assert.equal(3, args.sound.order)
       assert.equal(4, args.party.order)
+      assert.equal(5, args.raid.order)
     end)
 
-    it("numbers a non-shareable category's toggles without a gap where party would be", function()
+    it("numbers a non-shareable category's toggles without a gap where party/raid would be", function()
       local args = announceArgs().catrotation.args
       assert.equal(1, args.chat.order)
       assert.equal(2, args.screen.order)
       assert.equal(3, args.sound.order)
+      assert.is_nil(args.party)
+      assert.is_nil(args.raid)
     end)
 
-    -- A counter that nothing reads is a number that can be wrong forever without anyone noticing.
-    it("says how many lines the log has thrown away, once it has thrown any", function()
-      assert.is_nil(announceArgs().logDropped)
-      for i = 1, ns.Announce.MAX_LOG + 2 do ns.Announce.emit("status", "line " .. i) end
-      local row = announceArgs().logDropped
-      assert.is_not_nil(row)
-      assert.equal("description", row.type)
-      assert.is_truthy(row.name:find("2"))
+    -- D22: every toggle in a row shares the same "when it fires" sentence -- the whole point is
+    -- that the reader learns WHEN before picking a pipe.
+    it("gives every toggle in a row the same when-it-fires sentence", function()
+      local args = announceArgs().catcooldown.args
+      assert.is_truthy(args.chat.desc)
+      assert.equal(args.chat.desc, args.screen.desc)
+      assert.equal(args.chat.desc, args.sound.desc)
+      assert.equal(args.chat.desc, args.party.desc)
+      assert.equal(args.chat.desc, args.raid.desc)
+    end)
+
+    -- Each category's own sentence, not the same text copy-pasted for all four.
+    -- Verbatim from the "When it fires" column of the Notifications artifact (e1fc0af9).
+    it("gives each category its own when-it-fires sentence", function()
+      local args = announceArgs()
+      assert.truthy(args.catrotation.args.chat.desc:find(
+        "a line in your rotation becomes usable or stops being usable", 1, true))
+      assert.truthy(args.catcooldown.args.chat.desc:find(
+        "a cooldown of 2 minutes or longer", 1, true))
+      assert.truthy(args.catwarning.args.chat.desc:find(
+        "no visible bar button holds the spell, or a display component errored", 1, true))
+      assert.truthy(args.catstatus.args.chat.desc:find(
+        "Learning mode rewrites two other settings", 1, true))
+    end)
+
+    -- D23: the same slider as before, now living directly under the row it answers for.
+    it("puts the cooldown floor slider inside the cooldown category's own group", function()
+      local args = announceArgs().catcooldown.args
+      assert.equal("range", args.floor.type)
+      assert.equal(6, args.floor.order)
+      assert.is_nil(announceArgs().catrotation.args.floor)
     end)
 
     -- Without a cap the panel grows without limit and the switches below the log become
@@ -1090,6 +1179,7 @@ describe("Options (overlay/peripheral cues)", function()
       ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
       Options.dialog = {
         Open = function() end,
+        SelectGroup = function() end,
         OpenFrames = { Elmira = { SetCallback = function(_, event, fn)
           if event == "OnClose" then closer = fn end
         end } },
@@ -1116,21 +1206,24 @@ describe("Options (overlay/peripheral cues)", function()
       assert.same({ "Elmira", "rotation" }, selected)
     end)
 
-    it("opens with no path at all, which is what /elm config wants, and never calls SelectGroup", function()
-      local got, selectCalls = nil, 0
+    -- D61e (2026-09-07 in-game round): AceConfigDialog selects the LOWEST-order group when nothing
+    -- has been selected yet, which is Rotations (order 0) -- so `/elm config` landed there instead
+    -- of General (order 1). `Options.Open()` with no path now selects General explicitly.
+    it("opens with no path at all, which is what /elm config wants, and lands on General", function()
+      local got, selected = nil, nil
       ns.Announcers = { StopMoving = function() end }
       Options.dialog = {
         Open = function(_, app, container, ...) got = { app, container, ... } end,
-        SelectGroup = function() selectCalls = selectCalls + 1 end,
+        SelectGroup = function(_, app, ...) selected = { app, ... } end,
       }
       assert.is_true(Options.Open())
-      assert.same({ "Elmira" }, got)
-      assert.equal(0, selectCalls)
+      assert.same({ "Elmira" }, got, "Open must carry no path, or it becomes the window's root")
+      assert.same({ "Elmira", "general" }, selected)
     end)
 
     it("opens without erroring on a dialog that exposes no frames", function()
       ns.Announcers = { StopMoving = function() end }
-      Options.dialog = { Open = function() end }
+      Options.dialog = { Open = function() end, SelectGroup = function() end }
       assert.is_true(Options.Open())
     end)
 
@@ -1150,7 +1243,8 @@ describe("Options (overlay/peripheral cues)", function()
       local released, stopped = 0, 0
       ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
       local widget = fakeWidget(function() released = released + 1 end)
-      Options.dialog = { Open = function() end, OpenFrames = { Elmira = widget } }
+      Options.dialog = { Open = function() end, SelectGroup = function() end,
+                         OpenFrames = { Elmira = widget } }
 
       assert.is_true(Options.Open())
       widget:fireClose()
@@ -1166,7 +1260,8 @@ describe("Options (overlay/peripheral cues)", function()
       ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
       ns.Announcers = { StopMoving = function() error("MessageFrame has no Clear()") end }
       local widget = fakeWidget(function() released = released + 1 end)
-      Options.dialog = { Open = function() end, OpenFrames = { Elmira = widget } }
+      Options.dialog = { Open = function() end, SelectGroup = function() end,
+                         OpenFrames = { Elmira = widget } }
 
       assert.is_true(Options.Open())
       widget:fireClose()
@@ -1184,7 +1279,8 @@ describe("Options (overlay/peripheral cues)", function()
       local stopped = 0
       ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
       local widget = { SetCallback = function(self, event, fn) self.closer = fn end }
-      Options.dialog = { Open = function() end, OpenFrames = { Elmira = widget } }
+      Options.dialog = { Open = function() end, SelectGroup = function() end,
+                         OpenFrames = { Elmira = widget } }
 
       assert.is_true(Options.Open())
       assert.is_function(widget.closer, "nothing was hooked to the panel closing")
@@ -1200,7 +1296,8 @@ describe("Options (overlay/peripheral cues)", function()
       local released, stopped = 0, 0
       ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
       local widget = fakeWidget(function() released = released + 1 end)
-      Options.dialog = { Open = function() end, OpenFrames = { Elmira = widget } }
+      Options.dialog = { Open = function() end, SelectGroup = function() end,
+                         OpenFrames = { Elmira = widget } }
 
       assert.is_true(Options.Open())
       assert.is_true(Options.Open()) -- the dialog did NOT reinstate its own callback in between
@@ -1220,8 +1317,10 @@ describe("Options (overlay/peripheral cues)", function()
   -- here" was unanswerable from the panel. The slider is the answer, and its description is the
   -- explanation the owner asked for.
   describe("what counts as a cooldown worth announcing", function()
+    -- D23: the slider moved to sit directly under the cooldown row it answers for, inside that
+    -- category's own inline group, rather than living apart from it under "How they look".
     local function row()
-      return Options.table().args.notifications.args.announce.args.cooldownFloor
+      return Options.table().args.notifications.args.catcooldown.args.floor
     end
 
     it("offers a floor, and says what it means in abilities the player knows", function()
@@ -1672,5 +1771,39 @@ describe("Options (overlay/peripheral cues)", function()
       local args = overlayArgs()
       assert.is_nil(args.none)
     end)
+  end)
+end)
+
+-- R2 (D52): the Spells page is wired into the top-level tree the same way Rotations is -- a
+-- one-line guard that calls through to the module's own `group()`. This is its own top-level
+-- `describe`, mirroring options_spec.lua's own top-level setup, rather than reusing the shared
+-- before_each above: that one deliberately never loads ns.SpellsPage, and every test in it already
+-- proves the ABSENT case (Options.table() never errors without it).
+describe("Options.table() wires in the Spells page (R2 D52)", function()
+  local Options, ns
+
+  before_each(function()
+    ns = helper.reset()
+    ns.L = setmetatable({}, { __index = function(_, k) return k end })
+    helper.load("Elmira/Core/Colors.lua")
+    helper.load("Elmira/Display/Overlay.lua")
+    ns.db = { profile = { overlay = { cues = {} } } }
+    ns.Overlay.Flare = function() return true end
+    ns.Display = { activeBuild = function() return { visuals = { cues = {} } } end,
+                   refresh = function() end }
+  end)
+
+  it("reads the Spells page's own group() into args.spells when the module is loaded", function()
+    ns.SpellsPage = { group = function() return { type = "group", name = "Spells", order = 0.5 } end }
+    Options = helper.load("Elmira/Options/Options.lua")
+    local spells = Options.table().args.spells
+    assert.equal("group", spells.type)
+    assert.equal("Spells", spells.name)
+    assert.equal(0.5, spells.order)
+  end)
+
+  it("leaves args.spells nil, rather than erroring, when the module has not loaded", function()
+    Options = helper.load("Elmira/Options/Options.lua")
+    assert.is_nil(Options.table().args.spells)
   end)
 end)

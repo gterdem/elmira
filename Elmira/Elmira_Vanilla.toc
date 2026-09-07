@@ -45,6 +45,9 @@ Core\Palette.lua
 # After Palette and Gates: the editor's condition model borrows "can you press this" from one
 # and the wording of a static gate from the other, rather than keeping second copies of either.
 Core\Conditions.lua
+# R2 (D53): the Spells registry. After Conditions.lua -- Spells.referencedKeys walks a build's
+# conditions through Conditions.field() to find every spell key one names.
+Core\Spells.lua
 # Reads Schema's own KEY_SOURCE, so it follows Schema.
 Core\Diagnostics.lua
 Core\Recorder.lua
@@ -65,6 +68,8 @@ Setup\Wizard.lua
 
 # Options
 Options\Rotation.lua
+# R2 (D52): before Options.lua, which reads ns.SpellsPage.group() into the top-level tree.
+Options\Spells.lua
 Options\Options.lua
 
 # Shipped class data (ADR-0011). Each file registers a THUNK -- it must construct nothing at load,

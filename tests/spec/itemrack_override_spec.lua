@@ -137,6 +137,23 @@ describe("Adapters.ItemRack", function()
       assert.truthy(logged[1]:find("UpdateCurrentSet", 1, true))
     end)
 
+    -- D26 (2026-09-07 Notifications pass): once Announce is loaded, the same event is a "Problems"
+    -- announcement, not only a plain print -- observable through the Log, not through ns.log.
+    it("announces the missing-hook warning through Announce once it is loaded", function()
+      _G.ItemRack = {}
+      local spec = load()
+      helper.load("Elmira/Core/Colors.lua")
+      local Announce = helper.load("Elmira/Core/Announce.lua")
+      ns.db = { profile = { announce = { routes = {} } }, global = { announceLog = {} } }
+      Announce.use{ now = function() return 1 end, inCombat = function() return false end }
+      spec.onChange(function() end)
+      assert.equal(0, #logged, "went to the Log, not to a plain print")
+      local rows = Announce.log()
+      assert.equal(1, #rows)
+      assert.equal("warning", rows[1].category)
+      assert.truthy(rows[1].text:find("UpdateCurrentSet", 1, true))
+    end)
+
     it("refuses a non-function callback rather than hooking for nobody", function()
       _G.ItemRack = { UpdateCurrentSet = function() end }
       assert.is_false(load().onChange(nil))

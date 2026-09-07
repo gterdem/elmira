@@ -256,7 +256,9 @@ describe("Core.Conditions", function()
     it("offers the language's own vocabulary where a pack has none", function()
       assert.same({ "Single", "Cleave", "AoE" }, Conditions.keys("mode", pack))
       assert.same({ "2H", "1H", "Shield" }, Conditions.keys("weapon", pack))
-      assert.same({ "MANA", "RAGE", "ENERGY" }, Conditions.keys("resource", pack))
+      -- COMBO_POINTS joined at R2 (D59): a pack-less rogue has no spell key to gate on, so a plain
+      -- power condition is the only way "5 combo points" can be expressed at all.
+      assert.same({ "MANA", "RAGE", "ENERGY", "COMBO_POINTS" }, Conditions.keys("resource", pack))
       -- UnitCreatureType answers a localised string, so a build that ships one ships an English
       -- one (enUS only in v1).
       assert.same({ "Beast", "Critter", "Demon", "Dragonkin", "Elemental", "Giant", "Humanoid",

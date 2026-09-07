@@ -24,13 +24,14 @@ local Announce = {}
 -- of the CATEGORY, in code, not a checkbox the user can widen — "Divine Storm is now active in my
 -- rotation" is about the player's own bars and is noise in a group. Only what a group might
 -- actually act on can ever leave the client, and even that ships off.
+-- D21 (2026-09-07 Notifications pass): `template` and `mode` are gone -- neither was ever emitted,
+-- and a row nothing can fire only teaches the panel to be ignored. Keys are stable across the
+-- rename (routing is stored by key, DB.lua's migration drops the two stale `routes` entries).
 Announce.CATEGORIES = {
-  { key = "rotation", label = "Rotation changed", color = "HIGHLIGHT", shareable = false },
-  { key = "template", label = "Template updated", color = "BRAND",     shareable = false },
-  { key = "mode",     label = "Mode",             color = "BRAND",     shareable = false },
-  { key = "warning",  label = "Warnings",         color = "WARN",      shareable = false },
-  { key = "status",   label = "Status",           color = "MUTED",     shareable = false },
-  { key = "cooldown", label = "Cooldowns used",   color = "OK",        shareable = true },
+  { key = "rotation", label = "Rotation changes",      color = "HIGHLIGHT", shareable = false },
+  { key = "warning",  label = "Problems",              color = "WARN",      shareable = false },
+  { key = "status",   label = "Status",                color = "MUTED",     shareable = false },
+  { key = "cooldown", label = "Long cooldowns used",   color = "OK",        shareable = true },
 }
 
 -- Where each kind goes before anyone changes anything. The Log is always on and is not listed.
@@ -43,13 +44,16 @@ Announce.CATEGORIES = {
 --
 -- Cooldowns is the exception, and deliberately: nothing emits one yet (M5a), it is the only
 -- shareable category, and a category that will end up in party chat should start silent.
+--
+-- `raid` (D22): party and raid are now two toggles, not one -- "cooldowns used" reaching a five-man
+-- says nothing about whether it belongs in a twenty-man raid. Both ship off; only `cooldown` ever
+-- shows them (Options/Options.lua gates the row on `shareable`), but every category carries the key
+-- so `routes()` never hands back a table shaped differently from its neighbours.
 Announce.DEFAULT_ROUTES = {
-  rotation = { chat = true,  screen = true,  sound = false, party = false },
-  template = { chat = true,  screen = false, sound = false, party = false },
-  mode     = { chat = false, screen = true,  sound = false, party = false },
-  warning  = { chat = true,  screen = false, sound = false, party = false },
-  status   = { chat = true,  screen = false, sound = false, party = false },
-  cooldown = { chat = false, screen = false, sound = false, party = false },
+  rotation = { chat = true,  screen = true,  sound = false, party = false, raid = false },
+  warning  = { chat = true,  screen = false, sound = false, party = false, raid = false },
+  status   = { chat = true,  screen = false, sound = false, party = false, raid = false },
+  cooldown = { chat = false, screen = false, sound = false, party = false, raid = false },
 }
 
 -- The order channels are spoken in. Fixed rather than left to `pairs`, so two runs of the same
@@ -57,10 +61,11 @@ Announce.DEFAULT_ROUTES = {
 -- sink is going to error, it should do so before anything has been said out loud.
 Announce.CHANNELS = { "chat", "screen", "sound", "party" }
 
--- The log is a record, not a transcript: 200 lines is more than anyone reads and small enough that
--- it never becomes the reason a SavedVariables file is slow to write (Core/Recorder.lua:19 is the
--- precedent for measuring that rather than guessing).
-Announce.MAX_LOG = 200
+-- The log is a record, not a transcript. D27 (2026-09-07): the panel now shows the Log inline at
+-- the bottom of the single Notifications page rather than as its own tab, and twenty lines is what
+-- fits there without the switches above it scrolling out of reach -- so the STORE matches the
+-- DISPLAY cap exactly and a dropped-lines counter nothing above it can now show is not kept either.
+Announce.MAX_LOG = 20
 
 -- How many on-screen messages may be waiting for combat to end. A fight that produces more than
 -- this is already telling the player something is wrong, and dumping fifty toasts the moment they
@@ -139,7 +144,6 @@ local function record(cat, text, icon)
   store.announceLog[#store.announceLog + 1] = row
   while #store.announceLog > Announce.MAX_LOG do
     table.remove(store.announceLog, 1)
-    store.announceDropped = (store.announceDropped or 0) + 1
   end
   return row
 end
@@ -147,7 +151,12 @@ end
 local function dispatch(cat, row, routes)
   for _, name in ipairs(Announce.CHANNELS) do
     local fn = sinks[name]
-    if fn and routes[name] then
+    -- "party" is one sink covering two user flags (D22): the channel fires if EITHER is on, and
+    -- Display/Announcers.party (the only place group membership can be read) decides which of the
+    -- two actually applies once it knows whether the player is in a party or a raid right now.
+    local go = routes[name]
+    if name == "party" then go = routes.party or routes.raid end
+    if fn and go then
       -- One sink must not be able to silence the others: a chat frame that has gone away should
       -- not stop the screen message, and neither should stop the log, which already happened.
       pcall(fn, cat, row)
@@ -201,7 +210,7 @@ function Announce.emit(key, text, opts)
   end
 
   local routes = Announce.routes(key)
-  if opts.noShare then routes.party = false end
+  if opts.noShare then routes.party, routes.raid = false, false end
   -- The screen message waits for the fight to end. A toast at the moment a set bonus turns on is
   -- reading material dropped in front of someone mid-pull; the Log and chat already have it.
   if routes.screen and clock and clock.inCombat and clock.inCombat() then
@@ -245,17 +254,10 @@ function Announce.log(limit)
   return out
 end
 
--- How many lines the Log has thrown away. Surfaced in the panel: a counter nothing reads is a
--- number that can be wrong forever without anyone noticing.
-function Announce.dropped()
-  local store = db() and db().global
-  return (store and store.announceDropped) or 0
-end
-
 function Announce.clear()
   local store = db() and db().global
   if not store then return false end
-  store.announceLog, store.announceDropped = {}, 0
+  store.announceLog = {}
   return true
 end
 

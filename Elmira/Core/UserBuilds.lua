@@ -74,8 +74,33 @@ end
 
 UserBuilds.catalogUpdated = catalogUpdated
 
+-- The name a PLAYER reads for a build key: the catalog's playstyle for a shipped build, the name
+-- the user typed for a fork, and the key itself for anything else, because a blank row is worse
+-- than an ugly one.
+--
+-- In Core rather than in Options/Rotation, where it started, because it is a pure lookup over the
+-- catalog and the fork records this file already owns -- and because Display needed it too.
+-- Display/Driver's gear-change announcement is the one sentence in the addon built from a storage
+-- key, so while this lived in Options it either said `USER_MY_EXODIN` to the player or made Display
+-- reach up into the Options layer for a string. Both are why it is here.
+function UserBuilds.displayName(pack, key)
+  if type(key) ~= "string" then return "?" end
+  local list = pack and pack.catalog and pack.class and pack.catalog[pack.class]
+  for _, entry in ipairs(list or {}) do
+    if entry.build == key and entry.playstyle then return entry.playstyle end
+  end
+  local _, origin, fork = UserBuilds.find(pack, key)
+  if origin == "fork" and fork and fork.name then return fork.name end
+  return key
+end
+
+-- R2b (D75): the registry, merged UNDER the pack's own spells so a shipped key always wins a
+-- collision -- see `Spells.merged`'s own comment for why the merge lives there rather than here.
+-- `ns.Spells` is absent in a few specs that dofile this file on its own; falling back to the pack's
+-- table alone is the pre-R2b behaviour, not a silent narrowing of it.
 local function ctxFor(pack)
-  return { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
+  local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or pack.spells
+  return { spells = spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
 end
 
 -- UserBuilds.importString(str, pack, opts) -> key | nil, reason
@@ -154,6 +179,40 @@ function UserBuilds.fork(pack, templateKey, opts)
     importedAt = opts.today,
   }
   return key
+end
+
+-- UserBuilds.create(pack, name) -> key | nil, reason
+--
+-- D35's "New rotation": an EMPTY fork with no `derivedFrom` at all, for a player who wants to start
+-- from their own spellbook rather than a catalog template. `UserBuilds.fork` deliberately REFUSES a
+-- nil/unknown template (line above), so this is a second, small writer rather than a fork with the
+-- guard loosened -- loosening it would let a typo'd template key silently create an untethered build
+-- and call it a fork of something that does not exist.
+function UserBuilds.create(pack, name)
+  local s = store()
+  if not s then return nil, "no saved variables" end
+  if not (pack and pack.class) then return nil, "no data pack for your class" end
+
+  local key = uniqueKey(s, UserBuilds.slug(name))
+  local build = { key = key, name = name, class = pack.class, entries = {} }
+  s[key] = { build = build, class = pack.class, name = name }
+  return key
+end
+
+-- UserBuilds.rename(key, name) -> true | false, reason
+--
+-- The key stays stable on purpose: `SelectGroup`/`Options.Open` paths and `derivedFrom` pointers
+-- from any child fork name a KEY, never a display name, so renaming must never touch it. Only the
+-- record's own `name` and the build's own `name` (what `Rotation.displayName` and an export string
+-- both read) change.
+function UserBuilds.rename(key, name)
+  local s = store()
+  local fork = s and s[key]
+  if not (fork and type(fork.build) == "table") then return false, "not one of your rotations" end
+  if type(name) ~= "string" or name == "" then return false, "a rotation needs a name" end
+  fork.name = name
+  fork.build.name = name
+  return true
 end
 
 -- Core/Slash.lua owns `ns.compileBuild` and caches it on the build TABLE, and the write below

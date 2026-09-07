@@ -8,6 +8,7 @@
 -- ns.Adapter; Init must not grow beyond composition.
 local ADDON, ns = ...
 ns = ns or _G.__ELM_NS or {}
+local L = ns.L or setmetatable({}, { __index = function(_, k) return k end })
 
 local NA = LibStub("AceAddon-3.0"):NewAddon(ADDON, "AceEvent-3.0", "AceTimer-3.0", "AceConsole-3.0")
 ns.addon = NA
@@ -164,6 +165,18 @@ function NA:OnInitialize()
       if fired == "PLAYER_ENTERING_WORLD" and ns.Adapter and ns.Adapter.forgetSpellbook then
         ns.Adapter.forgetSpellbook()
       end
+      -- D37: 2s after the world is actually up, never sooner -- a popup competing with the loading
+      -- screen fading out is not "shown", it is "missed". A second AceTimer per world-enter, not a
+      -- second RegisterEvent: ScheduleTimer has no one-callback-per-name registry to collide with,
+      -- unlike RegisterEvent, which is why this lives inside the SAME closure rather than beside it.
+      if fired == "PLAYER_ENTERING_WORLD" and ns.Wizard and ns.Wizard.maybeShowFirstRun then
+        self:ScheduleTimer(function()
+          local ok, err = pcall(ns.Wizard.maybeShowFirstRun)
+          if not ok then
+            ns.log("Elmira: first-run popup failed (%s); everything else is unaffected.", tostring(err))
+          end
+        end, 2)
+      end
       if ns.BarGlow then ns.BarGlow.Invalidate() end
       if ns.BarProviders then ns.BarProviders.Invalidate() end
       if ns.Display then ns.Display.refresh() end
@@ -301,6 +314,13 @@ function NA:OnCombatEnd()
   -- Anything held back while fighting (F37: on-screen messages wait rather than landing mid-pull).
   if ns.Announce then ns.Announce.flush() end
   self:RecordAuto("combat-end")
+  -- D37: the ONLY other place the first-run popup's 2s timer can have landed mid-combat and been
+  -- skipped -- this is what re-asks the moment the fight the player was actually in has ended,
+  -- rather than leaving the popup silently never offered for the rest of the session.
+  if ns.Wizard and ns.Wizard.maybeShowFirstRun then
+    local ok, err = pcall(ns.Wizard.maybeShowFirstRun)
+    if not ok then ns.log("Elmira: first-run popup failed (%s); everything else is unaffected.", tostring(err)) end
+  end
 end
 
 -- Equipment, runes and level all change which rows of the build can fire (ADR-0015). They arrive
@@ -355,7 +375,11 @@ function NA:OnEnable()
 
   local pack = class and ns.API.GetProviders("dataPacks")[class]
   if not pack then
-    ns.log("Elmira: no data pack registered for %s; running with a null state.", tostring(class))
+    -- D26 (2026-09-07 Notifications pass): a warning, not a plain print -- running with a null
+    -- state is exactly the kind of thing the panel's "Problems" category exists to surface.
+    local text = string.format(
+      L["Elmira: no data pack registered for %s; running with a null state."], tostring(class))
+    if ns.Announce then ns.Announce.emit("warning", text) else ns.log("%s", text) end
   elseif not ns.Adapter.attachPack then
     -- Distinct from "no pack": the data arrived but the adapter is too old to take it. Reporting
     -- both as "no data pack" would send the next reader hunting the wrong problem.

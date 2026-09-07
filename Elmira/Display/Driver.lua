@@ -65,13 +65,22 @@ end
 -- so the ctx must carry the pack's CURRENT tables: a pack whose tables were swapped underneath it
 -- gets a fresh ctx, and with it a fresh compile. Weak keys let a replaced pack go.
 local ctxByPack = setmetatable({}, { __mode = "k" })
+-- R2b (D76): `spells` widens to the merged registry+pack view (`Spells.merged`, pack wins on a
+-- collision) so the ACTIVE build compiles a registry-key entry's `data` (cooldown seconds, cost,
+-- cdVolatile) exactly as it would a pack one -- without this, a saved rotation naming a registered
+-- spell validated (Core/UserBuilds.ctxFor) but rendered nothing, because THIS ctx, not that one,
+-- compiles the build the render loop actually runs. `Spells.merged` returns the SAME table object
+-- for this pack on every call, so `held.spells == spells` below still holds across ticks exactly as
+-- it did comparing `pack.spells` to itself -- the cache still serves one ctx per pack, not a fresh
+-- one every tick.
 local function packContext(pack)
   local held = ctxByPack[pack]
-  if held and held.spells == pack.spells and held.sets == pack.sets
+  local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or pack.spells
+  if held and held.spells == spells and held.sets == pack.sets
      and held.souls == pack.souls and held.bonuses == pack.bonuses then
     return held
   end
-  local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
+  local ctx = { spells = spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
   ctxByPack[pack] = ctx
   return ctx
 end
@@ -139,7 +148,10 @@ function Display.gateContext()
   local pack = Display.currentPack()
   local caps = ns.Adapter and ns.Adapter.capabilities and ns.Adapter.capabilities()
   if not pack then return { capabilities = caps } end
-  return { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses,
+  -- R2b (D76): same merge as packContext, so a gate naming a registry key ("this row needs X")
+  -- resolves it rather than reporting it as absent from the pack.
+  local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or pack.spells
+  return { spells = spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses,
            capabilities = caps }
 end
 
@@ -161,7 +173,15 @@ function Display.checkGates()
   if wasKey ~= key then return nil end
 
   local diff = ns.Gates.diff(before, now)
-  local text = ns.Gates.announcement(diff, key)
+  -- D40: `key` is the raw storage key -- a shipped build's own name, or a fork's `USER_...` slug --
+  -- never something a player has seen. `UserBuilds.displayName` is the one place that turns either
+  -- into the name shown everywhere else on screen; without it this announcement was the one place
+  -- in the addon a `USER_` key leaked into a sentence a player reads. Core's copy, not the Options
+  -- panel's: Display does not reach up a layer, and the panel is not loaded in every spec that
+  -- reaches this line -- which is exactly how the first version of this fix came to be untestable.
+  local name = (ns.UserBuilds and ns.UserBuilds.displayName
+                and ns.UserBuilds.displayName(Display.currentPack(), key)) or key
+  local text = ns.Gates.announcement(diff, name)
   if not text then return nil end
   -- The icon of the spell the message is about, so a glance at the toast says which ability
   -- changed before the sentence has been read.
@@ -173,9 +193,17 @@ end
 -- Presentation, so it lives here rather than on the State contract: nothing in the rotation depends
 -- on what a spell looks like. Display/Queue draws its icons through this too -- two copies of the
 -- same lookup is one that can go stale.
+--
+-- D81 (review finding on R2b): this used to read `pack.spells` alone, so a spell added by id,
+-- by name or from the spellbook -- resolvable everywhere else after D75/D79/D80 -- still had no
+-- icon anywhere it was drawn, including U1's rows. `ns.Spells.merged` is the same per-character
+-- merge every other consumer widened to; a spell that genuinely has none (an item line, or an
+-- unresolved key) still falls through to the nil the caller already treats as "no icon".
 function Display.spellIcon(spellKey)
   local pack = Display.currentPack()
-  local data = pack and pack.spells and pack.spells[spellKey]
+  local spells = (pack and ns.Spells and ns.Spells.merged and ns.Spells.merged(pack))
+    or (pack and pack.spells)
+  local data = spells and spells[spellKey]
   if not (data and data.id and GetSpellTexture) then return nil end
   return GetSpellTexture(data.id)
 end

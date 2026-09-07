@@ -214,7 +214,11 @@ end
 -- persist it. Kept next to the slash command that prints it so the two can never diverge.
 function ns.queueSnapshot(pack, depth)
   if not (pack and pack.builds and ns.Schema and ns.Simulation and ns.API) then return nil end
-  local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
+  -- R2b (D75/D76): same merge as every other ctx builder (see `Spells.merged`'s comment) -- without
+  -- it a build naming a registered (non-pack) spell reported "failed validation" here even though
+  -- Save had already accepted it.
+  local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or pack.spells
+  local ctx = { spells = spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
   local state = ns.API.GetState()
   local out = {}
   for key, build in pairs(pack.builds) do
@@ -283,7 +287,9 @@ end
 -- and no verdicts: this runs once a second in combat, unlike queueSnapshot which runs per mark.
 function ns.topSuggestions(pack)
   if not (pack and pack.builds and ns.Schema and ns.Simulation and ns.API) then return nil end
-  local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
+  -- R2b: same merge as `queueSnapshot` above, for the same reason.
+  local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or pack.spells
+  local ctx = { spells = spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
   local state = ns.API.GetState()
   local out = {}
   for key, build in pairs(pack.builds) do
@@ -709,7 +715,9 @@ Slash.register{
         return { "queue: no such build. Available: " .. table.concat(names, ", ") }
       end
 
-      local ctx = { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
+      -- R2b: same merge as `queueSnapshot`, so `/elm queue` can compile a registry-key rotation too.
+      local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or pack.spells
+      local ctx = { spells = spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
       local compiled, errors = ns.Schema.compile(build, ctx)
       if not compiled then
         local lines = { string.format("queue: %s failed validation", key) }
@@ -857,12 +865,13 @@ Slash.register{
     return { "rotation: options are not loaded" }
   end,
 }
+-- D39: the setup wizard window is gone (R1); `/elm setup` stays as an alias of `/elm rotation` for
+-- one release, so nobody who has this command muscle-memoried lands on an error the day it retires.
 Slash.register{
-  key = "setup", desc = ns.L["Run the setup wizard"], order = 100,
+  key = "setup", desc = ns.L["Choose or edit your rotation (alias of /elm rotation)"], order = 100,
   run = function()
-    if not ns.Wizard then return { "setup: the wizard is not loaded" } end
-    if ns.Wizard.Open() then return {} end   -- the window IS the output
-    return { "setup: could not open the window (AceGUI-3.0 missing?)" }
+    if ns.Options and ns.Options.Open("rotation") then return { "Opening your rotations." } end
+    return { "setup: options are not loaded" }
   end,
 }
 Slash.register{
@@ -975,6 +984,15 @@ Slash.register{
 
     local state = ns.API.GetState()
     local detection = ns.Detect.gather(state, ns.Adapter, pack)
+    -- Not widened like `queueSnapshot`'s ctx (R2b) -- D82 corrected the reason given here, which was
+    -- wrong: `Schema.compileCond` (Core/Schema.lua:318-323) FAILS a KEY_SOURCE condition whose key is
+    -- absent from `ctx[source]`, and a failed condition compiles to `function() return false end`
+    -- (`compileList`), so a rule naming a registry key would not "evaluate correctly against the
+    -- pack's own table" -- it would compile to always-false and the rule would silently never match.
+    -- The decision to leave this un-widened is still right, for a narrower reason: `advice` is
+    -- shipped data (Elmira/Classes/<Class>.lua), authored against the pack's own spell keys, and can
+    -- never legitimately name a key that only exists in one character's own registry -- there is no
+    -- rule this table could ever contain for widening to reach.
     local rec = ns.Advisor.recommend(advice, state,
       { spells = pack.spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses },
       { soul = detection.soul, weapon = detection.weapon, build = buildKey })

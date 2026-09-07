@@ -68,26 +68,49 @@ function Announcers.sounds()
   return out
 end
 
--- Which chat window to print into. 0 means "the default frame", which is where every Elmira message
--- went before this existed; a real index picks one of the player's own tabs, so someone who keeps a
--- separate Addons tab can have Elmira use it.
-function Announcers.chatWindows()
-  local out = { [0] = ns.L and ns.L["Default chat window"] or "Default chat window" }
-  local count = NUM_CHAT_WINDOWS or 0
-  for i = 1, count do
-    local name = GetChatWindowInfo and GetChatWindowInfo(i)
-    if name and name ~= "" then out[i] = name end
+-- D25: which of the player's own chat windows actually shows System messages, rather than a stored
+-- index the player has to pick once and never revisit -- a tab renamed or removed used to leave
+-- Elmira printing into a chatWindow number nobody sees.
+--
+-- VERIFIED against the live Classic Era install (2026-09-07), not assumed: `grep`-ing every
+-- installed addon's Lua for `ChatFrame_ContainsMessageGroup` returns zero hits -- nothing on this
+-- client calls it. ElvUI (`Game/Shared/General/Install.lua:110-111`) resolves the equivalent
+-- ADD-side helper defensively as `_G.ChatFrame1.AddMessageGroup or _G.ChatFrame_AddMessageGroup`
+-- rather than trusting either form to exist, and uses `"SYSTEM"` as the group token at the same
+-- file's line 109; `chatFrame.messageTypeList` is the plain Lua list those helpers wrap, read
+-- directly by Details (`functions/chat_embed.lua:148`). So this checks three tiers, most specific
+-- first, and trusts none of them to be there: the frame's own method, the same-named global (never
+-- observed on this client, but costs nothing to also ask), and finally the list the first two are
+-- built on top of.
+local function hasSystemGroup(f)
+  if type(f.ContainsMessageGroup) == "function" then
+    return f:ContainsMessageGroup("SYSTEM") and true or false
   end
-  return out
+  if type(ChatFrame_ContainsMessageGroup) == "function" then
+    return ChatFrame_ContainsMessageGroup(f, "SYSTEM") and true or false
+  end
+  if type(f.messageTypeList) == "table" then
+    for _, group in ipairs(f.messageTypeList) do
+      if type(group) == "string" and group:upper() == "SYSTEM" then return true end
+    end
+  end
+  return false -- mutants: equivalent falling off the end returns nil, exactly as falsy as false is
+               -- to every caller (systemChatFrames only ever uses this in an `if` condition)
 end
 
-local function chatFrame()
-  local index = settings().chatWindow or 0
-  if index and index > 0 then
-    local f = _G["ChatFrame" .. index]
-    if f and f.AddMessage then return f end
+function Announcers.systemChatFrames()
+  local out = {}
+  local count = NUM_CHAT_WINDOWS or 0
+  for i = 1, count do
+    local f = _G["ChatFrame" .. i]
+    if f and f.AddMessage and hasSystemGroup(f) then
+      out[#out + 1] = f
+    end
   end
-  return DEFAULT_CHAT_FRAME
+  if #out == 0 and DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+    out[1] = DEFAULT_CHAT_FRAME
+  end
+  return out
 end
 
 local function colorOf(cat)
@@ -185,14 +208,25 @@ function Announcers.screen(cat, row)
 end
 
 function Announcers.chat(cat, row)
-  local f = chatFrame()
-  if not (f and f.AddMessage) then return false end
-  f:AddMessage(ns.Colors.prefix() .. ": " .. ns.Colors.wrap(colorOf(cat), row.text))
+  local frames = Announcers.systemChatFrames()
+  if #frames == 0 then return false end
+  local text = ns.Colors.prefix() .. ": " .. ns.Colors.wrap(colorOf(cat), row.text)
+  for _, f in ipairs(frames) do f:AddMessage(text) end
   return true
 end
 
-function Announcers.sound()
-  local name = settings().sound
+-- D24: a sound per category, stored under `announce.sounds[key]`, falling back to the one shared
+-- sound every profile has always had -- so a user who never opens this row again still hears
+-- whatever they already chose, and a category no build has ever touched still has a sensible answer.
+local function soundNameFor(key)
+  local s = settings()
+  local per = key and s.sounds and s.sounds[key]
+  if type(per) == "string" and per ~= "" then return per end
+  return s.sound or "None"
+end
+
+function Announcers.sound(cat)
+  local name = soundNameFor(cat and cat.key)
   if not name or name == "None" then return false end
   local lsm = media()
   local path = lsm and lsm:Fetch("sound", name)
@@ -201,16 +235,28 @@ function Announcers.sound()
   return true
 end
 
--- The only channel other people see. Two gates, and both matter: the CATEGORY has to be one a group
--- could act on (Core/Announce decides that, in code, not in a checkbox), and there has to be a group
--- to say it to -- SendChatMessage to PARTY while solo is an error in the client, not a no-op.
+-- The only channel other people see. Core/Announce's dispatch gate (routes.party OR routes.raid)
+-- only decides WHETHER this sink runs at all; the flag that actually matters depends on what group
+-- the player is in RIGHT NOW, which only this adapter-side file can read (D22) -- so it re-reads the
+-- current routing itself rather than trusting a value dispatch computed before the fight started.
+-- Three gates, all of which matter: the CATEGORY has to be one a group could act on (Core/Announce
+-- decides that, in code, not in a checkbox), the CURRENT group type has to be the one the player
+-- opted this category into, and there has to be a group to say it to at all -- SendChatMessage to
+-- PARTY while solo is an error in the client, not a no-op.
 function Announcers.party(cat, row)
   if not (cat and cat.shareable) then return false end
-  if not (IsInGroup and IsInGroup()) then return false end
   if not SendChatMessage then return false end
-  local channel = (IsInRaid and IsInRaid()) and "RAID" or "PARTY"
-  SendChatMessage(ns.Announce.plain(row.text), channel)
-  return true
+  local routes = ns.Announce.routes(cat.key)
+  if IsInRaid and IsInRaid() then
+    if not routes.raid then return false end
+    SendChatMessage(ns.Announce.plain(row.text), "RAID")
+    return true
+  end
+  if IsInGroup and IsInGroup() and routes.party then
+    SendChatMessage(ns.Announce.plain(row.text), "PARTY")
+    return true
+  end
+  return false
 end
 
 function Announcers.Register()

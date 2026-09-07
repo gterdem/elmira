@@ -607,13 +607,22 @@ describe("Core.Slash", function()
     assert.equal("Unknown command 'nonsense'. Type /elm for help.", lines[1])
   end)
 
-  -- Was "not available yet (M4)" until M4 landed. Rewritten rather than deleted: the property worth
-  -- keeping is that the command DEGRADES with a designed line instead of erroring when the module
-  -- behind it is absent, which is what this spec's Core-only harness reproduces.
-  it("'setup' degrades with a designed line when the wizard is not loaded", function()
+  -- D39: the setup wizard window is gone (R1); 'setup' is now an alias of 'rotation'. Rewritten
+  -- rather than deleted: the property worth keeping is that the command DEGRADES with a designed
+  -- line instead of erroring when Options is not loaded, which is what this spec's Core-only harness
+  -- reproduces.
+  it("'setup' is an alias of 'rotation' and degrades the same way when Options is not loaded", function()
     local lines = Slash.run("setup")
     assert.equal(1, #lines)
-    assert.equal("setup: the wizard is not loaded", lines[1])
+    assert.equal("setup: options are not loaded", lines[1])
+  end)
+
+  it("'setup' opens the Rotations tree, same as 'rotation'", function()
+    local opened
+    _G.__ELM_NS.Options = { Open = function(...) opened = { ... }; return true end }
+    local lines = Slash.run("setup")
+    assert.same({ "rotation" }, opened)
+    assert.equal("Opening your rotations.", lines[1])
   end)
 
   it("'profile' and 'advise' degrade the same way rather than erroring", function()
@@ -646,6 +655,35 @@ describe("Core.Slash", function()
       assert.truthy(out:find("no builds registered", 1, true), out)
     end)
 
+    -- R2b: `/elm debug queue` compiles against the REAL Schema, so a build naming a registry-only
+    -- spell must reach the queue instead of "failed validation" -- the same merge Save uses. The
+    -- Simulation stub reads `compiled.entries[1].data` (populated ONLY when `ctx.spells` actually
+    -- carried the registry entry) and prints its id into the queue line, which is what actually
+    -- distinguishes "compiled against the merged table" from "compiled against nothing at all" --
+    -- `Schema.validate` alone cannot: an ABSENT ctx.spells is documented as unchecked, so a build
+    -- would "pass validation" either way and a pass/fail assertion alone would not catch a
+    -- regression here.
+    it("compiles a build naming a registry-only spell instead of failing validation", function()
+      local ns = helper.ns()
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Spells.lua")
+      ns.Adapter = { playerClass = function() return "PALADIN" end }
+      ns.db = { char = { spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice" } } } }
+      local pack = { builds = { MY = { schema = 1, key = "MY", name = "Mine", class = "PALADIN",
+                                        entries = { { spell = "SLICE" } } } } }
+      ns.API = { GetProviders = function() return { PALADIN = pack } end,
+                 GetState = function() return { usable = function() return true end,
+                                                cooldown = function() return 0 end } end }
+      ns.Simulation = { queue = function(compiled)
+        local id = compiled.entries[1].data and compiled.entries[1].data.id or -1
+        return { { spell = "SLICE", t = id } }
+      end }
+      local out = table.concat(Slash.run("debug queue MY"), "\n")
+      assert.truthy(out:find("queue for MY", 1, true), out)
+      assert.falsy(out:find("failed validation", 1, true), out)
+      assert.truthy(out:find("t=900.0s", 1, true), out)
+    end)
+
     -- The player's own feedback after the acceptance run: copying chat output mid-combat is not
     -- workable. The queue has to reach the saved file, not just the chat frame.
     it("captures the queue as data for the dump file", function()
@@ -661,6 +699,33 @@ describe("Core.Slash", function()
       assert.equal("EXORCISM", snap.PALADIN_EXODIN.queue[1].spell)
       assert.equal("EXORCISM", snap.PALADIN_EXODIN.entries[1].spell)
       assert.is_true(snap.PALADIN_EXODIN.inCombat)
+    end)
+
+    -- R2b: the REAL Schema and Spells registry, so a build naming a spell only this character has
+    -- registered compiles instead of failing "not in the spells data pack" -- the same merge Save
+    -- (Core/UserBuilds.ctxFor) and the live render loop (Display.packContext) use. As above, the
+    -- Simulation stub surfaces `compiled.entries[1].data.id` through the returned queue: that field
+    -- is populated ONLY from a `ctx.spells` that actually carried the registry entry, which is the
+    -- part `error == nil` alone cannot prove (an absent ctx.spells validates too).
+    it("compiles a build naming a registry-only spell", function()
+      local ns = helper.ns()
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Spells.lua")
+      ns.Simulation = { queue = function(compiled)
+        local id = compiled.entries[1].data and compiled.entries[1].data.id
+        return { { spell = "SLICE", t = id } }
+      end }
+      ns.API = { GetState = function() return { usable = function() return true end,
+                                                cooldown = function() return 0 end,
+                                                inCombat = function() return false end } end }
+      ns.db = { char = { spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice" } } } }
+      local pack = { spells = { EXORCISM = { id = 415073 } },
+                     builds = { MY_ROTATION = { schema = 1, key = "MY_ROTATION", name = "Mine",
+                                                 class = "PALADIN", entries = { { spell = "SLICE" } } } } }
+      local snap = ns.queueSnapshot(pack)
+      assert.is_nil(snap.MY_ROTATION.error, snap.MY_ROTATION.error and table.concat(snap.MY_ROTATION.error, " "))
+      assert.equal("SLICE", snap.MY_ROTATION.entries[1].spell)
+      assert.equal(900, snap.MY_ROTATION.queue[1].t)
     end)
 
     -- Contract: entries[i].usable is a real boolean for any entry that has a spell — true when the
@@ -792,6 +857,28 @@ describe("Core.Slash", function()
     it("lists queue as an available debug subcommand", function()
       local out = table.concat(Slash.run("debug"), "\n")
       assert.truthy(out:find("queue", 1, true), out)
+    end)
+  end)
+
+  -- R2b: `ns.topSuggestions` (the cast log's "what was Elmira saying?" column) compiles against the
+  -- same merged ctx as `queueSnapshot`, so a build naming a registry-only spell suggests it rather
+  -- than compiling to nothing. As above, the Simulation stub only names the spell when
+  -- `compiled.entries[1].data` (populated from the merged `ctx.spells`) is actually present.
+  describe("topSuggestions()", function()
+    it("suggests a registry-only spell", function()
+      local ns = helper.ns()
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Spells.lua")
+      ns.Simulation = { queue = function(compiled)
+        local resolved = compiled.entries[1].data ~= nil
+        return { { spell = resolved and "SLICE" or "UNRESOLVED", t = 0 } }
+      end }
+      ns.API = { GetState = function() return {} end }
+      ns.db = { char = { spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice" } } } }
+      local pack = { builds = { MY = { schema = 1, key = "MY", name = "Mine", class = "PALADIN",
+                                        entries = { { spell = "SLICE" } } } } }
+      local out = ns.topSuggestions(pack)
+      assert.equal("SLICE", out.MY)
     end)
   end)
 

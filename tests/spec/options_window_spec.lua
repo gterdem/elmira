@@ -137,6 +137,10 @@ describe("Options window", function()
   local function fakeDialog(widget)
     local d = { OpenFrames = {}, defaultSize = nil }
     function d:SetDefaultSize(app, w, h) self.defaultSize = { app, w, h } end
+    -- D61e: Options.Open() with no path now selects "general" explicitly (AceConfigDialog-3.0
+    -- would otherwise default to the lowest-order group, Rotations); this fake only needs to answer
+    -- the call, not track it -- the selection itself is options_spec.lua's job.
+    function d:SelectGroup() end
     function d:Open()
       self.OpenFrames.Elmira = widget
       widget:SetCallback("OnClose", function(wid)
@@ -144,7 +148,31 @@ describe("Options window", function()
         wid.released = true
       end)
     end
+    -- A line-for-line stand-in for AceConfigDialog-3.0.lua:401-425: one status table per appName,
+    -- nested one level per path segment, memoized so the SAME table comes back on the next call --
+    -- which is what lets `SelectGroup` and the D31 hook agree on which node is "expanded".
+    function d:GetStatusTable(appName, path)
+      self.status = self.status or {}
+      self.status[appName] = self.status[appName] or {}
+      local node = self.status[appName]
+      for _, key in ipairs(path or {}) do
+        node.children = node.children or {}
+        node.children[key] = node.children[key] or {}
+        node = node.children[key]
+      end
+      node.status = node.status or {}
+      return node.status
+    end
     return d
+  end
+
+  -- A TreeGroup widget, reduced to what the D31 hook touches: it is found by `.type`, its
+  -- OnButtonEnter callback can be cleared, and it can be told to redraw.
+  local function fakeTree()
+    local t = { type = "TreeGroup", callbacks = {} }
+    function t:SetCallback(name, fn) self.callbacks[name] = fn end
+    function t:RefreshTree() self.refreshed = (self.refreshed or 0) + 1 end
+    return t
   end
 
   before_each(function()
@@ -341,6 +369,23 @@ describe("Options window", function()
       assert.equal(1, #logged)
       assert.is_truthy(logged[1]:find("size", 1, true))
     end)
+
+    -- D45 (2026-09-07 R1b): the same D26 shape as the other conversions -- once Announce is
+    -- loaded, this becomes a status update instead of only a log line.
+    it("announces the failure as a status update once Announce is loaded, instead of only logging it",
+      function()
+        local w = open()
+        local said = {}
+        ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+        local logged = {}
+        ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+        w.status = setmetatable({}, { __index = function() error("status is gone") end })
+        w.events.OnClose(w, "OnClose")
+        assert.equal(0, #logged, "went to the Log, not to a plain print")
+        assert.equal(1, #said)
+        assert.equal("status", said[1][1])
+        assert.is_truthy(said[1][2]:find("size", 1, true))
+      end)
 
     it("saves nothing, and does not error, with no panel open", function()
       Options.dialog = nil
@@ -671,7 +716,9 @@ describe("Options window", function()
   end)
 
   describe("the refresh hook (D13/D15)", function()
-    it("installs hooksecurefunc only once across repeated opens", function()
+    -- Two hooks live on the dialog now: the refresh hook (D13/D15) and the tree hook (D31). Each
+    -- installs itself exactly once, on the FIRST open, and neither again on the second.
+    it("installs hooksecurefunc only once per hook across repeated opens", function()
       local w = fakeWidget()
       Options.dialog = fakeDialog(w)
       local hookCalls = 0
@@ -680,7 +727,7 @@ describe("Options window", function()
       Options.Open()
       Options.Open()
       _G.hooksecurefunc = realHook
-      assert.equal(1, hookCalls, "hooksecurefunc was called again on a dialog already hooked")
+      assert.equal(2, hookCalls, "a hook was (re)installed on a dialog already hooked")
     end)
 
     -- The hook fires synchronously inside dialog:Open, so Options.Open's own explicit fallback must
@@ -714,6 +761,94 @@ describe("Options window", function()
       w.events.OnClose(w, "OnClose")
       assert.equal(900, ns.db.global.window.width, "the size was never remembered on close")
       assert.is_true(w.frame.elmiraClose.hidden, "Undecorate never ran on close either")
+    end)
+  end)
+
+  -- D31. FeedGroup builds a TreeGroup widget only once, at the very root -- every navigation after
+  -- that re-feeds a group's own content INTO that same tree widget (GroupSelected hands its own
+  -- `widget`, the tree, to FeedGroup as `container`; AceConfigDialog-3.0.lua ~1559-1578). So
+  -- `container` IS the tree on every call but the first, where it is the standalone Frame with the
+  -- tree as its one child (~1743-1751).
+  describe("the tree hook (D31)", function()
+    -- Fires the hook exactly the way AceConfigDialog's own hooksecurefunc wrapper would: through
+    -- `Options.dialog.FeedGroup`, never by calling a private function directly.
+    local function feed(appName, container, path)
+      Options.dialog.FeedGroup(Options.dialog, appName, {}, container, {}, path or {})
+    end
+
+    it("clears the tree's own OnButtonEnter callback, container == the tree itself", function()
+      open()
+      local tree = fakeTree()
+      tree:SetCallback("OnButtonEnter", function() end)
+      feed("Elmira", tree, { "rotation" })
+      assert.is_nil(tree.callbacks.OnButtonEnter,
+        "TreeOnButtonEnter (AceConfigDialog-3.0.lua:1485-1524/1730) is still wired")
+    end)
+
+    it("finds the tree among a container's children, container == the root Frame", function()
+      open()
+      local tree = fakeTree()
+      tree:SetCallback("OnButtonEnter", function() end)
+      local root = { children = { { type = "SimpleGroup" }, tree } }
+      feed("Elmira", root, {})
+      assert.is_nil(tree.callbacks.OnButtonEnter)
+    end)
+
+    -- The click-selects-but-does-not-expand bug ("menu click never activates"): only the tiny "+"
+    -- or a double-click flips `status.groups[value]` open on its own
+    -- (AceGUIContainer-TreeGroup.lua's `Expand_OnClick`/`Button_OnDoubleClick`); an ordinary click
+    -- only selects. This is `SelectGroup`'s OWN write (AceConfigDialog-3.0.lua:471-474
+    -- `treestatus.groups[treevalue] = true`) made from the other path there is to a node -- a click.
+    it("marks the just-selected node's own uniquevalue expanded, and redraws the tree", function()
+      open()
+      local tree = fakeTree()
+      feed("Elmira", tree, { "rotation", "PALADIN_EXODIN" })
+      local status = Options.dialog:GetStatusTable("Elmira", {})
+      assert.is_true(status.groups["rotation\001PALADIN_EXODIN"])
+      assert.equal(1, tree.refreshed)
+    end)
+
+    it("does nothing to the status table or the tree on the root render, path is empty", function()
+      open()
+      local tree = fakeTree()
+      feed("Elmira", tree, {})
+      assert.is_nil(tree.refreshed, "an empty path was treated as a node to expand")
+    end)
+
+    it("never mutates AceConfigDialog.tooltip -- only the tree widget it found", function()
+      open()
+      _G.AceConfigDialog = { tooltip = { Hide = function() end } }
+      local tooltipBefore = _G.AceConfigDialog.tooltip
+      local tree = fakeTree()
+      feed("Elmira", tree, { "rotation" })
+      assert.equal(tooltipBefore, _G.AceConfigDialog.tooltip)
+      _G.AceConfigDialog = nil
+    end)
+
+    it("is a no-op for another addon's FeedGroup call, tooltip and status left alone", function()
+      open()
+      local tree = fakeTree()
+      tree:SetCallback("OnButtonEnter", function() end)
+      feed("ElvUI", tree, { "something" })
+      assert.is_function(tree.callbacks.OnButtonEnter, "cleared another addon's tooltip callback")
+      assert.is_nil(tree.refreshed)
+    end)
+
+    it("does nothing, without erroring, when the container holds no tree at all", function()
+      open()
+      assert.has_no.errors(function() feed("Elmira", { children = {} }, { "rotation" }) end)
+      assert.has_no.errors(function() feed("Elmira", {}, { "rotation" }) end)
+      assert.has_no.errors(function() feed("Elmira", nil, { "rotation" }) end)
+      -- Children that exist but are not the tree either -- the loop has to run to the end and
+      -- answer nil, not just short-circuit on the first non-match.
+      assert.has_no.errors(function()
+        feed("Elmira", { children = { { type = "SimpleGroup" }, { type = "Label" } } }, { "rotation" })
+      end)
+    end)
+
+    it("does nothing when the tree cannot answer SetCallback or RefreshTree", function()
+      open()
+      assert.has_no.errors(function() feed("Elmira", { type = "TreeGroup" }, { "rotation" }) end)
     end)
   end)
 

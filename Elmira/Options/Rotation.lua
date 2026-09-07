@@ -49,48 +49,20 @@ local function findBuild(p, key)
   return ns.UserBuilds.find(p, key)
 end
 
--- ---------------------------------------------------------------- Rotations tab
-
--- What you are running, where it came from, and whether its parent has moved on since you forked.
--- Returned as lines rather than as one string so a spec can assert on them individually and so the
--- panel can style them separately later.
-function Rotation.statusLines()
-  local key, running, reason = activeState()
-  if not key then return { L["No rotation is active yet."] } end
-  if not running then
-    -- Saying "Running:" here would be the panel's headline stating a falsehood. The key IS
-    -- selected; the rotation is not going, and the reason is the only useful thing to show.
-    return { string.format(L["%s is selected, but could not be loaded: %s"],
-                           Rotation.displayName(key), tostring(reason or "unknown error")) }
-  end
-
-  local p = pack()
-  local _, origin, fork = findBuild(p, key)
-  local lines = { string.format(L["Running: %s"], Rotation.displayName(key)) }
-
-  if origin ~= "fork" or not fork then return lines end
-
-  local parent = fork.derivedFrom
-  if not parent then
-    lines[#lines + 1] = L["Yours, not derived from a template."]
-    return lines
-  end
-  lines[#lines + 1] = string.format(L["Yours, forked from %s."], Rotation.displayName(parent))
-
-  -- ADR-0010: detect a template that has been updated by a release since the fork was taken, and
-  -- offer a diff — never an automatic rebase, because the whole point of a fork is that the user's
-  -- edits win. The diff itself is F35, in a later step; saying it happened is useful on its own.
-  local updated = Rotation.templateUpdatedAt(parent)
-  if updated and fork.derivedAt and tostring(updated) > tostring(fork.derivedAt) then
-    lines[#lines + 1] = string.format(
-      L["%s has been updated since you forked it (%s, yours is from %s)."],
-      Rotation.displayName(parent), tostring(updated), tostring(fork.derivedAt))
-    -- ADR-0010: a diff, never a rebase. Naming the rows is what makes the banner actionable
-    -- instead of merely worrying.
-    for _, line in ipairs(Rotation.parentDiffLines()) do lines[#lines + 1] = line end
-  end
-  return lines
+-- READING falls back to the shipped defaults, so the panel renders correctly if it is ever built
+-- before AceDB has handed over a profile.
+local function profile()
+  return (ns.db and ns.db.profile) or (ns.DB and ns.DB.defaults.profile) or {}
 end
+
+-- WRITING must never fall back. `DB.defaults.profile` is one shared table that every future profile
+-- is copied from, so a setter reaching it would not lose the click -- it would silently change the
+-- default for every character made afterwards, for the rest of the session.
+local function writableProfile()
+  return ns.db and ns.db.profile
+end
+
+-- ---------------------------------------------------------------- the tree (R1, ADR-0015 amendment)
 
 -- The catalog's `updated` date for a template key. Delegated, never re-derived: Core/UserBuilds is
 -- what stamps `derivedAt` from this same answer, and two copies drift into a banner that quietly
@@ -100,25 +72,27 @@ function Rotation.templateUpdatedAt(key)
   return ns.UserBuilds.catalogUpdated(pack(), key)
 end
 
--- A key a person can read. Catalog entries carry a playstyle name; forks carry the name the user
--- typed; anything else falls back to the key, because a blank row is worse than an ugly one.
+-- A key a person can read. The answer itself is Core's (`UserBuilds.displayName`) -- a pure lookup
+-- over the catalog and the fork records, which Display/Driver's gear-change announcement needs as
+-- much as this panel does, and which nothing in Display may reach into Options to get. This is the
+-- panel's shorthand for it: the pack argument, filled in.
 function Rotation.displayName(key)
-  if type(key) ~= "string" then return "?" end
-  local p = pack()
-  for _, entry in ipairs((p and p.catalog and p.catalog[p.class]) or {}) do
-    if entry.build == key and entry.playstyle then return entry.playstyle end
+  if not (ns.UserBuilds and ns.UserBuilds.displayName) then
+    return type(key) == "string" and key or "?"
   end
-  local _, origin, fork = findBuild(p, key)
-  if origin == "fork" and fork and fork.name then return fork.name end
-  return key
+  return ns.UserBuilds.displayName(pack(), key)
 end
 
 -- The class's catalog entries, read-only, in the order the wizard already sorts them (recommended
--- first, then newest). Reused rather than re-derived: `Wizard.choices` is the one place that knows
--- an entry is only offerable when the pack actually ships the build it names.
+-- first, then newest) -- ALL of them, each carrying its own `available` flag.
+--
+-- `Wizard.rows`, deliberately not `Wizard.choices`: choices is the filtered "pick one of these for
+-- me" list, and reading it here is what made a playstyle the pack cannot yet run vanish from the
+-- tree altogether. D30 shows those muted, on a page that says why -- a name that is simply absent
+-- is a question the addon never gets asked, and answering it is the whole point of the page.
 function Rotation.templateRows()
-  if not (ns.Wizard and ns.Wizard.choices) then return {} end
-  local ok, rows = pcall(ns.Wizard.choices)
+  if not (ns.Wizard and ns.Wizard.rows) then return {} end
+  local ok, rows = pcall(ns.Wizard.rows)
   if not ok then return {} end
   local active = activeKey()
   for _, row in ipairs(rows) do row.active = (row.build == active) end
@@ -142,20 +116,52 @@ function Rotation.forkRows()
   return out
 end
 
-local function statusArgs()
-  local args, order = {}, 0
-  for _, line in ipairs(Rotation.statusLines()) do
-    order = order + 1
-    args["line" .. order] = {
-      type = "description", order = order, width = "full", fontSize = "medium", name = line,
-    }
+-- The template a fork ultimately traces back to (D30's depth cap): a copy of a copy nests directly
+-- under the ORIGINAL template rather than under the fork it happened to be copied from, so the tree
+-- never grows more than two levels deep. Returns nil for a fork that traces to nothing (D35's "New
+-- rotation") or to a cycle (a hand-edited SavedVariables file, never something the addon writes).
+function Rotation.rootParent(key)
+  local p = pack()
+  local seen, current = {}, key
+  for _ = 1, 32 do -- a bound, not a limit anyone should reach: only a cycle needs it
+    if not current or seen[current] then return nil end
+    seen[current] = true -- mutants: equivalent the 32-hop bound below (line 132) already answers
+    -- nil for a short cycle even without this table -- bouncing the same two keys 32 times still
+    -- exhausts the loop; this is only what makes THAT nil arrive after 2 hops instead of 32.
+    local _, origin, fork = findBuild(p, current)
+    if origin == "pack" then return current end
+    if not (fork and fork.derivedFrom) then return nil end
+    current = fork.derivedFrom
   end
-  return args
+  return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
 end
 
--- One row per template. ASCII marks, never glyphs: the client's font has no U+25CF/U+2714 and draws
--- every one of them as the same empty box, which is how the Action Bars panel first shipped a column
--- of identical squares (Options.lua's barRows carries the same note).
+-- D34. The one function that WRITES a selection: pins the build, records the catalog version this
+-- character has now seen (so the once-per-version re-offer, Wizard.shouldOffer, does not immediately
+-- fire again), refreshes the display, and -- unlike the old wizard's plain print -- announces the
+-- switch on screen by default, because a rotation change is exactly what the "Rotation changed"
+-- category exists for. Use on the rotation already running is never offered a button at all
+-- (D34); this is still the function a re-click would run, and it is harmless either way.
+function Rotation.use(key)
+  local p = pack()
+  local prof, char = writableProfile(), ns.db and ns.db.char
+  if not (prof and char) then return false, "no profile" end
+  -- `p` must be present before either lookup: UserBuilds.find skips its class check when handed a
+  -- nil pack, so without this a class with no data pack would pin another class's fork.
+  if not p then return false, "unknown build " .. tostring(key) end
+  if not (ns.UserBuilds and ns.UserBuilds.find and ns.UserBuilds.find(p, key)) then
+    if not (p.builds and p.builds[key]) then return false, "unknown build " .. tostring(key) end
+  end
+  prof.activeBuild = key
+  if ns.Wizard and ns.Wizard.catalogVersion then char.setupDone = ns.Wizard.catalogVersion(p) end
+  if ns.Display and ns.Display.refresh then ns.Display.refresh() end
+  if ns.Announce then
+    ns.Announce.emit("rotation", string.format(L["Now using %s."], Rotation.displayName(key)))
+  end
+  Rotation.notifyChange()
+  return true, key
+end
+
 -- Customize: fork the template AND activate the fork, in one click (ADR-0015 §2). The two halves
 -- must not come apart -- Hekili's copy-then-forget, where the copy has to be separately activated
 -- and people carry on playing the original, is the failure this is designed against.
@@ -167,68 +173,324 @@ function Rotation.customize(templateKey)
   })
   if not key then return false, err end
   -- If activation fails the fork still exists, and saying so is better than a click that appears
-  -- to do nothing: the copy is on the Rotations tab either way.
-  if ns.Wizard and ns.Wizard.apply then
-    local ok, applyErr = ns.Wizard.apply(key)
-    if not ok then return false, applyErr end
-  end
-  if ns.Display and ns.Display.refresh then ns.Display.refresh() end
+  -- to do nothing: the copy is on the tree either way, nested under this template.
+  local ok, useErr = Rotation.use(key)
+  if not ok then return false, useErr end
   return true, key
 end
 
-local function templateArgs()
-  local rows = Rotation.templateRows()
-  if #rows == 0 then
-    return { none = { type = "description", fontSize = "medium", order = 1, width = "full",
-                      name = L["No templates ship for your class yet."] } }
+-- ---------------------------------------------------------------- D35: naming a new rotation
+
+-- Is this display NAME already in use by one of this class's forks? Used only to pick a PREFILL
+-- that does not collide -- what a player actually types is used verbatim either way.
+local function forkNameTaken(name)
+  local p = pack()
+  for _, key in ipairs((ns.UserBuilds and ns.UserBuilds.list and ns.UserBuilds.list(p)) or {}) do
+    local _, _, fork = findBuild(p, key)
+    if fork and fork.name == name then return true end
   end
-  local args = {}
-  for i, row in ipairs(rows) do
-    local mark = row.active and "|cff40c057>>|r" or "|cff9AA0A6--|r"
-    local tags = {}
-    if row.difficulty then tags[#tags + 1] = tostring(row.difficulty) end
-    if row.updated then tags[#tags + 1] = tostring(row.updated) end
-    if row.experimental then tags[#tags + 1] = L["experimental"] end
-    if not row.fits then tags[#tags + 1] = L["needs gear or runes you do not have"] end
-    local build = row.build
-    args["t" .. i] = {
-      type = "group", inline = true, order = i, name = "",
-      args = {
-        what = {
-          type = "description", fontSize = "medium", order = 1, width = 1.7,
-          name = string.format("%s |cffFFFFFF%s|r  |cff9AA0A6%s|r", mark, row.playstyle,
-                               table.concat(tags, " · ")),
-        },
-        customize = {
-          type = "execute", order = 2, width = 0.7, name = L["Customize"],
-          desc = L["Makes your own editable copy of this template and switches to it."],
-          func = function() Rotation.customize(build) end,
-        },
-      },
-    }
-  end
-  return args
+  return false -- mutants: equivalent every caller only ever tests this with `not`/in a `while`
+  -- condition, where Lua's implicit nil (falling off the end) and an explicit `false` read alike
 end
 
-local function forkArgs()
-  local rows = Rotation.forkRows()
-  if #rows == 0 then
-    return { none = { type = "description", fontSize = "medium", order = 1, width = "full",
-                      name = L["You have not made a rotation of your own yet."] } }
+-- "Exodin (mine)", then "Exodin (mine 2)" the next time the same template is copied.
+function Rotation.copyPrefillName(templateName)
+  local base = string.format(L["%s (mine)"], templateName)
+  if not forkNameTaken(base) then return base end
+  local n = 2
+  while forkNameTaken(string.format(L["%s (mine %d)"], templateName, n)) do n = n + 1 end
+  return string.format(L["%s (mine %d)"], templateName, n)
+end
+
+function Rotation.newRotationPrefillName()
+  local base = L["My rotation"]
+  if not forkNameTaken(base) then return base end
+  local n = 2
+  while forkNameTaken(base .. " " .. n) do n = n + 1 end
+  return base .. " " .. n
+end
+
+-- D35's "New rotation": creates an EMPTY fork (no `derivedFrom`, so it sits directly under
+-- Rotations) and switches to it in the same click, for the same Hekili-avoidance reason `customize`
+-- exists.
+function Rotation.createAndUse(name)
+  if type(name) ~= "string" or name:match("^%s*$") then return false, "a rotation needs a name" end
+  local p = pack()
+  if not (ns.UserBuilds and ns.UserBuilds.create) then return false, "builds module is not loaded" end
+  local key, err = ns.UserBuilds.create(p, name)
+  if not key then return false, err end
+  return Rotation.use(key)
+end
+
+-- "Copy and edit", from a template's own page: the same fork-and-switch as `customize`, but with
+-- the name the player typed instead of the template's own "(mine)" default.
+function Rotation.copyAndUse(templateKey, name)
+  if type(name) ~= "string" or name:match("^%s*$") then return false, "a rotation needs a name" end
+  local p = pack()
+  if not (ns.UserBuilds and ns.UserBuilds.fork) then return false, "builds module is not loaded" end
+  local key, err = ns.UserBuilds.fork(p, templateKey, {
+    name = name, today = ns.Adapter and ns.Adapter.today and ns.Adapter.today() or nil,
+  })
+  if not key then return false, err end
+  return Rotation.use(key)
+end
+
+-- The key stays stable (SelectGroup/derivedFrom paths depend on it); only the display name changes.
+function Rotation.rename(key, name)
+  if not (ns.UserBuilds and ns.UserBuilds.rename) then return false, "builds module is not loaded" end
+  local ok, err = ns.UserBuilds.rename(key, name)
+  if ok then Rotation.notifyChange() end
+  return ok, err
+end
+
+-- Deleting the rotation you are running leaves none in use (D35): a rotation cannot go on being
+-- "active" once its own record is gone, and saying nothing would leave the display quietly running
+-- a build that no longer exists in the tree.
+function Rotation.remove(key)
+  if not (ns.UserBuilds and ns.UserBuilds.remove) then return false end
+  local wasActive = activeKey() == key
+  local ok = ns.UserBuilds.remove(key)
+  if not ok then return false end
+  if wasActive then
+    local prof = writableProfile()
+    if prof then prof.activeBuild = false end
+    if ns.Display and ns.Display.refresh then ns.Display.refresh() end
   end
-  local args = {}
-  for i, row in ipairs(rows) do
-    local mark = row.active and "|cff40c057>>|r" or "|cff9AA0A6--|r"
-    local from = row.derivedFrom
-      and string.format(L["from %s"], Rotation.displayName(row.derivedFrom))
-      or L["not from a template"]
-    args["f" .. i] = {
-      type = "description", fontSize = "medium", order = i, width = "full",
-      name = string.format("%s |cffFFFFFF%s|r  |cff9AA0A6%s|r", mark, row.name, from),
+  Rotation.notifyChange()
+  return true
+end
+
+-- D44: `Rotation.use` returns `false, reason` and a click that drops it on the floor looks like a
+-- dead button -- this project's characteristic failure. Every call site that changes what rotation
+-- is active or how one is named funnels its failure through here rather than swallowing it.
+-- `fmt` lets a caller phrase what failed (a playstyle switch, D61c's create/rename) without a
+-- second copy of this function; it defaults to the original D44 wording.
+local function announceFailure(err, fmt)
+  if ns.Announce then
+    ns.Announce.emit("warning",
+      string.format(fmt or L["Elmira: could not set that playstyle (%s)."], tostring(err)))
+  end
+end
+
+-- ---------------------------------------------------------------- D35: the popups themselves
+--
+-- One AceGUI-free mechanism for both "New rotation" and "Copy and edit": a StaticPopup with a
+-- prefilled edit box, registered through the Options layer (never Core, which may not know what a
+-- popup is). `data.templateKey` is what tells the shared accept handler which of the two it is.
+--
+-- D61 (2026-09-07 in-game round): all three of Copy-and-edit, New rotation and Rename were
+-- unusable. Three separate root causes, each verified rather than assumed:
+--   * D61a -- always occluded, not intermittently: AceGUI's options Frame renders at
+--     FULLSCREEN_DIALOG (Elmira/Libs/AceGUI-3.0/widgets/AceGUIContainer-Frame.lua:81-82/185-186/194),
+--     strictly ABOVE every Blizzard StaticPopup's default DIALOG strata -- so with the Builder open,
+--     the popup was always drawn behind it. Fixed by `raiseAbovePanel` below.
+--   * D61b -- the edit box was always empty: `StaticPopup_Show` clears the edit box AFTER `OnShow`
+--     runs, so a prefill written from inside OnShow is wiped before the player ever sees it. Fixed
+--     by `prefillNow` below, applied to the RETURN VALUE of `StaticPopup_Show` -- which happens
+--     after that clear -- with `OnShow`'s own prefill kept only as a fallback.
+--   * D61c -- the button (and Enter) did nothing: neither dialog defined `EditBoxOnEnterPressed`
+--     (Blizzard requires it for Enter to do anything at all), and every `OnAccept` discarded its
+--     handler's `ok, err` -- so an empty-name refusal caused by D61b's own bug looked exactly like a
+--     dead button, and there was no way to tell the two apart from in-game alone.
+
+-- D62 (review finding on D61a): raising STRATA alone was not enough. AceGUI's options Frame is
+-- FULLSCREEN_DIALOG at FRAME LEVEL 100 with SetToplevel(true) (AceGUIContainer-Frame.lua:185-186,
+-- 194), and SetFrameStrata never touches a frame's level -- two frames in the same strata still
+-- draw by level, so StaticPopup1 at its own (low) level kept losing to level 100. Verified against
+-- code that solves this exact clash on this client: ElvUI's
+-- Game/Shared/General/StaticPopups.lua:409-420 ("boost static popups over ace gui") raises both,
+-- mirrored here.
+--
+-- D63 (same review): the OnHide restore must be gated on OUR OWN raise, not fired unconditionally --
+-- StaticPopup1-4 are shared with every other addon's popups, and a hook that always forces DIALOG/
+-- whatever-level-we-found on hide would still fire (HookScript chains, and never unregisters) the
+-- next time some OTHER addon's popup uses the same frame WITHOUT us having raised it, corrupting
+-- THEIR strata/level. `elmiraRaised` is that gate, set here and cleared by the restore; the
+-- double-hook guard (`elmiraStrataHooked`) is separate and unchanged -- it stops a SECOND hook from
+-- stacking, not a hide handler from over-firing. ElvUI gates its own restore the same way
+-- (`self.frameStrataIncreased`, StaticPopups.lua:565-573).
+--
+-- D67 (re-review, pass with two residuals): the level-100/level-101 THRESHOLD this
+-- inherited from ElvUI is asymmetric at level 0 -- raise fires when `level < 100`, restore only
+-- when `level > 100`, so a frame that started at 0 goes to 100 and STAYS there forever (probed:
+-- `0 -> 100 -> 100`), permanently mutating a frame shared with every other addon. ElvUI has the
+-- same flaw; citing it was evidence about frame LEVELS existing at all, never a specification to
+-- copy verbatim. Fixed by storing the PRE-RAISE level (`elmiraOriginalLevel`) next to the raised
+-- flag and restoring exactly that value -- correct at level 0, at level 100, and above it, with no
+-- threshold anywhere in either direction. Captured only on the FIRST raise of a given showing (the
+-- `not dialog.elmiraRaised` guard): a second `open*Popup` call before the popup has hidden must not
+-- re-capture the ALREADY-raised level as if it were the original.
+--
+-- The raise itself adds 101, not ElvUI's 100: a frame starting at level 0 (the exact case D67's
+-- probe used) would otherwise land at exactly 100, TIED with AceGUI's Frame rather than above it --
+-- ties are not a reliable "we win" in frame stacking. +101 clears it from every starting level
+-- without needing a floor/threshold check.
+local function raiseAbovePanel(dialog)
+  if not (dialog and dialog.SetFrameStrata and dialog.GetFrameLevel and dialog.SetFrameLevel) then
+    return
+  end
+  if not dialog.elmiraRaised then
+    dialog.elmiraOriginalLevel = dialog:GetFrameLevel()
+    dialog.elmiraRaised = true
+  end
+  dialog:SetFrameStrata("FULLSCREEN_DIALOG")
+  dialog:SetFrameLevel(dialog.elmiraOriginalLevel + 101)
+  if not dialog.elmiraStrataHooked and dialog.HookScript then
+    dialog.elmiraStrataHooked = true
+    dialog:HookScript("OnHide", function(self)
+      if not self.elmiraRaised then return end
+      self.elmiraRaised = nil
+      self:SetFrameStrata("DIALOG")
+      self:SetFrameLevel(self.elmiraOriginalLevel)
+      self.elmiraOriginalLevel = nil -- mutants: equivalent the next raise re-captures it regardless, gated on elmiraRaised alone
+    end)
+  end
+end
+
+-- D61b: writes the prefill AFTER the client's own post-OnShow clear, which is what `OnShow`'s own
+-- prefill (kept below as a fallback for anything that does not go through this helper) cannot do.
+local function prefillNow(dialog, text)
+  if not (dialog and dialog.editBox) then return end
+  dialog.editBox:SetText(text or "")
+  if dialog.editBox.HighlightText then dialog.editBox:HighlightText() end
+end
+
+function Rotation.openNewRotationPopup()
+  if not (StaticPopup_Show and StaticPopupDialogs and StaticPopupDialogs.ELMIRA_NAME_ROTATION) then
+    return false
+  end
+  local prefill = Rotation.newRotationPrefillName()
+  local dialog = StaticPopup_Show("ELMIRA_NAME_ROTATION", nil, nil, { prefill = prefill })
+  raiseAbovePanel(dialog)
+  prefillNow(dialog, prefill)
+  return true
+end
+
+function Rotation.openCopyPopup(templateKey, templateName)
+  if not (StaticPopup_Show and StaticPopupDialogs and StaticPopupDialogs.ELMIRA_NAME_ROTATION) then
+    return false
+  end
+  local prefill = Rotation.copyPrefillName(templateName)
+  local dialog = StaticPopup_Show("ELMIRA_NAME_ROTATION", nil, nil,
+    { prefill = prefill, templateKey = templateKey })
+  raiseAbovePanel(dialog)
+  prefillNow(dialog, prefill)
+  return true
+end
+
+function Rotation.openRenamePopup(key, currentName)
+  if not (StaticPopup_Show and StaticPopupDialogs and StaticPopupDialogs.ELMIRA_RENAME_ROTATION) then
+    return false
+  end
+  local dialog = StaticPopup_Show("ELMIRA_RENAME_ROTATION", currentName, nil,
+    { prefill = currentName, renameKey = key })
+  raiseAbovePanel(dialog)
+  prefillNow(dialog, currentName)
+  return true
+end
+
+-- D71 (2026-09-07 in-game round): "Maybe we can provide direct link for the source?" -- WoW cannot
+-- open a URL, so the convention (same as the wizard's old rune links) is a popup showing the full
+-- address in a selectable, pre-highlighted edit box the player copies out. SAME mechanism as the
+-- three popups above -- one more StaticPopupDialogs entry through `registerPopups`, the same
+-- `raiseAbovePanel`/`prefillNow` pair -- never a second popup layer, and never the strata-only fix
+-- that left the D61 naming popups behind the options window twice before it was actually fixed.
+function Rotation.openSourcePopup(url)
+  if not (StaticPopup_Show and StaticPopupDialogs and StaticPopupDialogs.ELMIRA_SHOW_SOURCE) then
+    return false
+  end
+  local text = url ~= nil and tostring(url) or ""
+  local dialog = StaticPopup_Show("ELMIRA_SHOW_SOURCE", nil, nil, { prefill = text })
+  raiseAbovePanel(dialog)
+  prefillNow(dialog, text)
+  return true
+end
+
+-- D61c: the standard Blizzard idiom (StaticPopup's edit box has no OnEnterPressed of its own) --
+-- click the dialog's own accept button, so Enter and the button always agree about what happens.
+local function acceptOnEnter(self)
+  local parent = self:GetParent()
+  if parent and parent.button1 then parent.button1:Click() end
+end
+
+-- Registered once, guarded so re-loading this file (every spec's before_each) does not stack a
+-- second definition on top of the first -- harmless for StaticPopup itself, but a needless rebuild
+-- of two closures on every panel open otherwise.
+local function registerPopups()
+  local dialogs = StaticPopupDialogs
+  if not dialogs then return end
+
+  if not dialogs.ELMIRA_NAME_ROTATION then
+    dialogs.ELMIRA_NAME_ROTATION = {
+      text = L["Name this rotation:"],
+      button1 = L["Create and switch"], button2 = L["Cancel"],
+      hasEditBox = true, timeout = 0, whileDead = true, hideOnEscape = true,
+      EditBoxOnEnterPressed = acceptOnEnter,
+      OnShow = function(self, data)
+        data = data or self.data
+        local box = self.editBox
+        if box then
+          box:SetText((data and data.prefill) or "")
+          if box.HighlightText then box:HighlightText() end
+        end
+      end,
+      OnAccept = function(self, data)
+        data = data or self.data
+        local name = self.editBox and self.editBox:GetText()
+        local ok, err -- mutants: equivalent deleting the declaration only makes both globals; luacheck catches it
+        if data and data.templateKey then
+          ok, err = Rotation.copyAndUse(data.templateKey, name)
+        else
+          ok, err = Rotation.createAndUse(name)
+        end
+        if not ok then announceFailure(err, L["Elmira: could not create that rotation (%s)."]) end
+      end,
     }
   end
-  return args
+
+  if not dialogs.ELMIRA_RENAME_ROTATION then
+    dialogs.ELMIRA_RENAME_ROTATION = {
+      text = L["Rename \"%s\":"],
+      button1 = L["Rename"], button2 = L["Cancel"],
+      hasEditBox = true, timeout = 0, whileDead = true, hideOnEscape = true,
+      EditBoxOnEnterPressed = acceptOnEnter,
+      OnShow = function(self, data)
+        data = data or self.data
+        local box = self.editBox
+        if box then
+          box:SetText((data and data.prefill) or "")
+          if box.HighlightText then box:HighlightText() end
+        end
+      end,
+      OnAccept = function(self, data)
+        data = data or self.data
+        if not (data and data.renameKey) then return end
+        local name = self.editBox and self.editBox:GetText()
+        local ok, err = Rotation.rename(data.renameKey, name)
+        if not ok then announceFailure(err, L["Elmira: could not rename that rotation (%s)."]) end
+      end,
+    }
+  end
+
+  -- D71: nothing to accept -- this popup exists only to show the URL, pre-selected, for the player
+  -- to copy. `button1` is a plain close, same as clicking the X or hitting Escape.
+  if not dialogs.ELMIRA_SHOW_SOURCE then
+    dialogs.ELMIRA_SHOW_SOURCE = {
+      text = L["Copy this link:"],
+      button1 = L["Close"],
+      hasEditBox = true, timeout = 0, whileDead = true, hideOnEscape = true,
+      OnShow = function(self, data)
+        data = data or self.data
+        local box = self.editBox
+        if box then
+          box:SetText((data and data.prefill) or "")
+          if box.HighlightText then box:HighlightText() end
+        end
+      end,
+    }
+  end
 end
+registerPopups()
 
 -- ---------------------------------------------------------------- Builder tab: the palette
 
@@ -253,19 +515,6 @@ end
 
 function Rotation.search() return paletteSearch end
 
--- READING falls back to the shipped defaults, so the panel renders correctly if it is ever built
--- before AceDB has handed over a profile.
-local function profile()
-  return (ns.db and ns.db.profile) or (ns.DB and ns.DB.defaults.profile) or {}
-end
-
--- WRITING must never fall back. `DB.defaults.profile` is one shared table that every future profile
--- is copied from, so a setter reaching it would not lose the click -- it would silently change the
--- default for every character made afterwards, for the rest of the session.
-local function writableProfile()
-  return ns.db and ns.db.profile
-end
-
 -- The name a person reads for a pack spell key. Client-aware when the client can answer, and
 -- Detect.readableName otherwise -- which is also the only one reachable headlessly, so the palette
 -- is never blank in a spec or on a client that cannot resolve an id.
@@ -279,16 +528,48 @@ function Rotation.spellLabel(key)
   return key
 end
 
--- Palette.spells is pure and takes the client-shaped parts as arguments; this is where they come
--- from. `known` is tri-state and stays that way: nil means the client cannot tell, and rendering
--- that as "you do not have it" would grey the whole palette on a flavour without engraving.
+-- R2 (D55): registers every castable spell the current pack defines, `source = "pack"`, so a fresh
+-- character sees a usable palette the moment a class pack loads rather than only after something
+-- has already referenced one of its spells (which nothing could, the first time). Idempotent --
+-- `Spells.registerPack` no-ops on a key that is already there -- so calling this on every palette
+-- read costs nothing once the registry is warm.
+function Rotation.syncSpells()
+  if not (ns.Spells and ns.Palette) then return end
+  local s = ns.Spells.store()
+  local p = pack()
+  if not (s and p and p.spells) then return end
+  for key, data in pairs(p.spells) do
+    if ns.Palette.castable(data) and type(data) == "table" and data.id then
+      ns.Spells.registerPack(s, key, data.id, Rotation.spellLabel(key))
+    end
+  end
+end
+
+-- D58 (comment corrected at D64): the Builder's "Add a spell" control reads the REGISTRY, not
+-- `Palette.spells(pack())` directly -- Palette is still what a pack-sourced entry's known/reason
+-- data comes from (a rune gate on an un-learned ability must still say "engrave X"), but only for
+-- spells the registry lists. `syncSpells` (above) seeds every castable pack spell unconditionally,
+-- so in the common case this is EVERY pack spell plus whatever was added by hand -- not a narrower
+-- list, and not gated on any rotation actually using one yet (D55). A registry entry with no
+-- matching pack record (added by id, by name or from the spellbook, on a class with no pack at all)
+-- is offered too, undimmed -- `known` reads nil for it, "the client cannot tell", which is the
+-- right answer for something deliberately added by hand.
 function Rotation.paletteSpells()
-  if not ns.Palette then return {} end
+  if not ns.Spells then return {} end
+  Rotation.syncSpells()
+  local p = pack()
   local state = ns.API and ns.API.GetState and ns.API.GetState()
-  local rows = ns.Palette.spells(pack(), {
+  local packRows = (ns.Palette and ns.Palette.spells(p, {
     label = Rotation.spellLabel,
     known = state and state.known and function(key) return state:known(key) end or nil,
-  })
+  })) or {}
+  local byKey = {}
+  for _, row in ipairs(packRows) do byKey[row.key] = row end
+
+  local rows = {}
+  for _, entry in ipairs(ns.Spells.list(ns.Spells.store())) do
+    rows[#rows + 1] = byKey[entry.key] or { key = entry.key, label = entry.name, known = nil }
+  end
   return Rotation.filtered(rows, function(row) return row.label end)
 end
 
@@ -344,11 +625,29 @@ local function paletteRow(order, name, append)
            desc = L["Adds this to the bottom of the draft."], func = append }
 end
 
+-- D58's last row: navigation, not editing, so it stays clickable even on a read-only template's
+-- Builder view -- unlike every other row here, which `paletteRow` ties to `editable`. "Focused on
+-- the spellbook add row" is as far as AceConfig's tree can point: selecting the group puts the
+-- reader on the page the row already lives on (D52's root page), which is the whole of what
+-- "focused" can mean for a page with no sub-widget scroll target.
+local function addFromSpellbookRow(order)
+  return {
+    type = "execute", order = order, width = "full", name = L["Add from spellbook…"],
+    desc = L["Opens the Spells page, where you can register more from your spellbook, by id or by name."],
+    func = function()
+      if ns.Options and ns.Options.dialog and ns.Options.dialog.SelectGroup then
+        ns.Options.dialog:SelectGroup("Elmira", "spells")
+      end
+    end,
+  }
+end
+
 local function spellPaletteArgs(editable)
   local rows = Rotation.paletteSpells()
   if #rows == 0 then
     return { none = { type = "description", fontSize = "medium", order = 1, width = "full",
-                      name = L["Nothing matches."] } }
+                      name = L["Nothing matches."] },
+             add = addFromSpellbookRow(2) }
   end
   local args = {}
   for i, row in ipairs(rows) do
@@ -367,6 +666,7 @@ local function spellPaletteArgs(editable)
     args["s" .. i] = paletteRow(i, prefix .. body,
       editable and function() Rotation.appendSpell(key) end or nil)
   end
+  args.add = addFromSpellbookRow(#rows + 1)
   return args
 end
 
@@ -482,10 +782,19 @@ end
 
 -- Everything the pane and the status column need from the pack, in the shape Core/Conditions and
 -- Core/Gates read it. `name` is what turns EXORCISM into "Exorcism" in a sentence.
+--
+-- D79 (review finding on R2b): this used to pass `p.spells` alone, un-merged with the
+-- registry, so D65's stopgap below fired for every registry spell and greyed Save on a line
+-- `Rotation.save()` itself would happily accept -- the one place in the whole feature a player
+-- actually touches. `ns.Spells.merged(p)` is the same merge `Core/UserBuilds.ctxFor` already uses;
+-- widening it here is what makes the two agree. The `ns.Spells and ... or p.spells` fallback is
+-- for the handful of specs that load this file without `Core/Spells.lua`, exactly as `ctxFor`'s own
+-- comment explains -- not a silent narrowing for anyone else.
 local function wordCtx()
   local p = pack()
+  local spells = (p and ns.Spells and ns.Spells.merged and ns.Spells.merged(p)) or (p and p.spells)
   return { L = L, name = Rotation.spellLabel,
-           spells = p and p.spells, sets = p and p.sets,
+           spells = spells, sets = p and p.sets,
            souls = p and p.souls, bonuses = p and p.bonuses }
 end
 
@@ -518,6 +827,18 @@ function Rotation.problems()
     local _, errors = ns.Schema.compileWhen(entry.when, ctx)
     for _, err in ipairs(errors) do
       lines[#lines + 1] = string.format(L["line %d: %s"], i, err.message)
+    end
+    -- D65 STOPGAP (review finding on R2): a spell the Spells registry added by id, by name or
+    -- from the spellbook can be offered here and appended (D58) with no matching pack record, and
+    -- until now nothing said so until the click -- Save looked enabled, then `Schema.validate`
+    -- refused it with exactly this message, after the fact. Mirrors that one check (Schema.lua's
+    -- `ctx.spells[entry.spell] == nil`) so Save greys out with the reason visible FIRST. This does
+    -- NOT close the R2 architecture gap -- the registry still cannot feed the engine a key it did
+    -- not get from a data pack -- only the owner can decide to widen the engine to accept one
+    -- (R2b/R3); this just stops the click from being the first place the player hears about it.
+    if entry.spell and ctx.spells and ctx.spells[entry.spell] == nil then
+      lines[#lines + 1] = string.format(L["line %d: spell '%s' is not in the spells data pack"],
+                                         i, entry.spell)
     end
   end
   for _, line in ipairs(draft.saveErrors or {}) do lines[#lines + 1] = line end
@@ -789,19 +1110,30 @@ end
 
 -- ---------------------------------------------------------------- Builder tab: live status
 --
--- ADR-0015 (2026-09-04 amendment). Four states, and the distinction that matters is between the
--- two greys: a row whose conditions simply do not pass right now is the rotation working, while a
--- row that cannot fire for THIS character until they engrave something is news. Only the second
--- dims, or rows would flicker mid-fight and teach that the rotation is unstable.
+-- ADR-0015 (2026-09-04 amendment), colours reassigned 2026-09-07 (D73, owner ruling on the in-game
+-- round -- this closes the question R1 deliberately left open, reversing the meaning below rather
+-- than amending it): GREY now means "cannot happen on this character" (nothing you do right now
+-- changes it -- switched off, or gated until you engrave/equip something) and AMBER means "waiting
+-- on a condition" (it CAN fire, just not this instant -- on cooldown, target too high, etc). Only
+-- the grey states are meant to sit still; amber is expected to come and go as conditions change, so
+-- rows flickering between firing and amber mid-fight is the rotation working, not a bug.
 --
--- ASCII markers, never glyphs. The client's font draws U+25CF and friends as identical empty boxes,
--- which is how a status column once shipped as a row of squares (tasks/lessons.md, 2026-09-04).
+-- Texture dots, not glyphs. The client's font draws U+25CF and friends as identical empty boxes,
+-- which is how a status column once shipped as a row of squares (tasks/lessons.md, 2026-09-04) --
+-- ASCII markers (`>>` `!!` `..` `--` `++`) were the fallback while that could not be verified from
+-- a client. It has been, since: `Interface\COMMON\Indicator-Green/-Yellow/-Gray/-Red` are all
+-- referenced by Details on this exact Classic Era install (Details/functions/coach.lua,
+-- Details/frames/window_custom.lua, Details/Libs/DF/panel.lua), and this very list already embeds
+-- `|T...|t` spell-icon textures three lines below (tasks/lessons.md, 2026-09-07 -- the constraint
+-- was on CHARACTERS the font draws, not on textures, which render where a glyph does not). `colour`
+-- now wraps the TEXT after the dot rather than the dot itself: a texture escape carries its own
+-- colour and needs no `|cff.../|r` wrapper.
 Rotation.MARKS = {
-  firing   = { mark = ">>", colour = "|cff40c057" },
-  blocked  = { mark = "!!", colour = "|cffE8A33D" },
-  waiting  = { mark = "..", colour = "|cff9AA0A6" },
-  off      = { mark = "--", colour = "|cff9AA0A6" },
-  unsaved  = { mark = "++", colour = "|cff9AA0A6" },
+  firing   = { mark = "|TInterface\\COMMON\\Indicator-Green:12|t",  colour = "|cff40c057" },
+  blocked  = { mark = "|TInterface\\COMMON\\Indicator-Gray:12|t",   colour = "|cff9AA0A6" },
+  waiting  = { mark = "|TInterface\\COMMON\\Indicator-Yellow:12|t", colour = "|cffE8A33D" },
+  off      = { mark = "|TInterface\\COMMON\\Indicator-Gray:12|t",   colour = "|cff9AA0A6" },
+  unsaved  = { mark = "|TInterface\\COMMON\\Indicator-Gray:12|t",   colour = "|cff9AA0A6" },
 }
 
 -- Why a line that CAN fire for this character is not firing. The compiled per-condition tests are
@@ -1053,7 +1385,7 @@ local function statusArgsFor(row, status)
   if row.note then trailer = row.summary end
   return {
     type = "description", fontSize = "medium", order = 9, width = "full",
-    name = string.format("%s%s|r %s  |cff9AA0A6%s|r", look.colour, look.mark, status.text, trailer),
+    name = string.format("%s %s%s|r  |cff9AA0A6%s|r", look.mark, look.colour, status.text, trailer),
   }
 end
 
@@ -1364,30 +1696,475 @@ local function shareArgs()
   }
 end
 
+-- ---------------------------------------------------------------- the tree pages (D30-D36)
+--
+-- The whole left-hand nav is ONE AceConfig tree (AceConfigDialog-3.0.lua:1721-1751: a group whose
+-- `childGroups` is "tree" and whose parent is ALSO a tree, which the addon's own root already is,
+-- gets no widget of its own -- it becomes a NODE, and `BuildGroups`/`BuildSubGroups`
+-- (AceConfigDialog-3.0.lua:1005-1071) recurse into any child group that does not say
+-- `childGroups = "tab"`, which is the default). So the fork groups below live INSIDE their parent
+-- template's own `.args`, one Lua table nested inside another, and that nesting IS the tree the
+-- player sees -- no separate widget-building code of our own is needed for it.
+
+-- "wowhead.com" from a full guide URL, for the source line -- the reader does not need the whole
+-- path, only which site to trust.
+local function sourceHost(url)
+  if type(url) ~= "string" then return "" end
+  return (url:match("^%a+://([^/]+)/?") or url):gsub("^www%.", "")
+end
+
+-- ok/failing/unknown, the same D43 texture dots as `Rotation.MARKS` (green/amber/grey) rather than
+-- a second, ASCII marker style on the same page -- `nil` ("could not tell") is deliberately not
+-- red, for the same reason the old wizard's checkLine never turned one red -- a tooltip scan that
+-- came back empty is not a fact about the character. The texture carries its own colour, so no
+-- `Colors.wrap` here (unlike the still-ASCII `+`/`!`/`?` this replaces).
+local function needMark(ok)
+  if ok == true then return "|TInterface\\COMMON\\Indicator-Green:12|t" end
+  if ok == false then return "|TInterface\\COMMON\\Indicator-Yellow:12|t" end
+  return "|TInterface\\COMMON\\Indicator-Gray:12|t"
+end
+
+-- "Exodin" or "Exodin  · in use" (D32/D33/D36's name field). A muted dot, not a repeat of the word
+-- "Use": the button beside it (or its absence, once this IS the one running) already says that.
+local function nameWithBadge(text, active)
+  if not active then return text end
+  return text .. "  " .. ns.Colors.wrap(ns.Colors.MUTED, "· " .. L["in use"])
+end
+
+-- D30/D48. A playstyle the catalog lists but the pack cannot run -- no build has shipped under that
+-- key yet -- is SHOWN, muted, wherever its name appears, and its page says why in words.
+-- `disabled = true` on the group would have been the obvious flag and is exactly the wrong one: it
+-- hides the page, and the page is the answer to the question the muted name asks.
+local function templateLabel(row)
+  if row.available then return row.playstyle end
+  return ns.Colors.wrap(ns.Colors.MUTED, row.playstyle)
+end
+
+-- The words. Not "you may not have this" -- rule 8 forbids a hard gate and there is no requirement
+-- to meet here: the rotation itself does not exist yet, which is a fact about Elmira, not about the
+-- character. Everything the CHARACTER is missing is a `needs` row below, which explains itself.
+local function unavailableReason(row)
+  if row.available then return nil end
+  return L["Not in Elmira yet: no rotation has shipped for this playstyle, so using it puts nothing on screen."]
+end
+
+-- D34: no button at all on the rotation already running -- there is nothing left for it to do.
+-- Otherwise a `L["Use"]` execute, `confirm`ed (never disabled: `requires` is advisory, hard rule 8,
+-- and disabling this button would be a real gate on a character that has never been able to be
+-- gated) when this row's own requirements are not met, naming the first failing one.
+local function useButtonArgs(order, key, active, checks, blocked)
+  if active then return nil end
+  -- D48: `blocked` is the "there is no rotation behind this name" case, which is not a requirement
+  -- the character fails but reads to the player as the same kind of warning -- so it takes the same
+  -- confirm path, and takes precedence over a failing check, being the more fundamental problem.
+  local failing = blocked ~= nil
+    or (ns.Detect and ns.Detect.hasFailures and ns.Detect.hasFailures(checks or {})) or false
+  local reason = blocked
+  if failing and not reason then
+    for _, check in ipairs(checks or {}) do
+      if check.ok == false then reason = check.text; break end
+    end
+  end
+  return {
+    type = "execute", order = order, width = 0.8,
+    name = failing and L["Use this anyway"] or L["Use"],
+    desc = reason,
+    -- `confirm` as a STRING is a HANDLER METHOD NAME to AceConfigDialog (AceConfigDialog-3.0.lua:
+    -- 771-782), not literal text -- passing the reason there would error looking up a method that
+    -- does not exist. The boolean + `confirmText` pair is what shows the reason itself.
+    confirm = failing or nil,
+    confirmText = reason,
+    func = function()
+      local ok, err = Rotation.use(key)
+      if not ok then announceFailure(err) end
+    end,
+  }
+end
+
+-- Navigates the OPEN standalone dialog to a child of the Rotations tree, the same SelectGroup path
+-- `Options.Open("rotation", key)` uses -- never a second `Open`, which would replace the window's
+-- root and hide the left menu (the exact bug D20 fixed).
+local function navigateTo(key)
+  return function()
+    if ns.Options and ns.Options.dialog and ns.Options.dialog.SelectGroup then
+      ns.Options.dialog:SelectGroup("Elmira", "rotation", key)
+    end
+  end
+end
+
+-- "Level 60 Paladin, holding a two-hander. Pick how you want to play:" -- the exact sentence the
+-- old wizard opened with (Wizard.lua's own former heading), reused rather than re-derived so the
+-- wording a player has already seen once does not quietly change on them.
+local function detectionLine(detection)
+  local class = (detection and detection.class) or "?"
+  local level = (detection and detection.level) or "?"
+  local weapon = (detection and detection.weapon and detection.weapon.type) or L["unknown"]
+  return string.format(L["Level %s %s, holding a %s. Pick how you want to play:"],
+    tostring(level), tostring(class), tostring(weapon))
+end
+
+-- D32's inline card, made to actually READ as a card (D69, 2026-09-07 owner feedback: "not like
+-- cards... too much text coming after each other"). AceGUI's InlineGroup already draws a bordered
+-- pane (AceGUIContainer-InlineGroup.lua:78-81) -- the missing piece was the group's own `name`,
+-- which was always `""`, leaving the 17px title strip empty (InlineGroup.lua:72-76, 79) so a column
+-- of them read as one wall of text with no separation at all. The playstyle name now IS the card's
+-- title, so the row that used to spell it out again as a clickable label (D32's original `args.name`)
+-- would just repeat the heading -- cut, and replaced by a small `L["Open"]` execute that keeps the
+-- same navigation (D32's requirement) without carrying the name a second time.
+--
+-- D70: `row.difficulty` joins the meta line. D71: the meta line no longer ends in the source host --
+-- "updated 2026-08-30 · wowhead" read as if the WOWHEAD PAGE were updated that day, when the date is
+-- ours (when Elmira's catalog entry was last checked). Role/difficulty/updated stay together; the
+-- source gets its own unambiguous line plus a button that opens the full URL in a copyable popup
+-- (WoW cannot open a link itself) -- reusing the D35/D61/D67 StaticPopup layer, never a second one.
+local function templateCard(row, order)
+  local a, args = 0, {}
+  a = a + 1
+  args.open = { type = "execute", order = a, width = 0.6, name = L["Open"], func = navigateTo(row.build) }
+  local use = useButtonArgs(a + 1, row.build, row.active, row.checks, unavailableReason(row))
+  if use then a = a + 1; args.use = use end
+
+  a = a + 1
+  args.summary = { type = "description", order = a, width = "full", fontSize = "medium",
+                   name = row.summary or "" }
+
+  local bits = {}
+  if row.difficulty then bits[#bits + 1] = string.format(L["difficulty: %s"], tostring(row.difficulty)) end
+  if row.recommended then bits[#bits + 1] = L["recommended"] end
+  if row.experimental then bits[#bits + 1] = L["experimental"] end
+  if row.updated then bits[#bits + 1] = string.format(L["updated %s"], tostring(row.updated)) end
+  a = a + 1
+  args.meta = { type = "description", order = a, width = "full", fontSize = "medium",
+                name = ns.Colors.wrap(ns.Colors.MUTED, table.concat(bits, " · ")) }
+
+  if row.source then
+    a = a + 1
+    args.source = { type = "description", order = a, width = 1.6, fontSize = "medium",
+      name = ns.Colors.wrap(ns.Colors.MUTED, string.format(L["Source: %s"], sourceHost(row.source))) }
+    a = a + 1
+    args.link = { type = "execute", order = a, width = 0.6, name = L["Copy link"],
+      desc = L["Shows the full web address in a box you can select and copy."],
+      func = function() Rotation.openSourcePopup(row.source) end }
+  end
+
+  return { type = "group", inline = true, order = order,
+           name = nameWithBadge(templateLabel(row), row.active), args = args }
+end
+
+-- D33's header row: name (gold, badged) · in use/Use · Copy and edit.
+local function templateHeaderArgs(row)
+  local a, args = 0, {}
+  a = a + 1
+  -- Gold for a playstyle that runs, muted for one that cannot yet -- `templateLabel` carries its
+  -- own colour, so the highlight is only applied to the ones it left plain.
+  args.name = { type = "description", order = a, width = 1.4, fontSize = "medium",
+                name = row.available and ns.Colors.wrap(ns.Colors.HIGHLIGHT,
+                                                        nameWithBadge(row.playstyle, row.active))
+                    or nameWithBadge(templateLabel(row), row.active) }
+  local use = useButtonArgs(a + 1, row.build, row.active, row.checks, unavailableReason(row))
+  if use then a = a + 1; args.use = use end
+  a = a + 1
+  args.copy = { type = "execute", order = a, width = 1.0, name = L["Copy and edit"],
+                desc = L["Makes your own editable copy of this template, under a name you choose."],
+                func = function() Rotation.openCopyPopup(row.build, row.playstyle) end }
+  return { type = "group", inline = true, order = 1, name = "", args = args }
+end
+
+-- D33's explanation: the catalog's own summary/notes, a muted difficulty/updated line, then the
+-- source on its own line with a Copy link button -- the SAME split `templateCard` got (D71,
+-- 2026-09-07): this page is the one the card's own Open button lands on, so leaving it concatenated
+-- ("updated 2026-08-30 · wowhead", read as if the WOWHEAD PAGE were updated that day) would mean the
+-- fix only half-landed and the owner hits the other half on the very next click. D70's difficulty
+-- joins the meta line here too, reusing the exact same strings as the card so there is one wording
+-- for both, not two -- the page has more room than a card, but difficulty is the only card field
+-- worth repeating here: recommended/experimental are catalog-sort hints already reflected by this
+-- playstyle's position in the tree, not new information a detail page needs to restate.
+local function templateExplainArgs(row, order)
+  local a, args = 0, {}
+  local blocked = unavailableReason(row)
+  if blocked then a = a + 1; args.blocked = { type = "description", order = a, width = "full",
+    fontSize = "medium", name = ns.Colors.wrap(ns.Colors.MUTED, blocked) } end
+  if row.summary then a = a + 1; args.summary = { type = "description", order = a, width = "full",
+    fontSize = "medium", name = row.summary } end
+  if row.notes then a = a + 1; args.notes = { type = "description", order = a, width = "full",
+    fontSize = "medium", name = row.notes } end
+
+  local bits = {}
+  if row.difficulty then bits[#bits + 1] = string.format(L["difficulty: %s"], tostring(row.difficulty)) end
+  if row.updated then bits[#bits + 1] = string.format(L["updated %s"], tostring(row.updated)) end
+  a = a + 1
+  args.meta = { type = "description", order = a, width = "full", fontSize = "medium",
+                name = ns.Colors.wrap(ns.Colors.MUTED, table.concat(bits, " · ")) }
+
+  if row.source then
+    a = a + 1
+    args.source = { type = "description", order = a, width = 1.6, fontSize = "medium",
+      name = ns.Colors.wrap(ns.Colors.MUTED, string.format(L["Source: %s"], sourceHost(row.source))) }
+    a = a + 1
+    args.link = { type = "execute", order = a, width = 0.6, name = L["Copy link"],
+      desc = L["Shows the full web address in a box you can select and copy."],
+      func = function() Rotation.openSourcePopup(row.source) end }
+  end
+
+  return { type = "group", inline = true, order = order, name = "", args = args }
+end
+
+-- D33's "What this rotation needs": one row per Detect.check result, then the rune shopping list
+-- (ADR-0013 §2) exactly as the old wizard worded it.
+local function needsArgs(row)
+  local a, args = 0, {}
+  for _, check in ipairs(row.checks or {}) do
+    a = a + 1
+    args["n" .. a] = { type = "description", order = a, width = "full", fontSize = "medium",
+                        name = needMark(check.ok) .. " " .. check.text }
+  end
+  if row.runesToEngrave and #row.runesToEngrave > 0 then
+    a = a + 1
+    args.shopping = { type = "description", order = a, width = "full", fontSize = "medium",
+      name = ns.Colors.wrap(ns.Colors.BRAND, string.format(
+        L["Engrave first: %s. The Rune Broker in every starting zone sells runes for 1c."],
+        table.concat(row.runesToEngrave, ", "))) }
+  end
+  if a == 0 then
+    -- "ready to go" is a claim about the CHARACTER, and it is still true here -- but printing it
+    -- under a page that has just said there is no rotation to run reads as a contradiction.
+    args.none = { type = "description", order = 1, width = "full", fontSize = "medium",
+                  name = row.available and L["Nothing extra needed -- this rotation is ready to go."]
+                                        or L["Nothing extra needed from you."] }
+  end
+  return args
+end
+
+-- D33/D36's "Rotation, top to bottom": the SAME gate evaluation the Builder's own live status
+-- column runs (Rotation.rowStatuses, Core/Gates.evaluate), generalised to whichever key is being
+-- VIEWED rather than only the active build -- no new evaluation path, only a new key to run it
+-- against. Three states, not the Builder's five: a page you are only looking at cannot know
+-- moment-to-moment truth ("target below 20%"), only whether a line is gated off FOR THIS CHARACTER
+-- (grey, D73: "cannot happen" -- gated off is exactly that, until you change something about the
+-- character) or fine (green) or switched off (also grey, the same "cannot happen" bucket) -- the
+-- same MARKS the Builder's own status column reads, kept consistent rather than inverted between
+-- the two pages. There is no amber on this page: "waiting on a condition" is a moment-to-moment
+-- truth this read-only view does not track.
+function Rotation.lineRows(key)
+  local p = pack()
+  local build = findBuild(p, key)
+  if not (build and build.entries) then return {} end
+  -- D80, same cause as D79's `wordCtx`: an un-merged ctx here made `compileBuild` drop a
+  -- registry-key entry, so `compiledAt[i]` stayed nil and a saved registry line read `off` --
+  -- grey, which after D73 means "cannot happen on this character" about a line that can.
+  local spells = (p and ns.Spells and ns.Spells.merged and ns.Spells.merged(p)) or (p and p.spells)
+  local ctx = { spells = spells, sets = p and p.sets, souls = p and p.souls,
+                bonuses = p and p.bonuses }
+  local compiled = ns.compileBuild and ns.compileBuild(build, ctx)
+  local state = ns.API and ns.API.GetState and ns.API.GetState()
+  -- Only `capabilities` matters here: `Gates.evaluate`'s `active` verdict reads nothing else from
+  -- its context argument, and this page never reads a gate's `.reasons` text (the mark alone is the
+  -- whole story on a read-only page) -- so the pack tables that build THAT text would be dead
+  -- weight here, unlike in `Display.gateContext`, which the Builder's live column still needs them for.
+  local gates = (compiled and ns.Gates and state)
+    and ns.Gates.evaluate(compiled, state,
+      { capabilities = ns.Adapter and ns.Adapter.capabilities and ns.Adapter.capabilities() })
+    or {}
+
+  local compiledAt, byIndex = {}, {}
+  if compiled then
+    for i, entry in ipairs(compiled.entries) do compiledAt[entry.index] = i end
+  end
+  for _, g in ipairs(gates) do byIndex[g.index] = g end
+
+  local out = {}
+  for i, entry in ipairs(build.entries) do
+    local mark -- mutants: equivalent deletion only makes it a global; luacheck catches that
+    local at = compiledAt[i]
+    if entry.disabled or not at then
+      mark = "off"
+    elseif byIndex[at] and byIndex[at].active == false then
+      mark = "blocked"
+    else
+      mark = "firing"
+    end
+    out[#out + 1] = { index = i, mark = mark, label = actionName(entry), spell = entry.spell,
+                       summary = Rotation.conditionSummary(entry) }
+  end
+  return out
+end
+
+local function lineRowsArgs(key)
+  local rows = Rotation.lineRows(key)
+  if #rows == 0 then
+    return { none = { type = "description", order = 1, width = "full", fontSize = "medium",
+                       name = L["This rotation has no lines yet."] } }
+  end
+  local args = {}
+  for i, row in ipairs(rows) do
+    local look = Rotation.MARKS[row.mark]
+    -- D72: the spell's icon before its name, resolved through the ADAPTER (Display.spellIcon,
+    -- already used the same way by the Builder's own listArgs and by mirrorLines) -- Core/this
+    -- module never calls the WoW API directly. No icon (unresolved spell, or an item line, which
+    -- carries no `spell` at all) renders with no texture and no gap of its own: `prefix` is "" and
+    -- the format string does not leave a second space behind for it.
+    local icon = row.spell and ns.Display and ns.Display.spellIcon and ns.Display.spellIcon(row.spell)
+    local prefix = icon and ("|T" .. tostring(icon) .. ":0|t ") or ""
+    args["l" .. i] = { type = "description", order = i, width = "full", fontSize = "medium",
+      name = string.format("%d %s %s%s%s|r  |cff9AA0A6%s|r", i, look.mark, prefix, look.colour,
+                           row.label, row.summary) }
+  end
+  return args
+end
+
+-- D36's header: name (brand, badged) · copied from <template>/yours · in use/Use · Rename · Delete.
+local function forkHeaderArgs(row)
+  local a, args = 0, {}
+  a = a + 1
+  args.name = { type = "description", order = a, width = 1.2, fontSize = "medium",
+                name = ns.Colors.wrap(ns.Colors.BRAND, nameWithBadge(row.name, row.active)) }
+  a = a + 1
+  local from = row.derivedFrom
+    and string.format(L["copied from %s"], Rotation.displayName(row.derivedFrom)) or L["yours"]
+  args.from = { type = "description", order = a, width = 1.0, fontSize = "medium",
+                name = ns.Colors.wrap(ns.Colors.MUTED, from) }
+  local use = useButtonArgs(a + 1, row.build, row.active, {})
+  if use then a = a + 1; args.use = use end
+  a = a + 1
+  args.rename = { type = "execute", order = a, width = 0.7, name = L["Rename"],
+    func = function() Rotation.openRenamePopup(row.build, row.name) end }
+  a = a + 1
+  args.delete = { type = "execute", order = a, width = 0.7, name = L["Delete"],
+    confirm = true, confirmText = L["Delete this rotation? This cannot be undone."],
+    func = function() Rotation.remove(row.build) end }
+  return { type = "group", inline = true, order = 1, name = "", args = args }
+end
+
+-- D36: the fork itself as a tree node/page. `order` is a caller-assigned position so a template's
+-- own forks sort after that template's other content and a no-template fork sorts after every
+-- template on the root page (D30's ordering rule).
+local function forkPageGroup(row, order)
+  local args = {}
+  args.header = forkHeaderArgs(row)
+
+  -- ADR-0010: a diff, never a rebase, shown only once the template has actually moved on since
+  -- this fork was taken -- the same staleness gate the addon has always used, and, like
+  -- `parentDiffLines` itself, only ever said about the fork that IS running (D36 "stays as today").
+  if row.active and row.derivedFrom then
+    local _, _, fork = findBuild(pack(), row.build)
+    local updated = fork and Rotation.templateUpdatedAt(row.derivedFrom)
+    if updated and fork.derivedAt and tostring(updated) > tostring(fork.derivedAt) then
+      local dargs = {
+        banner = { type = "description", order = 1, width = "full", fontSize = "medium",
+          name = string.format(L["%s has been updated since you forked it (%s, yours is from %s)."],
+                               Rotation.displayName(row.derivedFrom), tostring(updated),
+                               tostring(fork.derivedAt)) },
+      }
+      for i, line in ipairs(Rotation.parentDiffLines()) do
+        dargs["d" .. i] = { type = "description", order = i + 1, width = "full", fontSize = "medium",
+                             name = line }
+      end
+      args.stale = { type = "group", inline = true, order = 2, name = "", args = dargs }
+    end
+  end
+
+  args.lines = { type = "group", inline = true, order = 3, name = L["Rotation, top to bottom"],
+                 args = lineRowsArgs(row.build) }
+  args.edit = { type = "execute", order = 4, name = L["Edit"],
+    desc = L["Opens this rotation in the Builder."],
+    -- D44: activating this fork can fail (no profile, a stale key). Navigating to the Builder
+    -- anyway would silently open it on whatever rotation happened to be active before, so a
+    -- failure here must say why AND stop -- matching Rotation.customize (:175).
+    func = function()
+      if not row.active then
+        local ok, err = Rotation.use(row.build)
+        if not ok then announceFailure(err); return end
+      end
+      if ns.Options and ns.Options.dialog and ns.Options.dialog.SelectGroup then
+        ns.Options.dialog:SelectGroup("Elmira", "rotation", "builder")
+      end
+    end }
+  return { type = "group", order = order, name = row.name, args = args }
+end
+
+-- D33: the template itself as a tree node/page, with its own forks nested inside `args` -- which is
+-- what makes them a nested tree node rather than a second thing on this page (see the header note
+-- above this section).
+local function templatePageGroup(row, order, forksHere)
+  local args = {}
+  args.header = templateHeaderArgs(row)
+  args.about = templateExplainArgs(row, 2)
+  args.needs = { type = "group", inline = true, order = 3, name = L["What this rotation needs"],
+                 args = needsArgs(row) }
+  args.lines = { type = "group", inline = true, order = 4, name = L["Rotation, top to bottom"],
+                 args = lineRowsArgs(row.build) }
+  for i, forkRow in ipairs(forksHere) do
+    args[forkRow.build] = forkPageGroup(forkRow, 1000 + i)
+  end
+  return { type = "group", order = order, name = templateLabel(row), args = args }
+end
+
+-- D30: the tree's own args -- intro/detection/New rotation, the root page's inline cards, then the
+-- navigable pages (templates in catalog order, their forks nested inside them, then no-template
+-- forks, then Builder and Share last).
+local function rotationTreeArgs()
+  local args, a = {}, 0
+  local detection = ns.Wizard and ns.Wizard.detection and ns.Wizard.detection()
+
+  a = a + 1
+  args.detection = { type = "description", order = a, width = "full", fontSize = "medium",
+                      name = detectionLine(detection) }
+  a = a + 1
+  args.newRotation = { type = "execute", order = a, name = L["New rotation"],
+    desc = L["Starts empty; add lines from your own spellbook in the Builder."],
+    func = function() Rotation.openNewRotationPopup() end }
+
+  local rows = Rotation.templateRows()
+  local byParent = {}
+  for _, forkRow in ipairs(Rotation.forkRows()) do
+    local parent = Rotation.rootParent(forkRow.build) or ""
+    byParent[parent] = byParent[parent] or {}
+    byParent[parent][#byParent[parent] + 1] = forkRow
+  end
+
+  -- The pack's own `class`, not `detection.class`: this line names what the CATALOG is for, and a
+  -- class with a data pack but no readable detection (Adapter/Detect not wired, or a spec that
+  -- fakes only `Wizard.choices`) must not say "?" about a class it plainly knows.
+  local p = pack()
+  if #rows == 0 then
+    a = a + 1
+    local className = (p and p.class) or (detection and detection.class) or L["your class"]
+    args.noPack = { type = "description", order = a, width = "full", fontSize = "medium",
+      name = string.format(
+        L["No playstyles for %s yet. Build your own: New rotation, then add spells from your spellbook."],
+        className) }
+  else
+    a = a + 1
+    local className = (p and p.class) or (detection and detection.class) or "?"
+    local phase = rows[1] and rows[1].phase
+    args.header = { type = "description", order = a, width = "full", fontSize = "medium",
+      name = phase and string.format(L["Playstyles for %s · %s"], className, tostring(phase))
+                    or string.format(L["Playstyles for %s"], className) }
+    for i, row in ipairs(rows) do
+      a = a + 1
+      args["card" .. i] = templateCard(row, a)
+    end
+  end
+
+  for i, row in ipairs(rows) do
+    args[row.build] = templatePageGroup(row, 1000 + i, byParent[row.build] or {})
+  end
+  local afterTemplates = 1000 + #rows
+  for i, row in ipairs(byParent[""] or {}) do
+    args[row.build] = forkPageGroup(row, afterTemplates + i)
+  end
+
+  args.builder = { type = "group", order = 9000, name = L["Builder"], args = builderArgs() }
+  args.share = { type = "group", order = 9001, name = L["Share"], args = shareArgs() }
+  return args
+end
+
 -- ---------------------------------------------------------------- the section
 
 function Rotation.group()
   return {
-    type = "group", order = 0, name = L["Rotation"], childGroups = "tab",
-    args = {
-      rotations = {
-        type = "group", order = 1, name = L["Rotations"],
-        args = {
-          status = { type = "group", inline = true, order = 1, name = L["Right now"],
-                     args = statusArgs() },
-          templates = { type = "group", inline = true, order = 2, name = L["Class templates"],
-                        args = templateArgs() },
-          note = {
-            type = "description", fontSize = "medium", order = 3, width = "full",
-            name = L["Templates are read-only. Customize one to get a copy you can edit."],
-          },
-          mine = { type = "group", inline = true, order = 4, name = L["Your rotations"],
-                   args = forkArgs() },
-        },
-      },
-      builder = { type = "group", order = 2, name = L["Builder"], args = builderArgs() },
-      share = { type = "group", order = 3, name = L["Share"], args = shareArgs() },
-    },
+    type = "group", order = 0, name = L["Rotations"], childGroups = "tree",
+    args = rotationTreeArgs(),
   }
 end
 

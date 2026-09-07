@@ -42,6 +42,13 @@ local WOW_API = {
   -- from under a half-typed value. Presence-checked at the call site (Vanilla.typing) rather than
   -- assumed -- an every-frame FrameXML global is not the same promise as a documented C API.
   "GetCurrentKeyBoardFocus",
+  -- D49: the FrameXML chat-group helper. Named here so the ADAPTER can declare whether this client
+  -- has it (`chatMessageGroups`), which is what makes it a capability rather than an undeclared
+  -- global; Display/Announcers reads it too, and has its own entry in that block below.
+  "ChatFrame_ContainsMessageGroup",
+  -- R2 (D59): the classic-only combo point reader and the FrameXML max-points constant -- see
+  -- Adapters/Vanilla.lua's S:power COMBO_POINTS comment for the client sweep that settled both.
+  "GetComboPoints", "MAX_COMBO_POINTS",
 }
 
 -- Core is pure Lua: naming a WoW global anywhere under Elmira/Core/ is a lint ERROR, by omission.
@@ -64,10 +71,21 @@ files["Elmira/Display/"] = { read_globals = { "CreateFrame", "UIParent", "GameTo
   -- F37 announcements (Display/Announcers.lua). LibStub is here rather than at the top level so it
   -- stays out of Core/, and SendChatMessage is the ONE global in this addon that talks to other
   -- players -- worth being able to grep for.
-  "LibStub", "DEFAULT_CHAT_FRAME", "NUM_CHAT_WINDOWS", "GetChatWindowInfo",
+  "LibStub", "DEFAULT_CHAT_FRAME", "NUM_CHAT_WINDOWS",
+  -- D25: which chat windows show System messages (Announcers.systemChatFrames), the FrameXML
+  -- helper the chat tab's own "Chat Settings" checkbox reads.
+  "ChatFrame_ContainsMessageGroup",
   "SendChatMessage", "IsInGroup", "IsInRaid" } }
+-- StaticPopupDialogs is a WRITABLE global (every addon registers its own dialogs into it as
+-- FIELDS), unlike everything else in read_globals here, which is only ever called or read -- hence
+-- its own `globals` entry rather than joining the `read_globals` list, which luacheck treats as
+-- read-only all the way down to field assignment.
 files["Elmira/Setup/"] = { read_globals = { "CreateFrame", "UIParent", "UnitClass", "UnitLevel",
-  "GetTalentTabInfo", "C_Engraving" } }
+  "GetTalentTabInfo", "C_Engraving",
+  -- D37: the first-run popup -- a real frame, never AceConfig -- and the combat guard on when it
+  -- may appear.
+  "StaticPopup_Show", "InCombatLockdown" },
+  globals = { "StaticPopupDialogs" } }
 files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent",
   -- M5h, the options window's own chrome (Options.lua): the reposition button's tooltip, and
   -- CLOSE -- the client's localised button text, which is how AceGUI's anonymous Close button is
@@ -75,7 +93,11 @@ files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent",
   "GameTooltip", "CLOSE",
   -- Pass 2: a post-call hook on AceConfigDialog's own Open, filtered to our app name, so a refresh
   -- neither Options.Open nor AceConfigDialog's pooling triggers still re-runs Options.Decorate.
-  "hooksecurefunc" } }
+  "hooksecurefunc",
+  -- R1 (D31/D35): the FeedGroup post-hook that expands a clicked tree node and mutes its tooltip,
+  -- and the "New rotation"/"Copy and edit"/"Rename" edit-box popups.
+  "StaticPopup_Show" },
+  globals = { "StaticPopupDialogs" } }
 
 -- Shipped class data (ADR-0011): data only, and held to Core's bar. A WoW API call here is as wrong
 -- as one in Core/ — these files are inside the core addon now, and hard rule 3 does not soften
@@ -125,5 +147,7 @@ files["tests/"] = {
     -- The options window's own chrome (tests/spec/options_window_spec.lua). CLOSE is the client's
     -- localised button text, which is how AceGUI's anonymous Close button is identified.
     "GameTooltip", "CLOSE",
+    -- R2 (D59): the combo-point mock pair.
+    "GetComboPoints", "MAX_COMBO_POINTS",
   },
 }

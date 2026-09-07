@@ -18,7 +18,7 @@
 #   make mutants BASE=HEAD~3      changed lines vs another revision
 #   make mutants FILES="a.lua b"  those files, every line
 #   make mutants ALL=1            every line of every shipped .lua -- slow, for a periodic sweep
-#   make mutants JOBS=8           parallel workers (default: half the cores)
+#   make mutants JOBS=8           parallel workers (default: every hardware thread)
 #
 # Deliberately has no cache, no index and no fast path -- see ADR-0012 before adding one.
 set -uo pipefail
@@ -26,7 +26,10 @@ set -uo pipefail
 BASE="${BASE:-HEAD}"
 ALL="${ALL:-}"
 FILES="${FILES:-}"
-JOBS="${JOBS:-$(( ($(nproc 2>/dev/null || echo 2) + 1) / 2 ))}"
+# Default to EVERY hardware thread, not half of them. Each worker copies a ~4MB tree once and
+# then runs the suite per mutant, so this is CPU-bound with a negligible memory cost -- half
+# the cores left half the machine idle for the slowest gate in the project. Override with JOBS=.
+JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 LUA="${LUA:-lua5.1}"
 # A mutation can turn a loop condition into an infinite loop; without this the gate hangs instead of
 # reporting.

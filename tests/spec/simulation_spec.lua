@@ -584,6 +584,24 @@ describe("Simulation dependency and normalisation guards", function()
     assert.matches("Core/Engine%.lua", logged[1])
   end)
 
+  -- D26 (2026-09-07 Notifications pass): once Announce is loaded, the dependency warning is a
+  -- "Problems" announcement, not a plain print -- observable through the Log, not through ns.log.
+  it("announces a missing dependency as a warning once Announce is loaded", function()
+    loadAll{ withoutEngine = true }
+    local ns = helper.ns()
+    helper.load("Elmira/Core/Colors.lua")
+    local Announce = helper.load("Elmira/Core/Announce.lua")
+    ns.db = { profile = { announce = { routes = {} } }, global = { announceLog = {} } }
+    Announce.use{ now = function() return 1 end, inCombat = function() return false end }
+    Simulation.queue(miniBuild(), FakeState.new{ gcd = 1.5 }, 3)
+    assert.equal(0, #logged, "went to the Log, not to a plain print")
+    local rows = Announce.log()
+    assert.equal(1, #rows)
+    assert.equal("warning", rows[1].category)
+    assert.matches("rotation queue disabled", rows[1].text)
+    assert.matches("Core/Engine%.lua", rows[1].text)
+  end)
+
   -- No build is the normal state for eight of nine classes, not a wiring fault: it must come back
   -- empty and SILENT, before the dependency checks get a chance to complain about something else.
   it("answers an absent build with an empty queue and no dependency warning", function()

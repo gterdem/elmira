@@ -24,10 +24,13 @@ describe("Core.UserBuilds", function()
     -- invalidate. Loaded for real rather than faked: the whole defect these tests pin is that the
     -- two files disagreed about when a compilation stops being valid.
     helper.load("Elmira/Core/Slash.lua")
+    -- R2b: `ctxFor` merges this character's registry into the pack's own spells (Spells.merged) --
+    -- loaded for real so a spec pins the MERGE, not a fake that already agrees with it.
+    helper.load("Elmira/Core/Spells.lua")
     local LS, LD = loadCodec()
     Serialize.use{ serializer = LS, deflate = LD }
     pack = helper.classPack("Paladin")
-    db = { global = { userBuilds = {} } }
+    db = { global = { userBuilds = {} }, char = { spells = {} } }
     ns.db = db
   end)
 
@@ -279,6 +282,38 @@ describe("Core.UserBuilds", function()
       assert.equal("PALADIN_EXODIN", pack.builds.PALADIN_EXODIN.key)
     end)
 
+    -- R2b (D75/D76): the gap R2 flagged and deliberately left open. Before this pass `ctxFor` only
+    -- ever saw `pack.spells`, so a spell added by id/name/spellbook (Core/Spells.lua) validated
+    -- nowhere and Save refused it with "not in the spells data pack" even though the palette
+    -- offered it. `ctxFor` now merges this character's registry underneath the pack's own table, so
+    -- Save accepts the line -- and the merged table is the SAME one the engine compiles against
+    -- (`ns.Spells.merged`), so the resolved id is the registry's, not a guess.
+    it("validates and saves a registry-only spell key, and the engine resolves its id", function()
+      ns.db.char.spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice",
+                                       source = "spellbook" } }
+      local ok, reasons = UserBuilds.replaceEntries(pack, key, { { spell = "SLICE" } })
+      assert.is_true(ok, reasons and table.concat(reasons, " "))
+      local build = UserBuilds.find(pack, key)
+      local ctx = { spells = ns.Spells.merged(pack), sets = pack.sets, souls = pack.souls,
+                    bonuses = pack.bonuses }
+      local compiled = ns.compileBuild(build, ctx)
+      assert.equal(900, compiled.entries[1].data.id)
+    end)
+
+    -- D75's collision policy: shipped data is the authority, always. A registry entry happening to
+    -- share a pack key's NAME (a hand-edited SavedVariables file, or a coincidence of slugging) must
+    -- never shadow it -- the engine keeps resolving the pack's own id.
+    it("still resolves the pack's own spell when a registry entry collides with its key", function()
+      ns.db.char.spells = { EXORCISM = { key = "EXORCISM", id = 1, name = "Mine", source = "id" } }
+      assert.is_true(UserBuilds.replaceEntries(pack, key, { { spell = "EXORCISM" } }))
+      local build = UserBuilds.find(pack, key)
+      local ctx = { spells = ns.Spells.merged(pack), sets = pack.sets, souls = pack.souls,
+                    bonuses = pack.bonuses }
+      local compiled = ns.compileBuild(build, ctx)
+      assert.equal(pack.spells.EXORCISM.id, compiled.entries[1].data.id)
+      assert.are_not.equal(1, compiled.entries[1].data.id)
+    end)
+
     -- The pre-existing defect this step exists to end, and this project's characteristic shape
     -- exactly: the panel did the edit, the store held the new rotation, and the DISPLAY went on
     -- running the compilation it had taken before it -- because `ns.compileBuild` caches on the
@@ -386,6 +421,36 @@ describe("Core.UserBuilds", function()
       key, err = UserBuilds.importString(exodinString(), nil, {})
       assert.is_nil(key); assert.truthy(err:find("no data pack", 1, true))
     end)
+
+    -- D75: registry entries are per CHARACTER, so a build exported on one and imported on another
+    -- must not silently claim a spell the second one has never registered -- a readable refusal,
+    -- not a crash and not a quietly dropped line. `Schema.validate`'s own "not in the spells data
+    -- pack" message is the refusal, reached through the SAME merge Save uses (`ctxFor`).
+    local function ghostRotation()
+      local custom = {}
+      for k, v in pairs(pack.builds.PALADIN_EXODIN) do custom[k] = v end
+      custom.key, custom.name = "GHOST_ROTATION", "Ghost Rotation"
+      custom.entries = { { spell = "SLICE" } }
+      return Serialize.encode(custom)
+    end
+
+    it("refuses an import naming a registry spell this character has never registered", function()
+      -- ns.db.char.spells is empty here -- exactly the state of a character who never saw the
+      -- exporting player's "Slice and Dice" registration.
+      local key, err = UserBuilds.importString(ghostRotation(), pack, {})
+      assert.is_nil(key)
+      assert.truthy(err:find("SLICE", 1, true))
+      assert.truthy(err:find("spells data pack", 1, true))
+      assert.is_nil(db.global.userBuilds.USER_GHOST_ROTATION, "a refused import must store nothing")
+    end)
+
+    it("accepts the same import once THIS character has that spell registered too", function()
+      ns.db.char.spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice",
+                                       source = "spellbook" } }
+      local key, err = UserBuilds.importString(ghostRotation(), pack, {})
+      assert.is_truthy(key, tostring(err))
+      assert.equal("SLICE", db.global.userBuilds[key].build.entries[1].spell)
+    end)
   end)
 
   it("falls back to the shared namespace when loaded without one, like every Core file", function()
@@ -470,6 +535,101 @@ describe("Core.UserBuilds", function()
       assert.is_true(UserBuilds.remove(key))
       assert.is_false(UserBuilds.remove(key))
       assert.is_nil(UserBuilds.find(pack, key))
+    end)
+  end)
+
+  -- D35's "New rotation": an EMPTY fork with no `derivedFrom` at all, unlike `fork()` (above), which
+  -- REFUSES a nil/unknown template. This is the second, small writer for that reason.
+  describe("create()", function()
+    it("writes an empty, findable fork with no derivedFrom", function()
+      local key, err = UserBuilds.create(pack, "My rotation")
+      assert.is_nil(err)
+      assert.is_truthy(key:find("^USER_"))
+      local build, origin, fork = UserBuilds.find(pack, key)
+      assert.equal("fork", origin)
+      assert.same({}, build.entries)
+      assert.equal("My rotation", build.name)
+      assert.equal("My rotation", fork.name)
+      assert.is_nil(fork.derivedFrom)
+    end)
+
+    it("refuses without saved variables or a class pack", function()
+      ns.db = nil
+      local key, err = UserBuilds.create(pack, "My rotation")
+      assert.is_nil(key)
+      assert.truthy(err:find("saved variables", 1, true))
+      ns.db = db
+      local key2, err2 = UserBuilds.create(nil, "My rotation")
+      assert.is_nil(key2)
+      assert.truthy(err2:find("data pack", 1, true))
+    end)
+
+    it("names collide safely, the same uniqueKey scheme fork() uses", function()
+      local a = UserBuilds.create(pack, "My rotation")
+      local b = UserBuilds.create(pack, "My rotation")
+      assert.is_not.equal(a, b)
+    end)
+  end)
+
+  -- The key stays stable (SelectGroup/derivedFrom paths depend on it); only the display name --
+  -- both the record's own `name` and the build's own `name` -- changes.
+  describe("rename()", function()
+    it("renames both the record and the build, keeping the key", function()
+      local key = UserBuilds.create(pack, "My rotation")
+      assert.is_true(UserBuilds.rename(key, "New name"))
+      local build, _, fork = UserBuilds.find(pack, key)
+      assert.equal("New name", build.name)
+      assert.equal("New name", fork.name)
+      assert.equal(key, build.key)
+    end)
+
+    it("refuses a key that is not one of your rotations", function()
+      local ok, err = UserBuilds.rename("PALADIN_EXODIN", "New name")
+      assert.is_false(ok)
+      assert.truthy(err:find("not one of your rotations", 1, true))
+    end)
+
+    it("refuses a blank or missing name", function()
+      local key = UserBuilds.create(pack, "My rotation")
+      local ok, err = UserBuilds.rename(key, "")
+      assert.is_false(ok)
+      assert.truthy(err:find("name", 1, true))
+      local build = UserBuilds.find(pack, key)
+      assert.equal("My rotation", build.name)
+    end)
+  end)
+
+  -- D47. The one place a storage key becomes words. It lives here, next to the catalog lookup and
+  -- the fork records it reads, because Display/Driver's gear-change announcement is assembled from
+  -- the key and Display may not reach into Options for a string (hard rule 3's layering).
+  describe("displayName()", function()
+    it("gives a shipped build the catalog's playstyle name", function()
+      local entry = pack.catalog[pack.class][1]
+      assert.equal("PALADIN_EXODIN", entry.build)
+      assert.is_not.equal(entry.build, entry.playstyle)
+      assert.equal(entry.playstyle, UserBuilds.displayName(pack, "PALADIN_EXODIN"))
+    end)
+
+    it("gives a fork the name its owner typed, never the USER_ slug", function()
+      local key = UserBuilds.create(pack, "My rotation")
+      assert.equal("USER_MY_ROTATION", key)
+      assert.equal("My rotation", UserBuilds.displayName(pack, key))
+    end)
+
+    it("falls back to the key: an ugly name beats a blank one", function()
+      assert.equal("PALADIN_GONE", UserBuilds.displayName(pack, "PALADIN_GONE"))
+      assert.equal("USER_GHOST", UserBuilds.displayName(pack, "USER_GHOST"))
+      assert.equal("PALADIN_EXODIN", UserBuilds.displayName(nil, "PALADIN_EXODIN"))
+    end)
+
+    it("falls back to the key for a catalog entry that names no playstyle", function()
+      local thin = { class = "PALADIN", catalog = { PALADIN = { { build = "PALADIN_EXODIN" } } } }
+      assert.equal("PALADIN_EXODIN", UserBuilds.displayName(thin, "PALADIN_EXODIN"))
+    end)
+
+    it("answers for a non-string rather than erroring", function()
+      assert.equal("?", UserBuilds.displayName(pack, nil))
+      assert.equal("?", UserBuilds.displayName(pack, 7))
     end)
   end)
 end)
