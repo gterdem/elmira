@@ -1,5 +1,28 @@
 # Changelog
 ## Unreleased
+- **New: the settings window opens big enough to read, and remembers itself.** 960x680 rather than
+  700x500, drawn 20% larger, and the size and place you leave it in come back after a reload. A
+  **Panel scale** slider on the new General page changes it as you drag.
+- **Changed: the settings window has a proper title bar.** The whole strip drags now instead of a
+  tab in the middle of it, the name stays centred on it, and there is an X in the top right next to
+  a button that puts the window back to its default size and position if it ends up off screen. The
+  version now sits to the left of the bar on its own line, so dragging the panel scale slider no
+  longer makes it disappear until you close and reopen the window. The settings window also no
+  longer leaves its buttons behind on other addons' Ace3 windows.
+- **Changed: the first page is now General** — Enable Elmira, Run setup again and the panel's own
+  scale. **Queue** keeps everything about the strip, and its Scale slider is called **Strip scale**
+  so the two are told apart.
+- **New: General gained a "Choose your rotation" button, a minimap-button toggle and "Lock all
+  positions".** The button jumps straight to the Rotation page of the panel you already have open.
+  Show minimap button shows or hides Elmira's launcher icon and remembers it across a reload. Lock
+  all positions replaces Queue's old "Lock position" toggle — it now locks the on-screen message too,
+  and locking it also lets go of the message if you were mid-drag.
+- **Fixed: "Choose your rotation" made the left menu (General, Queue, Rotation, ...) disappear.**
+  So did `/elm rotation`. Both now land on the Rotation page with the rest of the panel intact.
+- **New: General ends with a read-only Slash commands list**, every `/elm <command>` and what it
+  does, so it can never say something `/elm` itself does not actually do.
+- **Changed: the explanatory text throughout the settings is no longer smaller than the labels above
+  it.** It was two points down everywhere, worst on the Builder, which is almost all text.
 - **New: the Builder checks your rotation for you.** Underneath the list, in a **Checks** box that
   only appears when there is something to say: a line an earlier line always beats, and a line that
   names a spell or set your class data no longer has. Both are certain rather than sampled — they
