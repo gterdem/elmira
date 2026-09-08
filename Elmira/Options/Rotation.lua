@@ -120,6 +120,47 @@ function Rotation.forkRows()
   return out
 end
 
+-- ---------------------------------------------------------------- PD1-D1: the shared detail area
+
+-- Which card's detail is showing, right now. Transient UI state, like `paletteSearch`/`draft` below
+-- -- NOT a DB field: `activeBuild` (Core/DB.lua) keeps meaning "the rotation in use" and nothing
+-- else, and PD1-D3's own args table is rebuilt from scratch on every `Rotation.notifyChange()`, so
+-- nothing living in the args could survive one. A module-local upvalue is what a plain click can
+-- change without writing to a profile or surviving only until the next rebuild.
+local selectedKey -- mutants: equivalent deletion only makes it a global; luacheck catches that
+
+local function rowNamed(rows, key)
+  for _, row in ipairs(rows) do
+    if row.build == key then return true end
+  end
+  return false -- mutants: equivalent every caller only ever tests this with `and`/`or`, where
+  -- Lua's implicit nil (falling off the end) and an explicit `false` read alike
+end
+
+-- The one writer. A card body click (PD1-D2) is the only caller today; never a navigation of its
+-- own -- the caller still has to force AceConfigDialog's own refresh (the bare `dialog:Open` every
+-- card click already performs) for the new detail to actually appear on screen.
+function Rotation.select(key)
+  selectedKey = key
+  return true
+end
+
+-- PD1-D1: the stored key if it still names a live template or fork row, else the active rotation,
+-- else the first template, else nil (no pack, no forks -- `args.noPack` already speaks to that
+-- case). Checked against BOTH lists fresh on every call, never cached, so a selection surviving a
+-- delete (`Rotation.remove`) or a fork going private falls back on its own the moment the row it
+-- named stops existing, with no extra bookkeeping at either call site.
+function Rotation.selected()
+  local templates, forks = Rotation.templateRows(), Rotation.forkRows()
+  if selectedKey and (rowNamed(templates, selectedKey) or rowNamed(forks, selectedKey)) then
+    return selectedKey
+  end
+  local active = activeKey()
+  if active then return active end
+  if templates[1] then return templates[1].build end
+  return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
+end
+
 -- The template a fork ultimately traces back to (D30's depth cap): a copy of a copy nests directly
 -- under the ORIGINAL template rather than under the fork it happened to be copied from, so the tree
 -- never grows more than two levels deep. Returns nil for a fork that traces to nothing (D35's "New
@@ -2134,46 +2175,33 @@ local function useButtonArgs(order, key, active, checks, blocked)
   }
 end
 
--- Navigates the OPEN standalone dialog to a child of the Rotations tree via `SelectGroup`, then
--- forces the SAME synchronous refresh every NATIVE AceConfig control already gets for free right
--- after its own `func` runs (`ActivateControl`, AceConfigDialog-3.0.lua:867-873: a BARE
--- `AceConfigDialog:Open(appName)`, no path).
---
--- PB5 (2026-09-08, in-game: "clicking a card lands on the Builder"): `SelectGroup` alone only
--- writes the status table and calls `reg:NotifyChange`, which schedules a DEFERRED rebuild on the
--- dialog's own next `OnUpdate` tick (AceConfigDialog-3.0.lua:1784-1799) -- fine for every native
--- control (which gets the synchronous refresh below for free through `ActivateControl`), but the
--- card BODY is a raw `Frame:SetScript("OnMouseUp", ...)`, deliberately outside `FeedOptions`/
--- `ActivateControl` by PA3's own design, so it never got that refresh and the click could land
--- wherever the deferred rebuild's own fallback (`GroupExists`/`SelectByValue`,
--- AceConfigDialog-3.0.lua:1531/1746) resolved to instead of the clicked template. `Rotation.customize`
--- (the fork page's own "Edit" button) already does the identical `SelectGroup` with no `Open` and
--- works -- because it is a `type = "execute"` option, a NATIVE control `ActivateControl` refreshes
--- for it automatically. Adding the same refresh here closes the one gap that is unique to this
--- custom widget's own click handling.
---
--- Two things this must NOT do, both because this file has been burned by them before:
+-- PD1-D2 (2026-09-08): a card body click SELECTS the rotation for the shared detail area now,
+-- rather than navigating to a separate page (the previous `navigateTo` helper this replaces is gone
+-- -- PD1-D2 was its only caller, and the fork page's own Edit button, unlike this comment's own
+-- predecessor once claimed, has always called `SelectGroup` directly rather than through it).
+-- `dialog:Open("Elmira")` afterwards is still needed and still BARE (no path): a card's raw
+-- `OnMouseUp` (CardWidget.lua) sits outside AceConfigDialog's own `ActivateControl`, which is what
+-- gives every NATIVE control (an execute button, a slider) a synchronous refresh for free right
+-- after its own `func` runs (PB5, 2026-09-08: without this, `Rotation.select`'s new value would sit
+-- unseen until the dialog's own next unrelated redraw). Two things this must NOT do, both because
+-- this file has been burned by them before:
 --   * Never route through `Options.Open` (the D61e wrapper): a path-less `Options.Open()` forces
 --     `SelectGroup("Elmira", "general")` when it has no path arguments of its own (D61e, so
 --     `/elm config` with no path always lands on General) -- routing THIS through it would send
---     every card click to General, a worse bug than PB5. `ns.Options.dialog` IS AceConfigDialog
---     itself (`Options.dialog = AceConfigDialog`, Options.lua), so this calls the library directly.
+--     every card click to General. `ns.Options.dialog` IS AceConfigDialog itself
+--     (`Options.dialog = AceConfigDialog`, Options.lua), so this calls the library directly.
 --   * This is NOT the D20 "second Open with a path" bug: D20's Open call CARRIED a path, which
 --     replaces the window's whole root (and the left menu with it, AceConfigDialog-3.0.lua
 --     ~1897-1930). This Open call is BARE -- no path, no container -- exactly the shape the
---     range-slider/execute-button refresh already uses (Options.lua's own D13 comment, and the
---     option-window suite's "keeps the version and the centred title after a direct dialog:Open"
---     test), which re-feeds the SAME already-selected group rather than replacing the root.
--- The re-decorate hook this triggers (`installRefreshHook`, Options.lua) is written to be
--- idempotent under repeated `Open` calls already -- every execute-type option in this file already
--- exercises it, once per click, and the options-window suite pins that a repeated bare `Open` never
--- creates a second version font string or re-chains `OnClose` twice.
-local function navigateTo(key)
+--     range-slider/execute-button refresh already uses (Options.lua's own D13 comment), which
+--     re-feeds the SAME already-selected group rather than replacing the root. The re-decorate hook
+--     this triggers (`installRefreshHook`, Options.lua) is idempotent under repeated `Open` calls
+--     already -- every execute-type option in this file already exercises it, once per click.
+local function selectCard(key)
   return function()
+    Rotation.select(key)
     local dialog = ns.Options and ns.Options.dialog
-    if not dialog then return end
-    if dialog.SelectGroup then dialog:SelectGroup("Elmira", "rotation", key) end
-    if dialog.Open then dialog:Open("Elmira") end
+    if dialog and dialog.Open then dialog:Open("Elmira") end
   end
 end
 
@@ -2276,10 +2304,12 @@ end
 -- `link` into the button slot `use` would have used, which a plain array would have done silently.
 -- PA4: "open" is kept as a keyed action (same `func` as always) even though the card no longer
 -- draws a button for it -- CardWidget.lua wires it to the card BODY's own click instead.
-local function templateCard(row, order)
+local function templateCard(row, order, selectedBuild)
   local shortName, restOfName = splitPlaystyle(row.playstyle)
   local title = mutedIfUnavailable(row, shortName)
-  local actions = { open = { name = L["Open"], func = navigateTo(row.build) } }
+  -- PD1-D2: the card body SELECTS the rotation for the shared detail area now, rather than
+  -- navigating to a separate page.
+  local actions = { open = { name = L["Open"], func = selectCard(row.build) } }
 
   local use = useButtonArgs(1, row.build, row.active, row.checks, unavailableReason(row))
   if use then
@@ -2312,7 +2342,38 @@ local function templateCard(row, order)
       title = title, summary = row.summary or "",
       difficultyLevel = DIFFICULTY_PIPS[row.difficulty], difficultyLabel = difficultyLabel(row.difficulty),
       meta = meta, active = row.active == true, unavailable = not row.available,
+      -- PD1-D5: the persistent-brightening state, orthogonal to active/unavailable (a card can be
+      -- both selected and in use at once).
+      selected = row.build == selectedBuild,
       tooltip = cardTooltip(row, restOfName), actions = actions,
+    },
+  }
+end
+
+-- PD1-D4: "Your rotations" -- one ElmiraCard per fork (`Rotation.forkRows()`), the SAME widget and
+-- width as a template card, three across. No difficulty pips (forks carry no catalog difficulty) and
+-- no `link` action -- a fork has no source URL of its own, and `applyButton` (CardWidget.lua) already
+-- skips a missing action rather than shifting the slot beside it.
+local function forkCard(row, order, selectedBuild)
+  local actions = { open = { name = L["Open"], func = selectCard(row.build) } }
+  local use = useButtonArgs(1, row.build, row.active, {})
+  if use then
+    actions.use = { name = use.name, desc = use.desc,
+                    func = use.confirm and confirmThen(use.confirmText or use.name, use.func) or use.func }
+  end
+  -- The same "copied from X"/"yours" line the fork's own page header shows (`forkHeaderArgs`).
+  local summary = row.derivedFrom
+    and string.format(L["copied from %s"], Rotation.displayName(row.derivedFrom)) or L["yours"]
+  local bits = {}
+  if row.private then bits[#bits + 1] = L["Private"] end
+  local meta = ns.Colors.wrap(ns.Colors.MUTED, table.concat(bits, " · "))
+  return {
+    type = "description", order = order, width = "relative", relWidth = 0.32,
+    dialogControl = "ElmiraCard", fontSize = "medium",
+    name = row.name .. "\n" .. summary,
+    arg = {
+      title = row.name, summary = summary, meta = meta,
+      active = row.active == true, selected = row.build == selectedBuild, actions = actions,
     },
   }
 end
@@ -2502,10 +2563,10 @@ local function forkHeaderArgs(row)
   return { type = "group", inline = true, order = 1, name = "", args = args }
 end
 
--- D36: the fork itself as a tree node/page. `order` is a caller-assigned position so a template's
--- own forks sort after that template's other content and a no-template fork sorts after every
--- template on the root page (D30's ordering rule).
-local function forkPageGroup(row, order)
+-- PD1-D3: a fork's own content -- header, private toggle, the stale-parent diff, its lines and the
+-- Edit button -- shared between its own tree page (`forkPageGroup`, below) and the shared detail area
+-- on the root page (`detailArgs`), which reuses this rather than growing a second copy of it.
+local function forkBodyArgs(row)
   local args = {}
   args.header = forkHeaderArgs(row)
 
@@ -2558,13 +2619,21 @@ local function forkPageGroup(row, order)
         ns.Options.dialog:SelectGroup("Elmira", "rotation", "builder")
       end
     end }
-  return { type = "group", order = order, name = row.name, args = args }
+  return args
 end
 
--- D33: the template itself as a tree node/page, with its own forks nested inside `args` -- which is
--- what makes them a nested tree node rather than a second thing on this page (see the header note
--- above this section).
-local function templatePageGroup(row, order, forksHere)
+-- D36: the fork itself as a tree node/page. `order` is a caller-assigned position so a template's
+-- own forks sort after that template's other content and a no-template fork sorts after every
+-- template on the root page (D30's ordering rule).
+local function forkPageGroup(row, order)
+  return { type = "group", order = order, name = row.name, args = forkBodyArgs(row) }
+end
+
+-- PD1-D3: a template's own content -- header, explanation, needs and lines -- shared between its own
+-- tree page (`templatePageGroup`, its forks nested inside) and the shared detail area on the root
+-- page (`detailArgs`, which nests no forks of its own -- the root page already has its own "Your
+-- rotations" cards for those).
+local function templateBodyArgs(row)
   local args = {}
   args.header = templateHeaderArgs(row)
   args.about = templateExplainArgs(row, 2)
@@ -2572,10 +2641,41 @@ local function templatePageGroup(row, order, forksHere)
                  args = needsArgs(row) }
   args.lines = { type = "group", inline = true, order = 4, name = L["Rotation, top to bottom"],
                  args = lineRowsArgs(row.build) }
+  return args
+end
+
+-- D33: the template itself as a tree node/page, with its own forks nested inside `args` -- which is
+-- what makes them a nested tree node rather than a second thing on this page (see the header note
+-- above this section).
+local function templatePageGroup(row, order, forksHere)
+  local args = templateBodyArgs(row)
   for i, forkRow in ipairs(forksHere) do
     args[forkRow.build] = forkPageGroup(forkRow, 1000 + i)
   end
   return { type = "group", order = order, name = templateLabel(row), args = args }
+end
+
+-- PD1-D3: the shared detail area -- whichever card was last clicked (`Rotation.select`), the active
+-- rotation, or the first template (`Rotation.selected()`'s own fallback order). REUSES
+-- `templateBodyArgs`/`forkBodyArgs`, the SAME builders the tree's own sub-pages call above, rather
+-- than a second copy of them. Returns nil when `key` names neither a template nor a fork row -- in
+-- particular when `key` is nil (`Rotation.selected()` itself answered nil, a class with no shipped
+-- pack and no forks), since a row's own `build` is never nil, so neither loop below ever matches
+-- one -- letting the caller omit `args.detail` entirely rather than render an empty box.
+local function detailArgs(key)
+  for _, row in ipairs(Rotation.templateRows()) do
+    if row.build == key then
+      return { type = "group", inline = true,
+               name = nameWithBadge(Rotation.displayName(key), row.active), args = templateBodyArgs(row) }
+    end
+  end
+  for _, row in ipairs(Rotation.forkRows()) do
+    if row.build == key then
+      return { type = "group", inline = true,
+               name = nameWithBadge(Rotation.displayName(key), row.active), args = forkBodyArgs(row) }
+    end
+  end
+  return nil -- mutants: equivalent Lua returns nil implicitly at the end of a function
 end
 
 -- D30: the tree's own args -- intro/detection/New rotation, the root page's inline cards, then the
@@ -2594,12 +2694,18 @@ local function rotationTreeArgs()
     func = function() Rotation.openNewRotationPopup() end }
 
   local rows = Rotation.templateRows()
+  local forkRowsAll = Rotation.forkRows()
   local byParent = {}
-  for _, forkRow in ipairs(Rotation.forkRows()) do
+  for _, forkRow in ipairs(forkRowsAll) do
     local parent = Rotation.rootParent(forkRow.build) or ""
     byParent[parent] = byParent[parent] or {}
     byParent[parent][#byParent[parent] + 1] = forkRow
   end
+  -- PD1-D1/D3/D4: the shared detail area and the "Your rotations" cards both need to know which
+  -- card is currently selected -- computed once here, rather than once per card, though
+  -- `Rotation.selected()` is a standalone public function any future caller may also reach for on
+  -- its own.
+  local selectedBuild = Rotation.selected()
 
   -- The pack's own `class`, not `detection.class`: this line names what the CATALOG is for, and a
   -- class with a data pack but no readable detection (Adapter/Detect not wired, or a spec that
@@ -2623,7 +2729,7 @@ local function rotationTreeArgs()
                          or string.format(L["Playstyles for %s"], className)
     local cardArgs = {}
     for i, row in ipairs(rows) do
-      cardArgs["card" .. i] = templateCard(row, i)
+      cardArgs["card" .. i] = templateCard(row, i, selectedBuild)
     end
     -- PA11: a titled, bounded region for the cards, rather than a loose description line above them.
     -- AceConfigDialog feeds an inline group's own `content` through the same "Flow" layout as a root
@@ -2633,6 +2739,29 @@ local function rotationTreeArgs()
     -- (AceGUIContainer-InlineGroup.lua:31-33).
     a = a + 1
     args.playstyles = { type = "group", inline = true, order = a, name = header, args = cardArgs }
+  end
+
+  -- PD1-D4: "Your rotations" -- one card per fork, immediately after the playstyle cards. Omitted
+  -- entirely when there are none, not rendered as an empty box (the `newRotation` execute above is
+  -- already the discovery path for a class with nothing to show here yet).
+  if #forkRowsAll > 0 then
+    local forkCardArgs = {}
+    for i, forkRow in ipairs(forkRowsAll) do
+      forkCardArgs["card" .. i] = forkCard(forkRow, i, selectedBuild)
+    end
+    a = a + 1
+    args.yourRotations = { type = "group", inline = true, order = a, name = L["Your rotations"],
+                            args = forkCardArgs }
+  end
+
+  -- PD1-D3: the shared detail area, below every card grid, above Builder -- omitted entirely when
+  -- `Rotation.selected()` answers nil (a class with no shipped pack and no forks; `args.noPack`
+  -- above already speaks to that case).
+  local detail = detailArgs(selectedBuild)
+  if detail then
+    a = a + 1
+    detail.order = a
+    args.detail = detail
   end
 
   for i, row in ipairs(rows) do

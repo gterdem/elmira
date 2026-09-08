@@ -248,6 +248,11 @@ local function applyData(self, data)
   -- instead of a title badge: gold for the rotation in use, dimmed for one that cannot run yet,
   -- normal otherwise.
   local border, fill = stateColors(data)
+  -- PD1-D5: selection is a THIRD, orthogonal state (a card can be both selected and in use) -- shown
+  -- as the PERSISTENT form of the existing hover brightening rather than a new colour that would have
+  -- to avoid colliding with the gold "in use" border. `brighten` is exactly what `OnEnter` below
+  -- applies on hover, over whichever base this same branch just picked.
+  if data.selected then border = brighten(border) end
   self.baseBorder = border
   self.frame:SetBackdropBorderColor(border[1], border[2], border[3])
   self.frame:SetBackdropColor(fill[1], fill[2], fill[3], fill[4])

@@ -600,6 +600,31 @@ describe("Elmira/Options/CardWidget.lua (W1, the card widget)", function()
       -- brightened (0.4 + 0.25 = 0.65), which is also well below 1.0.
       assert.equal(0.22 + 0.25, card.frame.backdropBorderColor[1])
     end)
+
+    -- PD1-D5: a card can be SELECTED (last clicked, PD1-D2) without a mouse anywhere near it -- shown
+    -- as the persistent form of the same brightening hover already applies, so it never invents a
+    -- fourth colour or collides with the gold "in use" border above.
+    it("brightens a selected card even with no hover, matching the hover value", function()
+      local unselected = newCard()
+      unselected:SetCustomData({ title = "T", selected = false })
+      local card = newCard()
+      card:SetCustomData({ title = "T", selected = true })
+      assert.are_not.same(unselected.frame.backdropBorderColor, card.frame.backdropBorderColor)
+      for i = 1, 3 do
+        assert.equal(unselected.frame.backdropBorderColor[i] + 0.25, card.frame.backdropBorderColor[i])
+      end
+    end)
+
+    it("still shows the gold border on a selected card that is also in use", function()
+      local card = newCard()
+      card:SetCustomData({ title = "T", active = true, selected = true })
+      local color = card.frame.backdropBorderColor
+      -- brighten({1.0, 0.83, 0.48}) -- still recognisably gold (red and green pinned at the 1.0 cap,
+      -- blue lifted), never the normal or dimmed hue.
+      assert.equal(1, color[1])
+      assert.equal(1, color[2])
+      assert.equal(0.48 + 0.25, color[3])
+    end)
   end)
 
   describe("PA4: the card body is the Open action", function()

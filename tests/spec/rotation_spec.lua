@@ -4022,6 +4022,18 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_falsy(card.arg.active)
     end)
 
+    -- PD1-D5: `selected` is orthogonal to `active` -- the card widget's own persistent-brightening
+    -- state (CardWidget.lua), never the gold "in use" border `active` already carries.
+    it("flags the card last clicked as selected, and no other", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+      Rotation.select("PALADIN_SHOCKADIN")
+      local c = cards()
+      assert.is_falsy(c.card1.arg.selected)
+      assert.is_true(c.card2.arg.selected)
+    end)
+
     -- The Label CreateControl falls back to when a `dialogControl` never registered
     -- (AceConfigDialog-3.0.lua:1093-1104, W1d) reads the option's own `name` -- so an install
     -- missing Options/CardWidget.lua must still show something readable, not an empty line.
@@ -4035,14 +4047,19 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_truthy(card.name:find("Fast 2H.", 1, true))
       end)
 
-    -- Clicking Open navigates to the template's own page (D32).
-    it("navigates to the template's own page when its Open action runs", function()
+    -- PD1-D2 (2026-09-08): clicking Open used to navigate to the template's own page (D32) --
+    -- it now SELECTS the rotation for the shared detail area instead, and never navigates at all.
+    -- The tree page itself still exists this pass (PD2 deletes it later); the card body just no
+    -- longer opens it.
+    it("selects the rotation for the shared detail area, and never calls SelectGroup", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
-      local selected
-      ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
+      local selectGroupCalls = 0
+      ns.Options = { dialog = { SelectGroup = function() selectGroupCalls = selectGroupCalls + 1 end,
+                                 Open = function() end } }
       cards().card1.arg.actions.open.func()
-      assert.same({ "Elmira", "rotation", "PALADIN_EXODIN" }, selected)
+      assert.equal("PALADIN_EXODIN", Rotation.selected())
+      assert.equal(0, selectGroupCalls)
     end)
 
     -- PB5 (2026-09-08): `SelectGroup` alone only schedules a DEFERRED rebuild, which is why a card
@@ -4828,6 +4845,254 @@ describe("Options/Rotation (the Rotation section)", function()
     end)
   end)
 
+  -- PD1-D1: which card's detail is showing -- transient UI state, never `db.profile`.
+  describe("Rotation.select()/Rotation.selected() (PD1-D1)", function()
+    it("returns the active key before anything has been clicked", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      ns.Display.activeBuild = function() return {}, "PALADIN_EXODIN", nil end
+      assert.equal("PALADIN_EXODIN", Rotation.selected())
+    end)
+
+    it("returns the clicked key after Rotation.select", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+      ns.Display.activeBuild = function() return {}, "PALADIN_EXODIN", nil end
+      assert.is_true(Rotation.select("PALADIN_SHOCKADIN"))
+      assert.equal("PALADIN_SHOCKADIN", Rotation.selected())
+    end)
+
+    -- Distinct from `templates[1]` on purpose: a mutant deleting either the read of `activeKey()`
+    -- or the branch that returns it would still pass every OTHER test here, since those all leave
+    -- the active rotation as the first (or only) template listed.
+    it("returns the active key even when it is not the first template listed", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+      ns.Display.activeBuild = function() return {}, "PALADIN_SHOCKADIN", nil end
+      assert.equal("PALADIN_SHOCKADIN", Rotation.selected())
+    end)
+
+    -- The args table is rebuilt from scratch on every `Rotation.notifyChange()`
+    -- (`Rotation.group()` is exactly that rebuild) -- the selection has to live somewhere that
+    -- survives it, which is the whole reason it is a module upvalue and not part of the args.
+    it("keeps the selection across a rebuild of the whole args table", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+      ns.Display.activeBuild = function() return {}, "PALADIN_EXODIN", nil end
+      Rotation.select("PALADIN_SHOCKADIN")
+      Rotation.group()
+      assert.equal("PALADIN_SHOCKADIN", Rotation.selected())
+    end)
+
+    it("falls back to the first template when nothing is active and nothing is selected", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+      ns.Display.activeBuild = function() return nil, nil end
+      assert.equal("PALADIN_EXODIN", Rotation.selected())
+    end)
+
+    it("answers nil for a class with no templates and no forks", function()
+      installWizard{}
+      ns.Display.activeBuild = function() return nil, nil end
+      assert.is_nil(Rotation.selected())
+    end)
+
+    -- The removed row can be the SELECTED one without being the ACTIVE one -- the fallback chain
+    -- must still land on the rotation actually running, not on nil.
+    it("falls back to the active key once the selected fork is removed", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      ns.Display.activeBuild = function() return {}, "PALADIN_EXODIN", nil end
+      local removed = false
+      installUserBuilds{
+        list = function() return removed and {} or { "USER_MINE" } end,
+        find = function(pk, key)
+          if key == "USER_MINE" and not removed then
+            return { entries = {} }, "fork", { name = "Mine" }
+          end
+          if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
+        end,
+        remove = function() removed = true; return true end,
+      }
+      Rotation.select("USER_MINE")
+      assert.equal("USER_MINE", Rotation.selected())
+      Rotation.remove("USER_MINE")
+      assert.equal("PALADIN_EXODIN", Rotation.selected())
+    end)
+  end)
+
+  -- PD1-D3: one shared detail area, below the card grid(s), reusing the SAME arg builders the tree's
+  -- own sub-pages call (`templateBodyArgs`/`forkBodyArgs`), never a second copy of them.
+  describe("the shared detail area (PD1-D3)", function()
+    it("shows the selected template's own header/about/needs/lines", function()
+      installPack()
+      -- `Rotation.displayName` (what the group's own name is built from) falls back to the raw
+      -- key with no `UserBuilds` loaded at all -- installed here (with no overrides) so it takes
+      -- the real catalog-lookup path instead, the same way every other caller of it gets a name.
+      installUserBuilds{}
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true,
+                       summary = "Fast 2H." } }
+      ns.Display.activeBuild = function() return {}, "PALADIN_EXODIN", nil end
+      local detail = Rotation.group().args.detail
+      assert.equal("group", detail.type)
+      assert.is_true(detail.inline)
+      assert.is_truthy(detail.name:find("Exodin", 1, true))
+      assert.is_truthy(detail.name:find("in use", 1, true))
+      assert.equal("Fast 2H.", detail.args.about.args.summary.name)
+      assert.equal("What this rotation needs", detail.args.needs.name)
+      assert.equal("Rotation, top to bottom", detail.args.lines.name)
+    end)
+
+    it("shows the selected fork's own header/private toggle/edit button once a fork is selected",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        installUserBuilds{
+          list = function() return { "USER_MINE" } end,
+          find = function(pk, key)
+            if key == "USER_MINE" then
+              return { entries = {} }, "fork", { name = "My Exodin", derivedFrom = "PALADIN_EXODIN" }
+            end
+            if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
+          end,
+        }
+        Rotation.select("USER_MINE")
+        local detail = Rotation.group().args.detail
+        assert.is_truthy(detail.name:find("My Exodin", 1, true))
+        assert.equal("toggle", detail.args.private.type)
+        assert.equal("execute", detail.args.edit.type)
+        assert.is_nil(detail.args.about, "a fork's detail must not show the template page's own about block")
+      end)
+
+    it("is absent entirely when nothing is selectable at all", function()
+      installWizard{}
+      ns.Display.activeBuild = function() return nil, nil end
+      assert.is_nil(Rotation.group().args.detail)
+    end)
+
+    it("sorts between the playstyle cards and the Builder", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      ns.Display.activeBuild = function() return {}, "PALADIN_EXODIN", nil end
+      local args = Rotation.group().args
+      assert.is_true(args.detail.order > args.playstyles.order)
+      assert.is_true(args.detail.order < args.builder.order)
+    end)
+  end)
+
+  -- PD1-D4: one ElmiraCard per fork, on the same root page as the playstyle cards.
+  describe("\"Your rotations\" cards (PD1-D4)", function()
+    local function group() return Rotation.group().args.yourRotations end
+
+    it("is omitted entirely when there are no forks", function()
+      installPack()
+      installUserBuilds{ list = function() return {} end }
+      assert.is_nil(group())
+    end)
+
+    it("shows one card per fork, the same widget and width as a playstyle card", function()
+      installPack()
+      installUserBuilds{
+        list = function() return { "USER_MINE" } end,
+        find = function() return {}, "fork", { name = "My Exodin", derivedFrom = "PALADIN_EXODIN" } end,
+      }
+      local g = group()
+      assert.equal("group", g.type)
+      assert.is_true(g.inline)
+      assert.equal("Your rotations", g.name)
+      local card = g.args.card1
+      assert.equal("ElmiraCard", card.dialogControl)
+      assert.equal("relative", card.width)
+      assert.equal(0.32, card.relWidth)
+      assert.equal("My Exodin", card.arg.title)
+    end)
+
+    it("shows the copied-from line as the summary", function()
+      installPack()
+      installUserBuilds{
+        list = function() return { "USER_MINE" } end,
+        find = function() return {}, "fork", { name = "My Exodin", derivedFrom = "PALADIN_EXODIN" } end,
+      }
+      assert.is_truthy(group().args.card1.arg.summary:find("Exodin", 1, true))
+    end)
+
+    it("says \"yours\" for a fork with no template", function()
+      installPack()
+      installUserBuilds{ list = function() return { "USER_SCRATCH" } end,
+                          find = function() return {}, "fork", { name = "Scratch" } end }
+      assert.equal("yours", group().args.card1.arg.summary)
+    end)
+
+    it("marks a private fork on the meta line", function()
+      installPack()
+      installUserBuilds{
+        list = function() return { "USER_SCRATCH" } end,
+        find = function() return {}, "fork", { name = "Scratch", private = true } end,
+      }
+      assert.is_truthy(group().args.card1.arg.meta:find("Private", 1, true))
+    end)
+
+    it("carries no meta text for a fork that is not private", function()
+      installPack()
+      installUserBuilds{ list = function() return { "USER_SCRATCH" } end,
+                          find = function() return {}, "fork", { name = "Scratch" } end }
+      assert.is_falsy(group().args.card1.arg.meta:find("Private", 1, true))
+    end)
+
+    it("flags the running fork active, and offers Use on the others", function()
+      installPack()
+      ns.Display.activeBuild = function() return {}, "USER_MINE", nil end
+      installUserBuilds{
+        list = function() return { "USER_MINE", "USER_OTHER" } end,
+        find = function(_, key) return {}, "fork", { name = key } end,
+      }
+      local args = group().args
+      assert.is_true(args.card1.arg.active)
+      assert.is_nil(args.card1.arg.actions.use)
+      assert.is_falsy(args.card2.arg.active)
+      assert.equal("Use", args.card2.arg.actions.use.name)
+    end)
+
+    it("has no Copy link action -- a fork carries no source of its own", function()
+      installPack()
+      installUserBuilds{ list = function() return { "USER_SCRATCH" } end,
+                          find = function() return {}, "fork", { name = "Scratch" } end }
+      assert.is_nil(group().args.card1.arg.actions.link)
+    end)
+
+    it("selects rather than navigates when the card body is clicked, same as a playstyle card",
+      function()
+        installPack()
+        installUserBuilds{ list = function() return { "USER_SCRATCH" } end,
+                            find = function() return {}, "fork", { name = "Scratch" } end }
+        local selectGroupCalls = 0
+        ns.Options = { dialog = { SelectGroup = function() selectGroupCalls = selectGroupCalls + 1 end,
+                                   Open = function() end } }
+        group().args.card1.arg.actions.open.func()
+        assert.equal("USER_SCRATCH", Rotation.selected())
+        assert.equal(0, selectGroupCalls)
+      end)
+
+    -- `UserBuilds.list`/`.find` are the REAL Core/UserBuilds functions here, not faked -- proving
+    -- the card section actually inherits `visible()`'s own class/private filtering rather than
+    -- assuming `forkRows()` already does.
+    it("never shows a card for a fork private to another character", function()
+      installPack()
+      ns.db = { global = { userBuilds = {
+        USER_MINE = { build = { entries = {} }, class = "PALADIN" },
+        USER_OTHER = { build = { entries = {} }, class = "PALADIN", private = true,
+                       owner = "SomeoneElse - Realm" },
+      } }, keys = { class = "PALADIN", char = "Arthorion - Realm" }, profile = { activeBuild = false } }
+      ns.UserBuilds = realUserBuilds
+      local args = group().args
+      assert.is_table(args.card1)
+      assert.is_nil(args.card2)
+    end)
+  end)
 
   -- D47: the answer itself moved to Core/UserBuilds (Display announces a build change and may not
   -- reach into Options for the words). What is left here is the delegation and its one guard, so

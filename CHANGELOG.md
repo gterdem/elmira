@@ -1,5 +1,9 @@
 # Changelog
 ## Unreleased
+- **Changed: clicking a playstyle card on the Rotations page now opens its detail in a section below
+  the cards, instead of a separate page in the menu.** Your own rotations now also appear as their
+  own row of cards on the same page, next to the shipped playstyles, so you can jump straight to one
+  without going through a template first.
 - **Fixed: a rotation line could be wrongly marked red ("a logic error to fix") for a seal condition
   written as "not" or as one option of several ("any").** Both are working conditions — a negated
   seal check is often meant to always be true when nothing casts that seal, and an "any" branch can
