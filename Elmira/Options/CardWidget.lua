@@ -248,13 +248,15 @@ local function applyData(self, data)
   -- instead of a title badge: gold for the rotation in use, dimmed for one that cannot run yet,
   -- normal otherwise.
   local border, fill = stateColors(data)
-  -- PD1-D5: selection is a THIRD, orthogonal state (a card can be both selected and in use) -- shown
-  -- as the PERSISTENT form of the existing hover brightening rather than a new colour that would have
-  -- to avoid colliding with the gold "in use" border. `brighten` is exactly what `OnEnter` below
-  -- applies on hover, over whichever base this same branch just picked.
-  if data.selected then border = brighten(border) end
+  -- PD1b-D1: `self.baseBorder` stays the UNSELECTED base always -- `OnEnter` below brightens FROM it,
+  -- so hovering a selected card brightens the same starting point hovering an unselected card does,
+  -- once, instead of brightening an already-brightened `self.baseBorder` (PD1-D5's bug: a selected
+  -- card read 0.9 where an unselected one's hover read 0.65). `self.selected` records which RESTING
+  -- border to draw now and which one `OnLeave` should return to.
   self.baseBorder = border
-  self.frame:SetBackdropBorderColor(border[1], border[2], border[3])
+  self.selected = data.selected or false
+  local resting = self.selected and brighten(border) or border
+  self.frame:SetBackdropBorderColor(resting[1], resting[2], resting[3])
   self.frame:SetBackdropColor(fill[1], fill[2], fill[3], fill[4])
 
   -- PA5/PA8: the full playstyle text and the exact "updated" date live in the mouseover tooltip
@@ -416,7 +418,10 @@ local function Constructor()
   end)
   frame:SetScript("OnLeave", function(f)
     local self = f.obj
-    local border = self.baseBorder or BORDER_NORMAL
+    local base = self.baseBorder or BORDER_NORMAL
+    -- PD1b-D1: leaving a SELECTED card must not visually deselect it -- return to the brightened
+    -- (selected) resting border, not to the plain unselected base.
+    local border = self.selected and brighten(base) or base
     f:SetBackdropBorderColor(border[1], border[2], border[3])
     hideTooltip()
   end)

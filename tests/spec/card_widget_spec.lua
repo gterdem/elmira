@@ -625,6 +625,90 @@ describe("Elmira/Options/CardWidget.lua (W1, the card widget)", function()
       assert.equal(1, color[2])
       assert.equal(0.48 + 0.25, color[3])
     end)
+
+    -- PD1b-D1 (the hover glitch this fix closes): PD1-D5 stored an ALREADY-brightened value in
+    -- `self.baseBorder` for a selected card, so `OnEnter`'s own `brighten(self.baseBorder)` brightened
+    -- it a SECOND time -- a selected card read 0.9 on hover where an unselected card's hover read
+    -- 0.65. The full required matrix: {unselected, selected} x {unhovered, hovered} x {normal, gold
+    -- BORDER_ACTIVE, dim BORDER_DIM}, asserted as rendered colour VALUES -- the one combination
+    -- (selected + hovered) no earlier spec in this file ever exercised.
+    describe("hover always brightens from the UNSELECTED base, exactly once, in every state", function()
+      local function makeCard(extra)
+        local data = { title = "T" }
+        for k, v in pairs(extra) do data[k] = v end
+        local card = newCard()
+        card:SetCustomData(data)
+        return card
+      end
+
+      it("normal base", function()
+        local unselected = makeCard({})
+        assert.same({ 0.4, 0.4, 0.4 }, unselected.frame.backdropBorderColor)
+
+        unselected.frame:Enter()
+        local unselectedHovered = { unpack(unselected.frame.backdropBorderColor) }
+        assert.equal(0.4 + 0.25, unselectedHovered[1])
+        unselected.frame:Leave()
+        assert.same({ 0.4, 0.4, 0.4 }, unselected.frame.backdropBorderColor)
+
+        local selected = makeCard({ selected = true })
+        assert.equal(0.4 + 0.25, selected.frame.backdropBorderColor[1])
+        assert.same(unselectedHovered, selected.frame.backdropBorderColor)
+
+        selected.frame:Enter()
+        assert.equal(0.4 + 0.25, selected.frame.backdropBorderColor[1],
+          "hovering an already-selected card must not brighten it a second time")
+
+        selected.frame:Leave()
+        assert.equal(0.4 + 0.25, selected.frame.backdropBorderColor[1],
+          "leaving a selected card must not visually deselect it")
+      end)
+
+      it("gold BORDER_ACTIVE base (in use)", function()
+        local unselected = makeCard({ active = true })
+        assert.same({ 1.0, 0.83, 0.48 }, unselected.frame.backdropBorderColor)
+
+        unselected.frame:Enter()
+        local unselectedHovered = { unpack(unselected.frame.backdropBorderColor) }
+        assert.same({ 1, 1, 0.48 + 0.25 }, unselectedHovered)
+        unselected.frame:Leave()
+        assert.same({ 1.0, 0.83, 0.48 }, unselected.frame.backdropBorderColor)
+
+        local selected = makeCard({ active = true, selected = true })
+        assert.same({ 1, 1, 0.48 + 0.25 }, selected.frame.backdropBorderColor)
+        assert.same(unselectedHovered, selected.frame.backdropBorderColor)
+
+        selected.frame:Enter()
+        assert.same({ 1, 1, 0.48 + 0.25 }, selected.frame.backdropBorderColor,
+          "hovering an already-selected in-use card must not brighten it a second time")
+
+        selected.frame:Leave()
+        assert.same({ 1, 1, 0.48 + 0.25 }, selected.frame.backdropBorderColor)
+      end)
+
+      it("dim BORDER_DIM base (unavailable)", function()
+        local unselected = makeCard({ unavailable = true })
+        assert.same({ 0.22, 0.22, 0.22 }, unselected.frame.backdropBorderColor)
+
+        unselected.frame:Enter()
+        local unselectedHovered = { unpack(unselected.frame.backdropBorderColor) }
+        assert.equal(0.22 + 0.25, unselectedHovered[1])
+        unselected.frame:Leave()
+        assert.same({ 0.22, 0.22, 0.22 }, unselected.frame.backdropBorderColor)
+
+        local selected = makeCard({ unavailable = true, selected = true })
+        assert.equal(0.22 + 0.25, selected.frame.backdropBorderColor[1])
+        assert.same(unselectedHovered, selected.frame.backdropBorderColor)
+
+        selected.frame:Enter()
+        assert.equal(0.22 + 0.25, selected.frame.backdropBorderColor[1],
+          "hovering an already-selected unavailable card must not brighten it a second time")
+
+        selected.frame:Leave()
+        assert.equal(0.22 + 0.25, selected.frame.backdropBorderColor[1],
+          "leaving a selected card must not visually deselect it")
+      end)
+    end)
   end)
 
   describe("PA4: the card body is the Open action", function()
@@ -893,7 +977,7 @@ describe("Elmira/Options/CardWidget.lua (W1, the card widget)", function()
       local card = newCard()
       card:SetCustomData({
         title = "Exodin", summary = "Fast 2H.", difficultyLevel = 1, difficultyLabel = "Easy",
-        meta = "meta", active = true, tooltip = "full text",
+        meta = "meta", active = true, selected = true, tooltip = "full text",
         actions = {
           open = { name = "Open", func = function() end },
           use = { name = "Use", func = function() end },
@@ -916,6 +1000,13 @@ describe("Elmira/Options/CardWidget.lua (W1, the card widget)", function()
       assert.same({ 0.4, 0.4, 0.4 }, card.frame.backdropBorderColor)
       assert.is_nil(card.onClick)
       assert.is_nil(card.tooltipText)
+      -- PD1b-D1: `self.selected` is a field this fix adds -- a pooled card that kept reading as
+      -- selected would return the WRONG (brightened) border to `OnLeave` for whichever addon's page
+      -- acquires it next, even though `applyData(self, nil)` already reset the visible backdrop above.
+      card.frame:Enter()
+      card.frame:Leave()
+      assert.same({ 0.4, 0.4, 0.4 }, card.frame.backdropBorderColor,
+        "a released card must not still read as selected on the next hover/leave")
       -- Every button slot dropped its OWN reference too, not just the pool's -- a card holding on to
       -- an already-released button object is exactly the shape of stale reference this test exists
       -- to catch.
