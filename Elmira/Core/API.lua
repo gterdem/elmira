@@ -26,7 +26,7 @@ ns.registry = registry
 -- `false, reason` — it never errors. This is what lets a class pack fail closed instead of taking
 -- the whole addon down (hard rule 9: modules only via Elmira.API).
 local function fail(label, reason)
-  ns.log("Elmira: rejected %s registration (%s)", label, reason)
+  ns.log("rejected %s registration (%s)", label, reason)
   return false, reason
 end
 

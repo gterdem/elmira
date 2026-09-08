@@ -353,6 +353,17 @@ describe("Display.Driver", function()
         "the pack's own spells must still resolve")
     end)
 
+    -- I1c: the spellbook picker (Options/Spells.lua) has no registry key for an entry that has not
+    -- been added yet, only the raw spell id `spellbookEntries()` carries -- this is that lookup.
+    it("resolves an icon by raw spell id, for a spell not yet in any registry", function()
+      _G.GetSpellTexture = function(id) return id == 900 and "Interface\\Icons\\Ability_Rogue_SliceDice" or nil end
+      assert.equal("Interface\\Icons\\Ability_Rogue_SliceDice", Display.spellIconByID(900))
+      assert.is_nil(Display.spellIconByID(901), "an id the client cannot resolve has no icon")
+      assert.is_nil(Display.spellIconByID(nil), "no id, no crash")
+      _G.GetSpellTexture = nil
+      assert.is_nil(Display.spellIconByID(900), "no adapter capability, no icon")
+    end)
+
     -- Slot-based, not item-based: a build entry binds to the SLOT (`entry.item = 13`), so the
     -- Builder's item palette has to read the icon from the slot too.
     it("reads an item icon out of the inventory slot, and copes when it cannot", function()

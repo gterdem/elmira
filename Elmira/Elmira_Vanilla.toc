@@ -67,6 +67,10 @@ Setup\Detect.lua
 Setup\Wizard.lua
 
 # Options
+# W1 (try/card-widget, 2026-09-07): a self-contained AceGUI widget, registered before Rotation.lua
+# builds any option that names it as a `dialogControl` -- though the registration itself happens at
+# file scope regardless of order, since Rotation.lua only READS the type name when a page opens.
+Options\CardWidget.lua
 Options\Rotation.lua
 # R2 (D52): before Options.lua, which reads ns.SpellsPage.group() into the top-level tree.
 Options\Spells.lua

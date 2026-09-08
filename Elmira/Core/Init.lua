@@ -173,7 +173,7 @@ function NA:OnInitialize()
         self:ScheduleTimer(function()
           local ok, err = pcall(ns.Wizard.maybeShowFirstRun)
           if not ok then
-            ns.log("Elmira: first-run popup failed (%s); everything else is unaffected.", tostring(err))
+            ns.log("first-run popup failed (%s); everything else is unaffected.", tostring(err))
           end
         end, 2)
       end
@@ -319,7 +319,7 @@ function NA:OnCombatEnd()
   -- rather than leaving the popup silently never offered for the rest of the session.
   if ns.Wizard and ns.Wizard.maybeShowFirstRun then
     local ok, err = pcall(ns.Wizard.maybeShowFirstRun)
-    if not ok then ns.log("Elmira: first-run popup failed (%s); everything else is unaffected.", tostring(err)) end
+    if not ok then ns.log("first-run popup failed (%s); everything else is unaffected.", tostring(err)) end
   end
 end
 
@@ -370,7 +370,7 @@ function NA:OnEnable()
   -- built-in pack to fall back on -- otherwise the addon is working and this is noise.
   local loaded, reason, name = ns.Adapter.loadClassPack(class)
   if not loaded and not builtin and reason and reason ~= "no-pack" then
-    ns.log("Elmira: %s claims %s but did not load (%s).", tostring(name), tostring(class), tostring(reason))
+    ns.log("%s claims %s but did not load (%s).", tostring(name), tostring(class), tostring(reason))
   end
 
   local pack = class and ns.API.GetProviders("dataPacks")[class]
@@ -378,12 +378,12 @@ function NA:OnEnable()
     -- D26 (2026-09-07 Notifications pass): a warning, not a plain print -- running with a null
     -- state is exactly the kind of thing the panel's "Problems" category exists to surface.
     local text = string.format(
-      L["Elmira: no data pack registered for %s; running with a null state."], tostring(class))
+      L["no data pack registered for %s; running with a null state."], tostring(class))
     if ns.Announce then ns.Announce.emit("warning", text) else ns.log("%s", text) end
   elseif not ns.Adapter.attachPack then
     -- Distinct from "no pack": the data arrived but the adapter is too old to take it. Reporting
     -- both as "no data pack" would send the next reader hunting the wrong problem.
-    ns.log("Elmira: adapter cannot accept a data pack (no attachPack); running with a null state.")
+    ns.log("adapter cannot accept a data pack (no attachPack); running with a null state.")
   else
     ns.Adapter.attachPack(pack)
   end
@@ -453,7 +453,7 @@ function NA:StartDisplay()
   -- character, which is the worst possible combination for an unguarded call.
   if ns.Wizard then
     local ok, err = pcall(ns.Wizard.OfferOnLogin)
-    if not ok then ns.log("Elmira: setup offer failed (%s); everything else is unaffected.", tostring(err)) end
+    if not ok then ns.log("setup offer failed (%s); everything else is unaffected.", tostring(err)) end
   end
 end
 

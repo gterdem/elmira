@@ -1111,7 +1111,7 @@ local function chainClose(dialog)
     if ns.Announcers then
       local ok, err = pcall(ns.Announcers.StopMoving)
       if not ok then
-        ns.log("Elmira: could not leave move mode when the panel closed: %s", tostring(err))
+        ns.log("could not leave move mode when the panel closed: %s", tostring(err))
       end
     end
     -- Where and how big it was left. Same pcall discipline, and for the same reason: the dialog's
@@ -1122,7 +1122,7 @@ local function chainClose(dialog)
       -- D45 (2026-09-07 R1b): the D26 conversions this pass re-homes -- a status line, not a plain
       -- print, once Announce is loaded; falls back to the log the way they all do.
       local text = string.format(
-        L["Elmira: could not remember the options window's size: %s"], tostring(savedErr))
+        L["could not remember the options window's size: %s"], tostring(savedErr))
       if ns.Announce then ns.Announce.emit("status", text) else ns.log("%s", text) end
     end
     -- BEFORE prior(): prior is AceConfigDialog's own FrameOnClose, which releases this widget back
@@ -1130,7 +1130,7 @@ local function chainClose(dialog)
     -- is still ours to put back the way we found it.
     local undecOK, undecErr = pcall(Options.Undecorate, widget)
     if not undecOK then
-      ns.log("Elmira: could not undo the options window's chrome: %s", tostring(undecErr))
+      ns.log("could not undo the options window's chrome: %s", tostring(undecErr))
     end
     if prior then return prior(widget, event, ...) end
   end
@@ -1294,7 +1294,7 @@ function Options.table()
               if v and ns.Announcers then
                 local ok, err = pcall(ns.Announcers.StopMoving)
                 if not ok then
-                  ns.log("Elmira: could not leave move mode when positions were locked: %s", tostring(err))
+                  ns.log("could not leave move mode when positions were locked: %s", tostring(err))
                 end
               end
             end,
@@ -1326,7 +1326,8 @@ function Options.table()
       -- it is named for what it scales now that the window has one of its own, because two sliders
       -- both labelled Scale on two adjacent pages is a settings screen guessing game.
       queue = {
-        type = "group", order = 1.5, name = L["Queue"], inline = false,
+        -- M1a: 4 of the owner's 1-8 top-level order.
+        type = "group", order = 4, name = L["Queue"], inline = false,
         args = {
           -- Separate from `enabled` on purpose (ADR-0015 §3). Hekili players routinely watch only
           -- the glowing button; before this the only way to lose the strip was to lose the glow too.
@@ -1396,12 +1397,15 @@ function Options.table()
           },
         },
       },
+      -- M1a: 5 of the owner's 1-8 top-level order. Wording unchanged ("Action bars", not "Action
+      -- Bars") -- the owner's list capitalised it in passing, this is read as ordering feedback only.
       bars = {
-        type = "group", order = 2, name = L["Action bars"],
+        type = "group", order = 5, name = L["Action bars"],
         args = actionBarsGroup(),
       },
+      -- M1a: 6 of 8. Wording unchanged ("Glow", not "Glows") for the same reason as Action bars above.
       glow = {
-        type = "group", order = 3, name = L["Glow"],
+        type = "group", order = 6, name = L["Glow"],
         args = {
           enabled = {
             type = "toggle", order = 1, name = L["Glow the next cast"],
@@ -1518,8 +1522,9 @@ function Options.table()
       -- longer a group control to pick it from -- while Peripheral cues and Cue sounds stay exactly
       -- where they were (still reachable as their own nodes) until the Rotations overhaul gives
       -- indicators a home of their own.
+      -- M1a: 7 of 8.
       notifications = {
-        type = "group", order = 4, name = L["Notifications"],
+        type = "group", order = 7, name = L["Notifications"],
         args = (function()
           local args = announceGroup()
           args.overlay = {
@@ -1541,8 +1546,9 @@ function Options.table()
         end)(),
       },
       rotation = ns.Rotation and ns.Rotation.group() or nil,
-      -- R2 (D52): directly after Rotations, ordered 0.5 against Rotations' own 0 -- the Spells
-      -- registry is the thing a rotation or a cue draws from, so it reads as the next section over.
+      -- R2 (D52): directly after Rotations -- the Abilities registry (M1b: player-visible name;
+      -- the group key stays `spells`) is the thing a rotation or a cue draws from, so it reads as
+      -- the next section over. M1a put the two at order 2 and 3 of the owner's 1-8 top-level order.
       spells = ns.SpellsPage and ns.SpellsPage.group() or nil,
     },
   }
@@ -1629,13 +1635,17 @@ function Options.Open(...)
     -- the rest of the left menu stay on screen.
     --
     -- D61e (2026-09-07 in-game round), comment corrected at D64: `/elm config` landed on Rotations,
-    -- not General, on a FRESH status table (first open of a session) -- Rotations registers at
+    -- not General, on a FRESH status table (first open of a session) -- Rotations registered at
     -- `order = 0`, General at `order = 1`, and AceConfigDialog's tree selects the lowest-order group
-    -- when nothing has been selected yet. From the second open onward, AceConfigDialog itself
-    -- remembers and re-applies the last selected group (`status.groups.selected`,
-    -- AceConfigDialog-3.0.lua:1746), so leaving this SelectGroup out would have fixed only the first
-    -- open and then let whatever the player last clicked win from then on. Called unconditionally
-    -- instead: a caller that asks for no path at all always means General, first open or the tenth.
+    -- when nothing has been selected yet. M1a (menu-order pass) renumbered every top-level group to
+    -- 1-8 in the owner's order, so General (`order = 1`) is now the lowest by itself and this
+    -- SelectGroup is redundant on a fresh status table -- but it is kept unconditionally anyway: it
+    -- is one line, and it pins "no path means General" against whatever a future reorder does to
+    -- who happens to sort first. From the second open onward, AceConfigDialog itself remembers and
+    -- re-applies the last selected group (`status.groups.selected`, AceConfigDialog-3.0.lua:1746),
+    -- so leaving this SelectGroup out would have fixed only the first open and then let whatever the
+    -- player last clicked win from then on. Called unconditionally instead: a caller that asks for
+    -- no path at all always means General, first open or the tenth.
     if select("#", ...) > 0 then
       Options.dialog:SelectGroup("Elmira", ...)
     else

@@ -19,11 +19,11 @@ Packs.builtin = builtin
 -- as memory has to be caught at the point it is introduced or not at all.
 function Packs.RegisterBuiltinPack(class, thunk)
   if type(class) ~= "string" or class == "" then
-    ns.log("Elmira: built-in pack rejected (class must be a non-empty string)")
+    ns.log("built-in pack rejected (class must be a non-empty string)")
     return false, "class must be a non-empty string"
   end
   if type(thunk) ~= "function" then
-    ns.log("Elmira: built-in pack for %s rejected (data must be a function, got %s)", class, type(thunk))
+    ns.log("built-in pack for %s rejected (data must be a function, got %s)", class, type(thunk))
     return false, "data must be a function"
   end
   builtin[class] = thunk
@@ -37,11 +37,11 @@ function Packs.BuiltinPack(class)
   if not thunk then return nil end
   local ok, pack = pcall(thunk)
   if not ok then
-    ns.log("Elmira: built-in %s pack failed to build (%s)", tostring(class), tostring(pack))
+    ns.log("built-in %s pack failed to build (%s)", tostring(class), tostring(pack))
     return nil
   end
   if type(pack) ~= "table" then
-    ns.log("Elmira: built-in %s pack returned %s, not a table", tostring(class), type(pack))
+    ns.log("built-in %s pack returned %s, not a table", tostring(class), type(pack))
     return nil
   end
   return pack

@@ -182,7 +182,7 @@ describe("Core.Init — built-in vs external class pack (ADR-0011 §3)", functio
     -- check on "did not load" alone.
     local found = false
     for _, line in ipairs(logged) do
-      if line == "Elmira: Elmira_BrokenMage claims MAGE but did not load (DISABLED)." then found = true end
+      if line == "Elmira_BrokenMage claims MAGE but did not load (DISABLED)." then found = true end
     end
     assert.is_true(found, "expected the exact failure line among: " .. table.concat(logged, " | "))
   end)

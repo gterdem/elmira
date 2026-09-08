@@ -659,6 +659,21 @@ describe("Core.Schema (docs/02-CONDITION-SCHEMA.md, ADR-0002)", function()
       assert.is_true(#errors > 0)
     end)
 
+    -- D93/D94 (2026-09-07 in-game round): this is the developer diagnostic D26 deliberately kept as
+    -- a plain print for real load-time pack failures -- it must keep logging exactly once, with the
+    -- build's key and the problem count, and with no doubled "Elmira: " (ns.log/AceConsole's Printf
+    -- already prefixes the addon name). The Options/Rotation preview no longer reaches this path for
+    -- an in-progress draft (schema_spec pins Schema.compile itself; rotation_spec pins the preview).
+    it("still logs once on validation failure, naming the key and the count, with no doubled prefix", function()
+      local logged = {}
+      ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+      local compiled, errors = Schema.compile(baseBuild{ schema = 2, key = "USER_TEST" }, ctx())
+      assert.is_nil(compiled)
+      assert.equal(1, #logged)
+      assert.equal(string.format("build 'USER_TEST' failed validation (%d problem(s))", #errors), logged[1])
+      assert.is_falsy(logged[1]:find("Elmira:", 1, true), "ns.log already prefixes the addon name")
+    end)
+
     it("never raises even for a completely bogus build", function()
       assert.has_no.errors(function() Schema.validate(nil) end)
       assert.has_no.errors(function() Schema.validate("not a build") end)

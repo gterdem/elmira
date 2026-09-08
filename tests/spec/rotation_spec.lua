@@ -56,6 +56,13 @@ describe("Options/Rotation (the Rotation section)", function()
     ns.Wizard = { rows = function() return rows end }
   end
 
+  -- PA11 (2026-09-08): the root page's cards moved from `Rotation.group().args.cardN` directly into
+  -- an inline group, `args.playstyles.args.cardN`, so the tests reach them the same way the real
+  -- page now does.
+  local function cards()
+    return Rotation.group().args.playstyles.args
+  end
+
   before_each(function()
     ns = helper.reset()
     ns.L = setmetatable({}, { __index = function(_, k) return k end })
@@ -99,7 +106,7 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal("group", g.type)
       assert.equal("tree", g.childGroups)
       assert.equal("Rotations", g.name)
-      assert.equal(0, g.order)
+      assert.equal(2, g.order) -- M1a: 2 of the owner's 1-8 top-level order
       assert.equal("group", g.args.builder.type)
       assert.equal("group", g.args.share.type)
       -- "last two" is an ordering claim, not a naming one: every template/fork page sorts below the
@@ -599,7 +606,7 @@ describe("Options/Rotation (the Rotation section)", function()
       installPalette(function() return true end)
       local row = Rotation.group().args.builder.args.intro
       assert.equal("description", row.type)
-      assert.equal(2, row.order)
+      assert.equal(2.5, row.order)
       assert.equal("full", row.width)
       assert.equal("medium", row.fontSize)
     end)
@@ -705,17 +712,18 @@ describe("Options/Rotation (the Rotation section)", function()
       end)
     end)
 
-    -- D58's last row: navigation to the Spells page, present whether or not anything matches.
+    -- D58's last row: navigation to the Abilities page (M1b wording), present whether or not
+    -- anything matches. The `spells` group key it navigates to is unchanged.
     describe("the palette's \"Add from spellbook...\" row (D58)", function()
       it("is the last row, and always present even when nothing matches", function()
         installPalette(function() return true end)
         Rotation.setSearch("zzzz")
         local args = Rotation.group().args.builder.args.spells.args
         assert.equal("execute", args.add.type)
-        assert.is_truthy(args.add.desc:find("Spells page", 1, true))
+        assert.is_truthy(args.add.desc:find("Abilities page", 1, true))
       end)
 
-      it("navigates the open dialog to the Spells root page, not into the draft", function()
+      it("navigates the open dialog to the Abilities root page, not into the draft", function()
         installPalette(function() return true end)
         local selected
         ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
@@ -774,11 +782,14 @@ describe("Options/Rotation (the Rotation section)", function()
       install("fork")
       ns.Display.spellIcon = function(key) return key == "EXORCISM" and "tex:ex" or nil end
       assert.equal("EXORCISM", Rotation.listRows()[1].spell)
-      local row = Rotation.group().args.builder.args.list.args.r1.args.what
-      assert.equal("description", row.type)
-      assert.equal(1, row.order)
+      -- R3 (D84): the header names the ability through an in-place SELECT on a fork, so the icon
+      -- travels in the option's own label rather than a separate description.
+      local row = Rotation.group().args.builder.args.list.args.r1.args.spell
+      assert.equal("select", row.type)
+      assert.equal(4, row.order)
       assert.equal(1.0, row.width)
-      assert.is_truthy(row.name:find("|Ttex:ex:0|t", 1, true))
+      assert.is_truthy(row.values["spell:EXORCISM"]:find("|Ttex:ex:0|t", 1, true))
+      assert.equal("spell:EXORCISM", row.get())
     end)
 
     -- Class-scoped, like every other fork lookup: db.global is shared across characters.
@@ -825,11 +836,15 @@ describe("Options/Rotation (the Rotation section)", function()
     -- and dead: a control that silently does nothing is worse than one not offered.
     it("offers no arrows or checkbox on a template, and says why", function()
       install("pack")
+      ns.Display.spellIcon = function(key) return key == "EXORCISM" and "tex:ex" or nil end
       local args = Rotation.group().args.builder.args.list.args
-      assert.is_truthy(args.r1.args.what)
-      assert.is_nil(args.r1.args.on)
+      assert.equal("description", args.r1.args.spell.type)
+      assert.is_truthy(args.r1.args.spell.name:find("|Ttex:ex:0|t", 1, true))
       assert.is_nil(args.r1.args.up)
       assert.is_nil(args.r1.args.down)
+      assert.is_nil(args.r1.args.remove)
+      assert.is_nil(args.r1.args.body.args.on)
+      assert.equal(1, args.r1.args.body.args.words.order)
       assert.is_truthy(Rotation.group().args.builder.args.intro.name
         :find("cannot be edited", 1, true))
     end)
@@ -837,7 +852,8 @@ describe("Options/Rotation (the Rotation section)", function()
     it("offers all three on a rotation of your own", function()
       install("fork")
       local args = Rotation.group().args.builder.args.list.args
-      assert.equal("toggle", args.r1.args.on.type)
+      assert.equal("select", args.r1.args.spell.type)
+      assert.equal("toggle", args.r1.args.body.args.on.type)
       assert.equal("execute", args.r1.args.up.type)
       assert.equal("execute", args.r1.args.down.type)
       assert.is_true(args.r1.args.up.disabled, "the first line cannot move up")
@@ -867,7 +883,7 @@ describe("Options/Rotation (the Rotation section)", function()
       install("fork")
       local repaints = 0
       ns.Display.refresh = function() repaints = repaints + 1 end
-      local row = Rotation.group().args.builder.args.list.args.r1.args.on
+      local row = Rotation.group().args.builder.args.list.args.r1.args.body.args.on
       assert.is_true(row.get())
       row.set(nil, false)
       assert.equal(0, repaints)
@@ -875,31 +891,25 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_nil(BUILD.entries[1].disabled)
     end)
 
-    it("dims a line that is switched off", function()
+    -- R3 (D85): a switched-off line says so in the SENTENCE rather than through a colour alone --
+    -- `entry.disabled` is read straight off the draft, so this is immediate, unlike the dot (D87),
+    -- which stays tied to the SAVED, running rotation until Save.
+    it("says a line is switched off in its own sentence", function()
       install("fork")
       BUILD.entries[1].disabled = true
       local args = Rotation.group().args.builder.args.list.args
-      assert.is_truthy(args.r1.args.what.name:find("|cff9AA0A6", 1, true))
-      assert.is_false(args.r1.args.on.get())
+      assert.is_truthy(args.r1.args.sentence.name:find("switched off", 1, true))
+      assert.is_false(args.r1.args.body.args.on.get())
       BUILD.entries[1].disabled = nil
     end)
 
-    -- The author's own note is more use than a count, so it wins when there is one.
-    it("summarises what a line waits for, preferring the author's note", function()
+    -- The author's own note is more use than a count, so it wins when there is one -- now read
+    -- through the panel's own sentence-building, `Rotation.headerSentence`.
+    it("folds a single condition into the header sentence", function()
       install("fork")
       local args = Rotation.group().args.builder.args.list.args
-      assert.is_truthy(args.r2.args.what.name:find("3 HP", 1, true))
-      assert.is_truthy(args.r1.args.what.name:find("always", 1, true))
-    end)
-
-    -- The summary falls back to the STORED build's `when` list, so the row still says something
-    -- when the author left no note.
-    it("falls back to the line's conditions IN WORDS", function()
-      install("fork")
-      BUILD.entries[2].label = nil
-      local args = Rotation.group().args.builder.args.list.args
-      assert.is_truthy(args.r2.args.what.name:find("at 3 stacks or more", 1, true))
-      BUILD.entries[2].label = "3 HP"
+      assert.is_truthy(args.r2.args.sentence.name:find("stacks or more", 1, true))
+      assert.is_truthy(args.r1.args.sentence.name:find("it is ready", 1, true))
     end)
 
     -- It used to count them. "2 conditions" said the same thing about every row that had two,
@@ -985,8 +995,12 @@ describe("Options/Rotation (the Rotation section)", function()
     local function installEditor()
       helper.load("Elmira/Core/Slash.lua")
       PACK = newPack()
+      -- `keys` mirrors what AceDB actually populates at load (Elmira/Libs/AceDB-3.0), independent
+      -- of whether this class ships a pack -- F1a reads it as the class filter's ground truth, so a
+      -- fixture without it would make the pack vanishing (below) look like a class the addon cannot
+      -- identify, which is not what a real client session is ever like.
       ns.db = { global = { userBuilds = {} }, profile = { paletteAllSlots = false },
-                char = { spells = {} } }
+                char = { spells = {} }, keys = { class = "PALADIN", char = "Arthorion - Realm" } }
       ns.UserBuilds = realUserBuilds
       ns.Detect = { readableName = function(key) return key end }
       state = FakeState.new{ bonuses = { HOLY_POWER_CONSUME = false, HOLY_WRATH_INSTANT = true },
@@ -1044,6 +1058,8 @@ describe("Options/Rotation (the Rotation section)", function()
       end)
 
       it("is thrown away when the active rotation changes", function()
+        Rotation.selectRow(2)
+        assert.is_true(Rotation.isExpanded(2))
         Rotation.moveRow(1, 1)
         assert.is_true(Rotation.draft().dirty)
         local other = realUserBuilds.fork(PACK, "TEMPLATE", { name = "Other" })
@@ -1052,6 +1068,50 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal(other, d.key)
         assert.is_false(d.dirty, "a fresh rotation opens clean")
         assert.equal("EXORCISM", d.entries[1].spell)
+        -- The expanded body is UI state about the rotation being LOOKED AT, not the draft object --
+        -- it must forget itself the moment that changes too, or the new rotation opens with some
+        -- unrelated line's body already showing.
+        assert.is_false(Rotation.isExpanded(2), "the expanded body must not survive a rotation switch")
+      end)
+
+      -- Each of `toggleExpand`/`moveRow`/`removeRow` re-syncs for itself rather than trusting a
+      -- PRIOR call to have done it -- a stale index from the rotation just left behind must not
+      -- silently follow an edit made in the new one.
+      it("does not toggle a stale expanded index back open when a rotation switch left it behind", function()
+        Rotation.selectRow(2)
+        forkKey = realUserBuilds.fork(PACK, "TEMPLATE", { name = "OtherToggle" })
+        Rotation.draft()
+        assert.is_true(Rotation.toggleExpand(2))
+        assert.is_true(Rotation.isExpanded(2), "a stale 'already open' must not turn this click into a close")
+      end)
+
+      it("does not carry a stale expanded index into a swap made in a different rotation", function()
+        Rotation.selectRow(2)
+        forkKey = realUserBuilds.fork(PACK, "TEMPLATE", { name = "OtherMove" })
+        Rotation.draft()
+        Rotation.moveRow(2, -1)
+        assert.is_false(Rotation.isExpanded(1))
+        assert.is_false(Rotation.isExpanded(2))
+      end)
+
+      it("does not carry a stale expanded index into a removal made in a different rotation", function()
+        Rotation.selectRow(2)
+        forkKey = realUserBuilds.fork(PACK, "TEMPLATE", { name = "OtherRemove" })
+        Rotation.draft()
+        Rotation.removeRow(1)
+        assert.is_false(Rotation.isExpanded(1))
+      end)
+
+      -- `isExpanded` is the only PUBLIC reader of the expand state, and it re-syncs on every call --
+      -- which is what makes the three tests above pass whichever of `toggleExpand`/`moveRow`/
+      -- `removeRow` a caller reaches first. This one calls NOTHING else in between, which is what
+      -- isolates `isExpanded`'s OWN re-sync: without it, this is the one case nothing else papers
+      -- over, because nothing re-validated freshness before answering.
+      it("does not itself answer a stale expanded index across a rotation switch, with no other call between", function()
+        Rotation.selectRow(2)
+        forkKey = realUserBuilds.fork(PACK, "TEMPLATE", { name = "OtherIsExpanded" })
+        Rotation.draft()
+        assert.is_false(Rotation.isExpanded(2))
       end)
 
       it("says whether it has unsaved changes, and offers Save and Discard accordingly", function()
@@ -1078,16 +1138,17 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_false(Rotation.moveRow(99, 1))
       end)
 
-      -- Moving the row you are editing must not silently switch the pane to a different ability.
-      it("carries the selection with the line it is on", function()
+      -- Moving the row you are editing must not silently switch the expanded body to a different
+      -- ability (R3: the expand flag, not `d.selected`, is what now follows the line).
+      it("carries the expanded body with the line it is on", function()
         Rotation.selectRow(2)
         Rotation.moveRow(2, -1)
-        assert.equal(1, Rotation.draft().selected)
-        local _, entry = Rotation.paneModel()
+        assert.is_true(Rotation.isExpanded(1))
+        local _, entry = Rotation.paneModel(1)
         assert.equal("DIVINE_STORM", entry.spell)
         Rotation.selectRow(3)
-        Rotation.moveRow(2, 1)  -- swaps 2 and 3, so the selection follows to 2
-        assert.equal(2, Rotation.draft().selected)
+        Rotation.moveRow(2, 1)  -- swaps 2 and 3, so the expanded body follows to 2
+        assert.is_true(Rotation.isExpanded(2))
       end)
 
       it("switches a line off in the draft, storing nil rather than false", function()
@@ -1100,25 +1161,25 @@ describe("Options/Rotation (the Rotation section)", function()
 
       -- The counterpart to click-to-append. Without it a mis-clicked palette icon could only be
       -- undone by discarding every other edit in the draft.
-      it("removes a line, and moves the selection off it", function()
+      it("removes a line, and closes the expanded body if it was the one removed", function()
         Rotation.selectRow(2)
         assert.is_true(Rotation.removeRow(2))
         assert.equal(4, #Rotation.draft().entries)
-        assert.is_nil(Rotation.draft().selected)
+        assert.is_false(Rotation.isExpanded(2))
         assert.equal("JUDGEMENT", Rotation.listRows()[2].spell)
         Rotation.selectRow(3)
         Rotation.removeRow(1)
-        assert.equal(2, Rotation.draft().selected, "the selection follows its line upwards")
+        assert.is_true(Rotation.isExpanded(2), "the expanded body follows its line upwards")
         assert.is_false(Rotation.removeRow(99))
       end)
 
-      it("appends from the palette, at the bottom, selected and unsaved", function()
+      it("appends from the palette, at the bottom, expanded and unsaved", function()
         assert.is_true(Rotation.appendSpell("CONSECRATION"))
         local d = Rotation.draft()
         assert.equal(6, #d.entries)
         assert.equal("CONSECRATION", d.entries[6].spell)
         assert.is_nil(d.entries[6].src, "an appended line is in no saved rotation yet")
-        assert.equal(6, d.selected, "the next thing anyone wants is its conditions")
+        assert.is_true(Rotation.isExpanded(6), "the next thing anyone wants is its conditions")
         assert.is_true(Rotation.appendItem(14))
         assert.equal(14, Rotation.draft().entries[7].item)
         assert.is_false(Rotation.appendSpell(nil))
@@ -1148,14 +1209,59 @@ describe("Options/Rotation (the Rotation section)", function()
 
       it("drives every list control from the rendered panel", function()
         local args = builder().list.args
-        args.r2.args.edit.func()
-        assert.equal(2, Rotation.draft().selected)
-        args.r1.args.on.set(nil, false)
+        args.r2.args.expand.func()
+        assert.is_true(Rotation.isExpanded(2))
+        args.r1.args.body.args.on.set(nil, false)
         assert.is_true(Rotation.draft().entries[1].disabled)
         args.r1.args.down.func()
         assert.equal("DIVINE_STORM", Rotation.listRows()[1].spell)
         builder().list.args.r5.args.remove.func()
         assert.equal(4, #Rotation.draft().entries)
+      end)
+
+      -- R3 (D84): the in-place select changes what a line DOES without touching its position or
+      -- its conditions -- the counterpart to `appendSpell`/`appendItem`, which only ever ADD a line.
+      it("changes a line's ability from the in-place select, keeping its conditions", function()
+        assert.is_false(Rotation.draft().dirty)
+        local before = Rotation.draft().entries[1].when
+        assert.is_true(Rotation.setLineAction(1, "spell:CONSECRATION"))
+        assert.is_true(Rotation.draft().dirty)
+        assert.equal("CONSECRATION", Rotation.draft().entries[1].spell)
+        assert.equal(before, Rotation.draft().entries[1].when)
+        Rotation.setLineAction(1, "item:13")
+        assert.is_nil(Rotation.draft().entries[1].spell)
+        assert.equal(13, Rotation.draft().entries[1].item)
+        assert.is_false(Rotation.setLineAction(1, "not a real key"))
+        assert.is_false(Rotation.setLineAction(99, "spell:CONSECRATION"))
+      end)
+
+      -- The same "say what is actually there" guarantee as the spell fallback above, for an item
+      -- slot the (trinket-only, `paletteAllSlots` off) palette does not currently list.
+      it("keeps the in-place select showing an item slot that has fallen out of the palette", function()
+        Rotation.setLineAction(5, "item:1") -- Head: not offered while only trinkets are shown
+        local row = builder().list.args.r5.args.spell
+        assert.equal("item:1", row.get())
+        assert.is_truthy(row.values["item:1"])
+      end)
+
+      -- The in-place select's own icons -- both palettes, through the loop rather than the
+      -- entry-only fallback the two tests above cover -- and proof the palette SEARCH box does not
+      -- narrow this dropdown, restoring the typed filter unchanged once it has answered.
+      it("shows an icon for every palette choice, ignoring and then restoring the search filter", function()
+        ns.Display.spellIcon = function(key) return key == "EXORCISM" and "tex:ex" or nil end
+        ns.Display.itemIcon = function(slot) return slot == 13 and "tex:tr" or nil end
+        Rotation.setSearch("zzz-matches-nothing")
+        local values = Rotation.actionChoices()
+        assert.is_truthy(values["spell:EXORCISM"]:find("|Ttex:ex:0|t", 1, true))
+        assert.is_truthy(values["item:13"]:find("|Ttex:tr:0|t", 1, true))
+        assert.equal("zzz-matches-nothing", Rotation.search(), "the search box's own text must survive")
+      end)
+
+      -- A hand-edited SavedVariables entry can bind to neither -- `encodeAction` must still answer
+      -- something the select can hold rather than erroring.
+      it("shows a blank action for a line bound to neither a spell nor an item", function()
+        Rotation.draft().entries[5].item = nil
+        assert.equal("", builder().list.args.r5.args.spell.get())
       end)
     end)
 
@@ -1173,7 +1279,7 @@ describe("Options/Rotation (the Rotation section)", function()
         local d = Rotation.draft()
         assert.is_false(d.dirty)
         assert.equal(1, d.entries[1].src, "src follows the SAVED position, not the old one")
-        assert.equal(1, d.selected, "the selection stays on the line it was on")
+        assert.is_true(Rotation.isExpanded(1), "the expanded body stays on the line it was on")
       end)
 
       -- The whole reason step 4 touches Core/Slash: the compile cache is keyed on the build TABLE
@@ -1207,8 +1313,8 @@ describe("Options/Rotation (the Rotation section)", function()
       it("refuses a draft the compiler cannot read, and says which line", function()
         Rotation.appendSpell("CONSECRATION")
         Rotation.selectRow(6)
-        Rotation.addCondition("buff")
-        Rotation.setCondition(1, "key", "NOT_A_SPELL_IN_THE_PACK")
+        Rotation.addCondition(6, "buff")
+        Rotation.setCondition(6, 1, "key", "NOT_A_SPELL_IN_THE_PACK")
         local problems = Rotation.problems()
         assert.is_true(#problems > 0)
         assert.is_truthy(table.concat(problems, " "):find("line 6", 1, true))
@@ -1334,20 +1440,17 @@ describe("Options/Rotation (the Rotation section)", function()
       end)
     end)
 
-    describe("the conditions pane", function()
-      it("is absent until a line is selected, then names the line", function()
-        assert.is_nil(builder().pane)
-        assert.is_nil(Rotation.paneModel())
+    describe("the conditions pane (now each panel's body, R3)", function()
+      it("is hidden until its line is expanded, and reads that line's model either way", function()
+        assert.is_true(builder().list.args.r1.args.body.hidden())
+        assert.is_table(Rotation.paneModel(1), "the model exists even while collapsed")
         Rotation.selectRow(1)
-        local pane = builder().pane
-        assert.equal("group", pane.type)
-        assert.equal(5, pane.order)
-        assert.is_truthy(pane.name:find("EXORCISM", 1, true))
+        assert.is_false(builder().list.args.r1.args.body.hidden())
       end)
 
       it("draws one control group per condition, described in words", function()
         Rotation.selectRow(1)
-        local args = builder().pane.args
+        local args = builder().list.args.r1.args.body.args
         assert.equal("all", args.match.get())
         local row = args.conditions.args.c1
         assert.equal("mana at least 40%", row.name)
@@ -1359,15 +1462,81 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_false(row.args.negated.get())
       end)
 
+      -- D86: the link to that spell's own page in the Abilities tree, sitting beside the key select.
+      -- M1b renamed the page's WORDING to "Abilities"; the `spells` navigation key is unchanged.
+      it("links a spell-shaped condition to its page in the Abilities tree", function()
+        -- Line 1's own condition is `resource` (a power, not a spell key) -- add a `buff` condition,
+        -- whose key source IS spell-shaped, to reach the link this test is about.
+        Rotation.addCondition(1, "buff")
+        local link = builder().list.args.r1.args.body.args.conditions.args.c2.args.openSpell
+        assert.equal("execute", link.type)
+        assert.is_truthy(link.name():find("CONSECRATION", 1, true))
+        assert.is_truthy(link.name():find("in Abilities", 1, true))
+        local navigated
+        ns.Options = { dialog = { SelectGroup = function(_, app, page, key)
+          navigated = { app, page, key }
+        end } }
+        link.func()
+        assert.same({ "Elmira", "spells", "CONSECRATION" }, navigated)
+        -- The purely POWER condition alongside it links nowhere.
+        assert.is_nil(builder().list.args.r1.args.body.args.conditions.args.c1.args.openSpell)
+
+        -- A key deliberately cleared (never possible through the UI's own default, but reachable by
+        -- a hand-edited row) must not offer a live link to nowhere.
+        Rotation.setCondition(1, 2, "key", nil)
+        link = builder().list.args.r1.args.body.args.conditions.args.c2.args.openSpell
+        assert.equal("in Abilities >", link.name())
+        assert.is_true(link.disabled())
+        assert.is_truthy(link.desc:find("Abilities tree", 1, true))
+      end)
+
+      -- D86: the key select's REGISTRY merge (Rotation.lua's private `mergedPack`), covering the
+      -- three shapes it can answer -- no pack at all, a pack with no registry to widen it, and the
+      -- ordinary case where the registry adds a key the pack alone does not carry.
+      describe("the registry merge behind the key select (D86)", function()
+        it("registers and offers a spell no pack knows about", function()
+          local key = ns.Spells.add(ns.db.char.spells, { id = 9002, name = "Divine Steed", source = "id" })
+          Rotation.addCondition(1, "buff")
+          local values = builder().list.args.r1.args.body.args.conditions.args.c2.args.key.values
+          assert.is_truthy(values[key], "a registry-only spell must be offered as a condition key")
+        end)
+
+        it("still offers the pack's own keys when the registry is not loaded at all", function()
+          ns.Spells = nil
+          Rotation.addCondition(1, "buff")
+          local values = builder().list.args.r1.args.body.args.conditions.args.c2.args.key.values
+          assert.is_truthy(values.EXORCISM, "the pack's own spells must still be offered")
+        end)
+
+        it("does not offer a registry-only key while the registry is not loaded", function()
+          local key = ns.Spells.add(ns.db.char.spells, { id = 9003, name = "Divine Steed", source = "id" })
+          ns.Spells = nil
+          Rotation.addCondition(1, "buff")
+          local values = builder().list.args.r1.args.body.args.conditions.args.c2.args.key.values
+          assert.is_nil(values[key])
+        end)
+
+        -- `UserBuilds.find` tolerates a nil pack for a FORK key -- F1a: it reads the player's class
+        -- from AceDB's `db.keys`, which stays put whether or not a pack does, rather than from the
+        -- vanished pack itself -- so the draft survives the pack vanishing mid-edit, exactly the
+        -- moment `mergedPack` must degrade rather than error.
+        it("adds a condition with no key, rather than erroring, when there is no active pack at all", function()
+          Rotation.draft() -- established while the pack is still there
+          ns.Display.currentPack = function() return nil end
+          assert.is_true(Rotation.addCondition(1, "buff"))
+          assert.is_nil(Rotation.draft().entries[1].when[2][2], "buff's key sits at position 2")
+        end)
+      end)
+
       -- AceConfig round-trips a select value through the widget, so a numeric key comes back as a
       -- string and would never compare equal to the number the row holds.
       it("keys every select by a string, including inventory slots", function()
         Rotation.selectRow(5)
-        local row = builder().pane.args.conditions.args.c1
+        local row = builder().list.args.r5.args.body.args.conditions.args.c1
         assert.equal("13", row.args.slot.get())
         row.args.slot.set(nil, "14")
         assert.equal(14, Rotation.draft().entries[5].when[1][2])
-        for _, control in pairs(builder().pane.args.conditions.args.c1.args) do
+        for _, control in pairs(row.args) do
           if control.type == "select" then
             for id in pairs(control.values) do assert.equal("string", type(id)) end
           end
@@ -1376,10 +1545,11 @@ describe("Options/Rotation (the Rotation section)", function()
 
       it("edits a value, an operator, a field and a category from the rendered panel", function()
         Rotation.selectRow(1)
-        builder().pane.args.conditions.args.c1.args.amount.set(nil, "90")
+        local body = function() return builder().list.args.r1.args.body.args end
+        body().conditions.args.c1.args.amount.set(nil, "90")
         assert.equal(90, Rotation.draft().entries[1].when[1].minPct)
 
-        builder().pane.args.conditions.args.c1.args.op.set(nil, "maxPct")
+        body().conditions.args.c1.args.op.set(nil, "maxPct")
         local cond = Rotation.draft().entries[1].when[1]
         assert.equal(90, cond.maxPct)
         assert.is_nil(cond.minPct, "changing the test must move the qualifier, not add one")
@@ -1387,15 +1557,15 @@ describe("Options/Rotation (the Rotation section)", function()
         -- A field change REPLACES the row: an operator or key carried over from the old field is a
         -- qualifier the new one does not have, and the panel would look right while the compiler
         -- rejected the result.
-        builder().pane.args.conditions.args.c1.args.field.set(nil, "target_hp")
+        body().conditions.args.c1.args.field.set(nil, "target_hp")
         assert.equal("target_hp", Rotation.draft().entries[1].when[1][1])
-        builder().pane.args.conditions.args.c1.args.category.set(nil, "state")
+        body().conditions.args.c1.args.category.set(nil, "state")
         assert.same({ { "in_combat" } }, Rotation.draft().entries[1].when)
       end)
 
       it("offers only the fields of the chosen category", function()
         Rotation.selectRow(1)
-        local row = builder().pane.args.conditions.args.c1
+        local row = builder().list.args.r1.args.body.args.conditions.args.c1
         assert.is_truthy(row.args.field.values.resource)
         assert.is_nil(row.args.field.values.in_combat)
         assert.is_truthy(row.args.category.values.gear)
@@ -1403,66 +1573,65 @@ describe("Options/Rotation (the Rotation section)", function()
 
       it("adds, negates and removes a condition", function()
         assert.is_true(Rotation.selectRow(3))
-        assert.same({}, Rotation.paneModel().rows)
-        builder().pane.args.add.set(nil, "in_combat")
+        assert.same({}, Rotation.paneModel(3).rows)
+        local body = function() return builder().list.args.r3.args.body.args end
+        body().add.set(nil, "in_combat")
         assert.same({ { "in_combat" } }, Rotation.draft().entries[3].when)
-        builder().pane.args.conditions.args.c1.args.negated.set(nil, true)
+        body().conditions.args.c1.args.negated.set(nil, true)
         assert.same({ { "not", { "in_combat" } } }, Rotation.draft().entries[3].when)
-        builder().pane.args.conditions.args.c1.args.remove.func()
+        body().conditions.args.c1.args.remove.func()
         assert.same({}, Rotation.draft().entries[3].when)
-        assert.is_nil(builder().pane.args.conditions.args.c1)
+        assert.is_nil(body().conditions, "no empty group once the last row is gone")
       end)
 
       it("switches the whole line between all and any", function()
         Rotation.selectRow(1)
-        assert.is_true(Rotation.addCondition("in_combat"))
+        assert.is_true(Rotation.addCondition(1, "in_combat"))
         assert.equal(2, #Rotation.draft().entries[1].when)
-        builder().pane.args.match.set(nil, "any")
+        local body = function() return builder().list.args.r1.args.body.args end
+        body().match.set(nil, "any")
         local when = Rotation.draft().entries[1].when
         assert.equal(1, #when)
         assert.equal("any", when[1][1])
-        assert.equal("any", Rotation.paneModel().match)
-        builder().pane.args.match.set(nil, "all")
+        assert.equal("any", Rotation.paneModel(1).match)
+        body().match.set(nil, "all")
         assert.equal(2, #Rotation.draft().entries[1].when)
       end)
 
-      -- Every pane setter answers whether it wrote, and every write marks the draft dirty --
-      -- without which Save stays greyed out and the edit is unreachable however right it looks.
+      -- Every setter answers whether it wrote, and every write marks the draft dirty -- without
+      -- which Save stays greyed out and the edit is unreachable however right it looks.
       it("answers whether it wrote, and marks the draft dirty when it did", function()
-        Rotation.selectRow(1)
         assert.is_false(Rotation.draft().dirty)
-        assert.is_true(Rotation.addCondition("in_combat"))
+        assert.is_true(Rotation.addCondition(1, "in_combat"))
         assert.is_true(Rotation.draft().dirty)
-        Rotation.discard(); Rotation.selectRow(1)
+        Rotation.discard()
 
-        assert.is_true(Rotation.setMatch("any"))
+        assert.is_true(Rotation.setMatch(1, "any"))
         assert.is_true(Rotation.draft().dirty)
-        Rotation.discard(); Rotation.selectRow(1)
+        Rotation.discard()
 
-        assert.is_true(Rotation.setCondition(1, "value", 5))
+        assert.is_true(Rotation.setCondition(1, 1, "value", 5))
         assert.is_true(Rotation.draft().dirty)
-        Rotation.discard(); Rotation.selectRow(1)
+        Rotation.discard()
 
-        assert.is_true(Rotation.removeCondition(1))
+        assert.is_true(Rotation.removeCondition(1, 1))
         assert.is_true(Rotation.draft().dirty)
       end)
 
       it("gives a new condition a legal value rather than a blank that reports an error", function()
-        Rotation.selectRow(3)
-        Rotation.addCondition("buff")
+        Rotation.addCondition(3, "buff")
         local when = Rotation.draft().entries[3].when
         assert.is_truthy(when[1][2], "a new condition arrives with a key already chosen")
         local _, errors = ns.Schema.compileWhen(when, packTables())
         assert.equal(0, #errors)
         assert.same({}, Rotation.problems())
-        assert.is_false(Rotation.addCondition("no_such_field"))
+        assert.is_false(Rotation.addCondition(3, "no_such_field"))
       end)
 
       -- A slot-taking field has no key source to draw a default from, so it needs its own: without
       -- one, `item_ready` arrives with no slot and reports an error before it has been touched.
       it("gives a slot field a real slot to start on", function()
-        Rotation.selectRow(3)
-        assert.is_true(Rotation.addCondition("item_ready"))
+        assert.is_true(Rotation.addCondition(3, "item_ready"))
         assert.same({ { "item_ready", 13 } }, Rotation.draft().entries[3].when)
         assert.same({}, Rotation.problems())
       end)
@@ -1470,18 +1639,17 @@ describe("Options/Rotation (the Rotation section)", function()
       -- Changing the field REPLACES the row, and the negation is a property of the row rather than
       -- of the field -- so it has to survive the replacement, or a `not` silently disappears.
       it("keeps the negation when the field or the category changes", function()
-        Rotation.selectRow(3)
-        Rotation.addCondition("in_combat")
-        Rotation.setCondition(1, "negated", true)
+        Rotation.addCondition(3, "in_combat")
+        Rotation.setCondition(3, 1, "negated", true)
         assert.same({ { "not", { "in_combat" } } }, Rotation.draft().entries[3].when)
-        Rotation.setCondition(1, "kind", "not_moving")
+        Rotation.setCondition(3, 1, "kind", "not_moving")
         assert.same({ { "not", { "not_moving" } } }, Rotation.draft().entries[3].when)
-        Rotation.setCondition(1, "category", "encounter")
+        Rotation.setCondition(3, 1, "category", "encounter")
         assert.equal("not", Rotation.draft().entries[3].when[1][1])
         assert.equal("enemies", Rotation.draft().entries[3].when[1][2][1])
         -- And an un-negated row must not gain one.
-        Rotation.setCondition(1, "negated", nil)
-        Rotation.setCondition(1, "kind", "in_combat")
+        Rotation.setCondition(3, 1, "negated", nil)
+        Rotation.setCondition(3, 1, "kind", "in_combat")
         assert.same({ { "in_combat" } }, Rotation.draft().entries[3].when)
       end)
 
@@ -1489,9 +1657,9 @@ describe("Options/Rotation (the Rotation section)", function()
       -- the same as hidden: the "why" of a line IS its conditions.
       it("shows a nested line in words and offers no controls", function()
         Rotation.selectRow(4)
-        local model = Rotation.paneModel()
+        local model = Rotation.paneModel(4)
         assert.is_true(model.complex)
-        local args = builder().pane.args
+        local args = builder().list.args.r4.args.body.args
         assert.is_nil(args.match)
         assert.is_nil(args.conditions)
         assert.is_nil(args.add)
@@ -1501,25 +1669,29 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_truthy(args.note.name:find("nested more deeply", 1, true))
       end)
 
-      it("refuses every pane edit on a nested line, rather than rewriting it", function()
-        Rotation.selectRow(4)
+      it("refuses every edit on a nested line, rather than rewriting it", function()
         local before = Rotation.draft().entries[4].when
-        assert.is_false(Rotation.setMatch("any"))
-        assert.is_false(Rotation.addCondition("in_combat"))
-        assert.is_false(Rotation.removeCondition(1))
-        assert.is_false(Rotation.setCondition(1, "op", "min"))
+        assert.is_false(Rotation.setMatch(4, "any"))
+        assert.is_false(Rotation.addCondition(4, "in_combat"))
+        assert.is_false(Rotation.removeCondition(4, 1))
+        assert.is_false(Rotation.setCondition(4, 1, "op", "min"))
         assert.equal(before, Rotation.draft().entries[4].when)
         assert.is_false(Rotation.draft().dirty)
       end)
 
-      it("refuses a pane edit when nothing is selected, or the field is not one it owns", function()
-        assert.is_false(Rotation.setMatch("any"))
-        assert.is_false(Rotation.setCondition(1, "op", "min"))
-        Rotation.selectRow(1)
-        assert.is_false(Rotation.setCondition(9, "op", "min"))
-        assert.is_false(Rotation.setCondition(1, "spell", "EXORCISM"))
-        assert.is_false(Rotation.setCondition(1, "category", "no_such_category"))
-        assert.is_false(Rotation.setCondition(1, "kind", "no_such_field"))
+      it("refuses an edit outside the draft, or naming a line/field it does not own", function()
+        ns.Display.activeBuild = function()
+          return ns.Schema.compile(PACK.builds.TEMPLATE, packTables()), "TEMPLATE", "pinned"
+        end
+        assert.is_false(Rotation.setMatch(1, "any"))
+        assert.is_false(Rotation.setCondition(1, 1, "op", "min"))
+        assert.is_false(Rotation.addCondition(1, "in_combat"))
+        assert.is_false(Rotation.removeCondition(1, 1))
+        ns.Display.activeBuild = function() return compiledFork(), forkKey, "pinned" end
+        assert.is_false(Rotation.setCondition(1, 9, "op", "min"))
+        assert.is_false(Rotation.setCondition(1, 1, "spell", "EXORCISM"))
+        assert.is_false(Rotation.setCondition(1, 1, "category", "no_such_category"))
+        assert.is_false(Rotation.setCondition(1, 1, "kind", "no_such_field"))
         assert.is_false(Rotation.selectRow(99))
       end)
     end)
@@ -1546,11 +1718,10 @@ describe("Options/Rotation (the Rotation section)", function()
       -- as `entry.when[1]` this reads perfectly on every single-condition row and lies on every
       -- other -- the same dead-index shape as the M3 hover tooltip (tasks/lessons.md).
       it("names the condition that failed, not the first one on the line", function()
-        Rotation.selectRow(3)
-        Rotation.addCondition("in_combat")          -- passes: the fake state is in combat
-        Rotation.addCondition("resource")
-        Rotation.setCondition(2, "op", "minPct")
-        Rotation.setCondition(2, "value", 150)      -- cannot pass: mana is capped at 100%
+        Rotation.addCondition(3, "in_combat")          -- passes: the fake state is in combat
+        Rotation.addCondition(3, "resource")
+        Rotation.setCondition(3, 2, "op", "minPct")
+        Rotation.setCondition(3, 2, "value", 150)      -- cannot pass: mana is capped at 100%
         assert.is_true(Rotation.save())
         queue = queueOf(1)
         assert.equal("waiting for: mana at least 150%", Rotation.rowStatuses()[3].text)
@@ -1599,9 +1770,8 @@ describe("Options/Rotation (the Rotation section)", function()
       -- The status text names a spell through the same resolver the rest of the panel uses. Without
       -- the pack context it would print the raw symbolic key, which is not what anyone calls it.
       it("names a spell in the waiting reason the way the client does", function()
-        Rotation.selectRow(3)
-        Rotation.addCondition("buff")
-        Rotation.setCondition(1, "key", "VENGEANCE_BUFF")
+        Rotation.addCondition(3, "buff")
+        Rotation.setCondition(3, 1, "key", "VENGEANCE_BUFF")
         assert.is_true(Rotation.save())
         ns.BarGlow = { spellName = function(id) return id == 7 and "Vengeance" or nil end }
         queue = queueOf(1)
@@ -1624,35 +1794,34 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_truthy(Rotation.rowStatuses()[3].text:find("hidden", 1, true))
       end)
 
-      -- The row's own line shows the author's note when it has one, so the summary has nowhere else
-      -- to go; on an unlabelled row it is already up there and repeating it says everything twice.
-      it("repeats the conditions under a line that shows an author's note, and not otherwise", function()
-        queue = queueOf(1)
+      -- R3: the author's note (or the condition summary) no longer lives beside the OLD status
+      -- text at all -- `Rotation.listRows()[i].note`/`.summary` still carry it, unaffected, for
+      -- whatever reads it (the row's own data, `Rotation.conditionSummary`); the panel's header now
+      -- carries the sentence (D85) instead.
+      it("still prefers the author's note in the row data, falling back to the summary", function()
         realUserBuilds.find(PACK, forkKey).entries[1].label = "opener"
         ns.forgetCompiled(realUserBuilds.find(PACK, forkKey))
         Rotation.discard()
-        local args = builder().list.args
-        assert.is_truthy(args.r1.args.what.name:find("opener", 1, true))
-        assert.is_nil(args.r1.args.what.name:find("mana at least 40%", 1, true))
-        assert.is_truthy(args.r1.args.status.name:find("mana at least 40%", 1, true))
+        local rows = Rotation.listRows()
+        assert.equal("opener", rows[1].note)
+        assert.is_truthy(rows[1].summary:find("mana at least 40%", 1, true))
 
-        -- The same line without the note: the summary is on its own line now, so the status must
-        -- not carry it a second time.
         realUserBuilds.find(PACK, forkKey).entries[1].label = nil
         ns.forgetCompiled(realUserBuilds.find(PACK, forkKey))
         Rotation.discard()
-        args = builder().list.args
-        assert.is_truthy(args.r1.args.what.name:find("mana at least 40%", 1, true))
-        assert.is_nil(args.r1.args.status.name:find("mana at least 40%", 1, true))
+        rows = Rotation.listRows()
+        assert.is_nil(rows[1].note)
+        assert.is_truthy(rows[1].summary:find("mana at least 40%", 1, true))
       end)
 
-      -- D43: a texture dot, not the ASCII fallback (>> !! .. -- ++) -- row 1 is "firing" (queueOf(1)),
-      -- which maps to the green indicator.
-      it("renders the marker as a texture dot, and the reason beside it", function()
+      -- D43/D87: a texture dot, not the ASCII fallback (>> !! .. -- ++) -- row 1 is "firing"
+      -- (queueOf(1)), which maps to `lineState` nil and so the green "everything's fine" mark.
+      it("renders the header's dot as a texture, at its own small width", function()
         queue = queueOf(1)
+        assert.is_nil(Rotation.lineState(1))
         local status = builder().list.args.r1.args.status
         assert.equal("description", status.type)
-        assert.equal("full", status.width)
+        assert.equal(0.2, status.width)
         assert.is_truthy(status.name:find("|TInterface\\COMMON\\Indicator-Green:12|t", 1, true))
         assert.is_nil(status.name:find(">>", 1, true), "the ASCII fallback is still present")
       end)
@@ -1676,6 +1845,243 @@ describe("Options/Rotation (the Rotation section)", function()
       it("answers nothing, not an error, when there is no rotation at all", function()
         ns.Display.activeBuild = function() return nil, nil, "no pack" end
         assert.same({}, Rotation.rowStatuses())
+      end)
+    end)
+
+    -- R3 (D87): the panel header's own three-state dot, re-bucketed from the SAME evaluation the
+    -- queue already runs (`rowStatuses`), plus the one thing that evaluation cannot know about
+    -- itself: whether a dynamic condition can EVER become true given the lines that exist.
+    describe("the panel header's three-state dot (D87)", function()
+      it("reads nil (the green everything's-fine mark) once a static gate and a dynamic one both pass", function()
+        queue = queueOf(1)
+        assert.is_nil(Rotation.lineState(1))
+      end)
+
+      it("reads nil, not an error, for a line that does not exist", function()
+        queue = queueOf(1)
+        assert.is_nil(Rotation.lineState(99))
+      end)
+
+      it("reads grey for a static gate this character fails, and renders the grey dot", function()
+        queue = queueOf(1)
+        assert.equal("grey", Rotation.lineState(2)) -- DIVINE_STORM's bonus gate: character lacks it
+        assert.is_truthy(builder().list.args.r2.args.status.name
+          :find("|TInterface\\COMMON\\Indicator-Gray:12|t", 1, true))
+      end)
+
+      it("reads amber for a dynamic condition that is merely not true yet, and renders the amber dot", function()
+        Rotation.addCondition(3, "buff")
+        Rotation.setCondition(3, 1, "key", "VENGEANCE_BUFF") -- not up on the fake state
+        assert.is_true(Rotation.save())
+        queue = queueOf(1)
+        assert.equal("amber", Rotation.lineState(3))
+        assert.is_truthy(builder().list.args.r3.args.status.name
+          :find("|TInterface\\COMMON\\Indicator-Yellow:12|t", 1, true))
+      end)
+
+      -- The literal D87 example: a `seal` condition naming a seal no line of the build casts any
+      -- more. Structural (Core/Diagnostics.deadSeal), not a second live-evaluation path.
+      it("reads red for a condition that can never become true as the rotation stands", function()
+        Rotation.addCondition(3, "seal")
+        Rotation.setCondition(3, 1, "key", "SEAL_OF_TESTING") -- no entry anywhere casts this seal
+        assert.is_true(Rotation.save())
+        queue = queueOf(1)
+        assert.equal("red", Rotation.lineState(3))
+        local mark = builder().list.args.r3.args.status
+        assert.is_truthy(mark.name:find("|TInterface\\COMMON\\Indicator-Red:12|t", 1, true))
+
+        -- The SAME seal, once a line actually casts it, is merely a dynamic wait -- amber, not red.
+        Rotation.appendSpell("SEAL_OF_TESTING")
+        assert.is_true(Rotation.save())
+        queue = queueOf(1)
+        assert.equal("amber", Rotation.lineState(3))
+      end)
+
+      it("counts only red lines as needing attention, in the page's own header", function()
+        assert.equal(0, Rotation.attentionCount())
+        assert.is_nil(builder().attention)
+
+        Rotation.addCondition(3, "seal")
+        Rotation.setCondition(3, 1, "key", "SEAL_OF_TESTING")
+        assert.is_true(Rotation.save())
+        queue = queueOf(1)
+        assert.equal(1, Rotation.attentionCount())
+        assert.is_truthy(builder().attention.name:find("1 line needs attention", 1, true))
+
+        -- A second dead condition, on a different line -- the plural wording, not "1 line" twice.
+        -- Line 2 already carries a `bonus` condition at row 1; this is the new row 2.
+        Rotation.addCondition(2, "seal")
+        Rotation.setCondition(2, 2, "key", "SEAL_OF_TESTING")
+        assert.is_true(Rotation.save())
+        assert.equal(2, Rotation.attentionCount())
+        assert.is_truthy(builder().attention.name:find("2 lines need attention", 1, true))
+      end)
+    end)
+
+    -- R3 (D85): one vocabulary. The header sentence folds a condition through the SAME
+    -- `Conditions.describe` the read-only template page's row summary already uses -- proving the
+    -- two can never say the same rule in two different words.
+    describe("the header sentence (D85)", function()
+      it("matches the wording the read-only page already uses for the same condition", function()
+        local entry = Rotation.draft().entries[1]
+        local sentence = Rotation.headerSentence(entry, 1)
+        -- `Rotation.conditionSummary` is exactly what the read-only "Rotation, top to bottom" page
+        -- shows under this same line (`lineRowsArgs`/`row.summary`) -- one call, so there is nowhere
+        -- for the two pages to say the same rule in different words.
+        local wordsAlone = Rotation.conditionSummary(entry)
+        assert.is_truthy(sentence:find(wordsAlone, 1, true))
+      end)
+
+      it("reads as a plain unconditional sentence for the first line, and a fallback one after it", function()
+        assert.equal("EXORCISM is cast when mana at least 40%.",
+          Rotation.headerSentence({ spell = "EXORCISM", when = Rotation.draft().entries[1].when }, 1))
+        assert.equal("JUDGEMENT is cast when the above is not applicable.",
+          Rotation.headerSentence({ spell = "JUDGEMENT" }, 3))
+        assert.equal("JUDGEMENT is cast when it is ready.",
+          Rotation.headerSentence({ spell = "JUDGEMENT" }, 1))
+        assert.equal("EXORCISM is switched off.",
+          Rotation.headerSentence({ spell = "EXORCISM", disabled = true }, 1))
+      end)
+
+      -- The one-condition fold (D85), for a line that is NOT first -- distinct wording from both
+      -- the first-line fold above and the unconditional "above is not applicable" case.
+      it("folds a single condition into a LATER line's sentence too", function()
+        assert.equal("EXORCISM is cast when the above is not applicable and mana at least 40%.",
+          Rotation.headerSentence({ spell = "EXORCISM", when = Rotation.draft().entries[1].when }, 3))
+      end)
+
+      it("ends in a colon rather than folding TWO conditions into the sentence", function()
+        Rotation.addCondition(3, "in_combat")
+        Rotation.addCondition(3, "not_moving")
+        -- The EXACT text, not merely "contains a colon somewhere": the first-line and later-line
+        -- forms both end in a colon, and only the full sentence tells them apart.
+        assert.equal("JUDGEMENT is cast when the above is not applicable and:",
+          Rotation.headerSentence(Rotation.draft().entries[3], 3))
+        assert.equal("JUDGEMENT is cast when:",
+          Rotation.headerSentence(Rotation.draft().entries[3], 1))
+      end)
+    end)
+
+    -- D88 (the owner's decision C, 2026-09-07). Never Display's real queue, never an announcement,
+    -- never a bar glow -- only what the DRAFT would suggest, computed and thrown away.
+    describe("the draft preview (D88)", function()
+      before_each(function()
+        helper.load("Elmira/Adapters/Interface.lua")
+        helper.load("Elmira/Core/Engine.lua")
+        helper.load("Elmira/Core/Simulation.lua")
+        Rotation.draft() -- the module the preview reads its "is there a draft" answer from
+      end)
+
+      it("reflects an unsaved edit while Display.currentQueue() does not", function()
+        queue = queueOf(1) -- the SAVED/live queue: EXORCISM first
+        assert.is_truthy(Rotation.previewLines()[1]:find("1. EXORCISM", 1, true))
+
+        -- JUDGEMENT (line 3) has no conditions at all, so moving it to the top of the DRAFT makes
+        -- it the draft's own first suggestion -- unlike DIVINE_STORM, whose bonus gate this
+        -- character fails, which would have left the preview unchanged and proved nothing.
+        Rotation.moveRow(3, -1); Rotation.moveRow(2, -1)
+        assert.equal("JUDGEMENT", Rotation.draft().entries[1].spell)
+        assert.is_truthy(Rotation.previewLines()[1]:find("1. JUDGEMENT", 1, true))
+        -- The live queue -- and the thing Display actually renders -- has not moved at all.
+        assert.equal("EXORCISM", queue[1].spell)
+        assert.same(queue, ns.Display.currentQueue())
+      end)
+
+      -- D79's own defect (an un-merged ctx silently passing every registry-only spell through
+      -- unresolved) is exactly what an empty/missing ctx here would reintroduce: `Schema.compile`
+      -- stores `entry.data = ctx.spells[entry.spell]` only when ctx actually carries the merged
+      -- registry, and the live queue reads `data.id` etc back off it. `wordCtx()`, not `{}`.
+      it("compiles the preview against wordCtx's merged spells registry, not an empty context", function()
+        Rotation.moveRow(3, -1); Rotation.moveRow(2, -1) -- JUDGEMENT to the front, as above
+        local queuePreview = Rotation.previewQueue()
+        assert.equal("JUDGEMENT", queuePreview[1].spell)
+        assert.equal(PACK.spells.JUDGEMENT.id, queuePreview[1].entry.data.id,
+          "the compiled entry must carry the pack's own spell data, not a nil ctx.spells lookup")
+      end)
+
+      it("never calls Announce or Display.refresh while only previewing", function()
+        local announced, repainted = 0, 0
+        ns.Announce = { emit = function() announced = announced + 1 end }
+        ns.Display.refresh = function() repainted = repainted + 1 end
+        Rotation.moveRow(1, 1)
+        Rotation.previewQueue()
+        Rotation.previewLines()
+        assert.equal(0, announced)
+        assert.equal(0, repainted)
+      end)
+
+      it("shows the reason, not a blank box, when the draft does not compile", function()
+        for _ = 1, 5 do Rotation.removeRow(1) end -- an empty build fails Schema.validate
+        local queuePreview, reason = Rotation.previewQueue()
+        assert.is_nil(queuePreview)
+        -- The SPECIFIC reason `Schema.validate` gives, not merely "some string came back": the
+        -- generic fallback text and this one are both non-nil, and only checking presence cannot
+        -- tell them apart.
+        assert.equal("entries must be a non-empty list", reason)
+        assert.is_truthy(Rotation.previewLines()[1]:find(reason, 1, true))
+      end)
+
+      -- D94 (2026-09-07 in-game round): a half-built rotation fails to compile constantly while
+      -- someone is editing -- that is the normal state -- and `Schema.compile` used to be called on
+      -- every draft change, logging "build 'USER_TEST' failed validation" to chat two or three
+      -- times per action. The preview must reach `Schema.validate` (which never logs) instead, and
+      -- only fall through to `Schema.compile` once validation has already passed.
+      it("never logs while showing the reason for a draft that does not validate", function()
+        local logged = {}
+        ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+        for _ = 1, 5 do Rotation.removeRow(1) end -- an empty build fails Schema.validate
+        local queuePreview, reason = Rotation.previewQueue()
+        assert.is_nil(queuePreview)
+        assert.is_truthy(reason, "the preview must still explain itself")
+        assert.same({}, logged, "Schema.compile must not run (and log) on an invalid draft")
+      end)
+
+      it("answers the generic reason when there is no draft to compile at all", function()
+        Rotation.discard()
+        local queuePreview, reason = Rotation.previewQueue()
+        assert.is_nil(queuePreview)
+        assert.equal("This draft does not compile.", reason)
+      end)
+
+      it("shows the reason when the simulation itself fails, rather than erroring", function()
+        Rotation.moveRow(1, 1)
+        ns.Simulation.queue = function() error("boom") end
+        local queuePreview, reason = Rotation.previewQueue()
+        assert.is_nil(queuePreview)
+        assert.equal("This draft could not be simulated.", reason)
+      end)
+
+      it("carries the spell's icon in the preview line, the same way the live mirror does", function()
+        ns.Display.spellIcon = function(key) return key == "EXORCISM" and "tex:ex" or nil end
+        assert.is_truthy(Rotation.previewLines()[1]:find("|Ttex:ex:0|t", 1, true))
+      end)
+
+      -- A compiling draft that simply has nothing left ENABLED is a different case from one that
+      -- fails to compile at all: still no blank box, but the words are "nothing", not an error.
+      it("says nothing would be suggested, rather than an empty box, once every line is off", function()
+        for i = 1, #Rotation.draft().entries do Rotation.setRowDisabled(i, true) end
+        local queuePreview, reason = Rotation.previewQueue()
+        assert.same({}, queuePreview)
+        assert.is_nil(reason)
+        assert.is_truthy(Rotation.previewLines()[1]:find("nothing would be suggested", 1, true))
+      end)
+
+      it("is absent from the panel entirely when there is no draft to preview", function()
+        ns.Display.activeBuild = function()
+          return ns.Schema.compile(PACK.builds.TEMPLATE, packTables()), "TEMPLATE", "pinned"
+        end
+        Rotation.draft() -- re-reads the (now different) active rotation, exactly as opening the panel would
+        assert.same({}, Rotation.previewLines())
+        assert.is_nil(builder().preview)
+      end)
+
+      it("is present, above the intro, whenever a draft exists to preview", function()
+        queue = queueOf(1)
+        local preview = builder().preview
+        assert.equal("group", preview.type)
+        assert.equal(2, preview.order)
+        assert.equal("Preview (unsaved)", preview.name)
+        assert.is_truthy(preview.args.v1)
       end)
     end)
 
@@ -1756,7 +2162,7 @@ describe("Options/Rotation (the Rotation section)", function()
       }
 
       local function walk(args, path)
-        local seen = 0
+        local seen, orders = 0, {}
         for key, node in pairs(args) do
           local at = path .. "." .. key
           seen = seen + 1
@@ -1764,6 +2170,11 @@ describe("Options/Rotation (the Rotation section)", function()
           local check = WIDGETS[node.type]
           assert.is_truthy(check, at .. " has type " .. tostring(node.type))
           assert.equal("number", type(node.order), at .. " has no order")
+          -- Every `a = a + 1` in the panel/body builders exists ONLY to keep this true: two
+          -- siblings sharing an order is what an AceConfig group draws in an arbitrary, unstable
+          -- sequence.
+          assert.is_nil(orders[node.order], at .. " shares an order with " .. tostring(orders[node.order]))
+          orders[node.order] = at
           assert.is_truthy(node.name, at .. " has no name")
           check(node)
           if node.type == "group" then walk(node.args, at) end
@@ -1796,23 +2207,26 @@ describe("Options/Rotation (the Rotation section)", function()
       -- A tooltip is the only place several of these controls explain themselves, and an execute
       -- with no `desc` is a button whose consequence is invisible until it has happened.
       it("explains every control whose effect is not obvious from its label", function()
-        Rotation.selectRow(1)
         local args = builder()
-        assert.is_truthy(args.list.args.r1.args.edit.desc:find("conditions", 1, true))
+        -- Collapsed: the tooltip says what expanding it does.
+        assert.is_truthy(args.list.args.r1.args.expand.desc:find("conditions", 1, true))
+        Rotation.selectRow(1)
+        args = builder()
+        -- Expanded: the SAME button now says what clicking it again does.
+        assert.is_truthy(args.list.args.r1.args.expand.desc:find("Collapse", 1, true))
         assert.is_truthy(args.list.args.r1.args.remove.desc:find("Discard", 1, true))
         assert.is_truthy(args.spells.args.s1.desc:find("bottom of the draft", 1, true))
         assert.is_truthy(args.items.args.i1.desc:find("bottom of the draft", 1, true))
         assert.is_truthy(args.editing.args.save.desc:find("repaints", 1, true))
         assert.is_truthy(args.editing.args.discard.desc:find("saved rotation", 1, true))
-        assert.is_truthy(args.pane.args.add.desc:find("change the exact field", 1, true))
-        assert.is_truthy(args.pane.args.conditions.args.c1.args.negated.desc:find("NOT", 1, true))
+        local body = args.list.args.r1.args.body.args
+        assert.is_truthy(body.add.desc:find("change the exact field", 1, true))
+        assert.is_truthy(body.conditions.args.c1.args.negated.desc:find("NOT", 1, true))
       end)
 
       it("names each control, and sizes the row so it does not wrap", function()
         Rotation.selectRow(1)
         local row = builder().list.args.r1.args
-        assert.equal("Edit", row.edit.name)
-        assert.equal("On", row.on.name)
         assert.equal("Up", row.up.name)
         assert.equal("Down", row.down.name)
         assert.equal("Remove", row.remove.name)
@@ -1822,53 +2236,58 @@ describe("Options/Rotation (the Rotation section)", function()
         end
         assert.is_true(width < 3.0, "the row sums to " .. width .. " and would wrap")
 
-        local pane = builder().pane.args.conditions.args.c1.args
+        local body = row.body.args
+        assert.equal("On", body.on.name)
+        assert.equal(1, body.on.order)
+        assert.is_truthy(body.on.desc:find("Discard", 1, true))
+        local pane = body.conditions.args.c1.args
         assert.equal("Category", pane.category.name)
         assert.equal("Field", pane.field.name)
         assert.equal("not", pane.negated.name)
         assert.equal("Remove", pane.remove.name)
         assert.equal("Test", pane.op.name)
         assert.equal("Value", pane.key.name)
-        assert.equal("seconds", builder().pane.args.conditions.args.c1.args.amount.name ~= nil
+        assert.equal("seconds", body.conditions.args.c1.args.amount.name ~= nil
                                  and "seconds" or "")
       end)
 
       it("labels a spell key with its readable name and a plain value with itself", function()
         ns.BarGlow = { spellName = function(id) return id == 7 and "Vengeance" or nil end }
-        Rotation.selectRow(3)
-        Rotation.addCondition("buff")
-        local values = builder().pane.args.conditions.args.c1.args.key.values
+        Rotation.addCondition(3, "buff")
+        local body = function() return builder().list.args.r3.args.body.args end
+        local values = body().conditions.args.c1.args.key.values
         assert.equal("Vengeance", values.VENGEANCE_BUFF)
         assert.equal("EXORCISM", values.EXORCISM, "no client name: the key is its own label")
-        Rotation.setCondition(1, "kind", "mode")
-        local modes = builder().pane.args.conditions.args.c1.args.key.values
+        Rotation.setCondition(3, 1, "kind", "mode")
+        local modes = body().conditions.args.c1.args.key.values
         assert.equal("AoE", modes.AoE, "a mode IS its own label")
       end)
 
       it("names each inventory slot in the slot dropdown", function()
         Rotation.selectRow(5)
-        local slots = builder().pane.args.conditions.args.c1.args.slot.values
+        local slots = builder().list.args.r5.args.body.args.conditions.args.c1.args.slot.values
         assert.equal("Trinket 1", slots["13"])
         assert.equal("Head", slots["1"])
       end)
 
       it("offers only the two ways a line can combine its conditions", function()
         Rotation.selectRow(1)
+        local body = builder().list.args.r1.args.body.args
         assert.same({ all = "every condition passes", any = "any condition passes" },
-                    builder().pane.args.match.values)
+                    body.match.values)
         -- The add dropdown is a menu of CATEGORIES whose values are the first field of each, so
         -- picking one always produces a legal condition.
-        local adds = builder().pane.args.add.values
+        local adds = body.add.values
         assert.equal("Encounter", adds.enemies)
         assert.equal("Combat state", adds.in_combat)
-        assert.is_nil(builder().pane.args.add.get())
+        assert.is_nil(body.add.get())
       end)
 
-      it("marks which line the pane is showing", function()
+      it("marks which line's body is expanded, in the header sentence", function()
         Rotation.selectRow(2)
         local args = builder().list.args
-        assert.is_truthy(args.r2.args.what.name:find("|cffC08CF0>|r", 1, true))
-        assert.is_nil(args.r1.args.what.name:find("|cffC08CF0>|r", 1, true))
+        assert.is_truthy(args.r2.args.sentence.name:find("|cffC08CF0>|r", 1, true))
+        assert.is_nil(args.r1.args.sentence.name:find("|cffC08CF0>|r", 1, true))
       end)
 
       it("saves and discards from the rendered buttons", function()
@@ -2020,13 +2439,13 @@ describe("Options/Rotation (the Rotation section)", function()
       it("uses the other wording when the line that kills it has gates of its own", function()
         Rotation.appendSpell("EXORCISM")
         Rotation.selectRow(6)
-        Rotation.addCondition("in_combat")
+        Rotation.addCondition(6, "in_combat")
         -- Line 1 is `mana >= 40`; give the new line that gate as well, plus one more.
-        Rotation.setCondition(1, "kind", "resource")
-        Rotation.setCondition(1, "op", "minPct")
-        Rotation.setCondition(1, "value", 40)
-        Rotation.setCondition(1, "key", "MANA")
-        Rotation.addCondition("in_combat")
+        Rotation.setCondition(6, 1, "kind", "resource")
+        Rotation.setCondition(6, 1, "op", "minPct")
+        Rotation.setCondition(6, 1, "value", 40)
+        Rotation.setCondition(6, 1, "key", "MANA")
+        Rotation.addCondition(6, "in_combat")
         for i = 6, 3, -1 do Rotation.moveRow(i, -1) end
         -- The new line now sits at 2, under the original Exorcism at 1, and carries its gate plus one.
         local lines = Rotation.diagnosticLines()
@@ -2367,13 +2786,34 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_false(ns.db.profile.activeBuild)
     end)
 
-    it("refuses everything when the class has no data pack", function()
+    -- F1 (2026-09-07 bug round): a paladin fork copied as "My-Shock" showed up on the owner's mage.
+    -- Root cause was `UserBuilds.find`/`list` treating a nil pack as "skip the class filter", not
+    -- this function -- but the old stopgap here ("no pack, refuse everything") happened to also
+    -- pass this exact scenario for the wrong reason, so it is replaced with the real ones below,
+    -- through the REAL `UserBuilds.find` rather than a fake that no longer represents its contract.
+    it("refuses a fork of a different class, even with no data pack of its own (F1a)", function()
       install()
       ns.Display.currentPack = function() return nil end
-      installUserBuilds{ find = function() return { key = "USER_MINE" } end }
+      ns.db.keys = { class = "MAGE", char = "Mage - Realm" }
+      ns.db.global = { userBuilds = { USER_MINE = {
+        build = { key = "USER_MINE", entries = {} }, class = "PALADIN", name = "Mine" } } }
+      installUserBuilds{} -- the real find(), which is exactly what F1a fixed
       local ok, why = Rotation.use("USER_MINE")
       assert.is_false(ok)
       assert.truthy(why:find("unknown build", 1, true))
+    end)
+
+    -- F1c: `UserBuilds.create`'s class fix is dead without this -- a class with no shipped pack
+    -- must be able to USE the rotation it just created, not merely have `create` accept it.
+    it("pins a rotation of the player's own class even with no data pack at all (F1c)", function()
+      install()
+      ns.Display.currentPack = function() return nil end
+      ns.db.keys = { class = "MAGE", char = "Mage - Realm" }
+      ns.db.global = { userBuilds = { USER_MINE = {
+        build = { key = "USER_MINE", entries = {} }, class = "MAGE", name = "Mine" } } }
+      installUserBuilds{}
+      assert.is_true(Rotation.use("USER_MINE"))
+      assert.equal("USER_MINE", ns.db.profile.activeBuild)
     end)
 
     it("does nothing but say so with no profile at all", function()
@@ -2641,6 +3081,130 @@ describe("Options/Rotation (the Rotation section)", function()
           hide = function() shown:Hide() end,
         }
       end
+      -- D64 (priority fix, 2026-09-07 in-game): the shape `harness()` above actually has --
+      -- `frame.editBox`/`frame.button1` as convenience fields on the dialog -- is NOT what a real
+      -- StaticPopup exposes. Verified live: `/run print(StaticPopup1EditBox, StaticPopup1Button1,
+      -- StaticPopup1.button1)` answered two real widgets and a `nil`. Every D61-D67 spec above this
+      -- point passed against a fake that answered our own assumption back to us. This harness has
+      -- NO such fields at all -- only NAME-ADDRESSED GLOBALS, exactly like the client -- so a
+      -- `.editBox`/`.button1` read in the code under test is `nil` here unless it falls back to
+      -- `_G[name .. suffix]`, which is the one thing this harness exists to prove.
+      local globalNames
+      local function harnessRealShape()
+        local shown
+        globalNames = {}
+        local function newFrame(which)
+          local frame = { which = which, strata = "DIALOG", level = 5 }
+          function frame:GetName() return which end
+          local editBox = { text = "" }
+          function editBox:SetText(t) self.text = t or "" end
+          function editBox:GetText() return self.text end
+          function editBox:HighlightText() self.highlighted = true end
+          function editBox:GetParent() return frame end
+          local button1 = { Click = function()
+            local dialog = _G.StaticPopupDialogs[frame.which]
+            if dialog and dialog.OnAccept then dialog.OnAccept(frame, frame.data) end
+          end }
+          -- The real client's addressing: `StaticPopup1EditBox`, `StaticPopup1Button1` -- globals,
+          -- never `frame.editBox`/`frame.button1`. Tracked in `globalNames` so `after_each` can undo
+          -- exactly what this test added and nothing else.
+          _G[which .. "EditBox"] = editBox
+          _G[which .. "Button1"] = button1
+          globalNames[#globalNames + 1] = which .. "EditBox"
+          globalNames[#globalNames + 1] = which .. "Button1"
+          function frame:SetFrameStrata(s) self.strata = s end
+          function frame:GetFrameStrata() return self.strata end
+          function frame:SetFrameLevel(l) self.level = l end
+          function frame:GetFrameLevel() return self.level end
+          local hideHooks = {}
+          function frame:HookScript(event, fn)
+            if event == "OnHide" then hideHooks[#hideHooks + 1] = fn end
+          end
+          function frame:Hide()
+            for _, fn in ipairs(hideHooks) do fn(self) end
+          end
+          return frame
+        end
+        _G.StaticPopup_Show = function(which, arg1, arg2, data)
+          _G.__lastStaticPopup = { which = which, arg1 = arg1, arg2 = arg2, data = data }
+          local dialog = _G.StaticPopupDialogs[which]
+          if not dialog then return nil end
+          shown = newFrame(which)
+          shown.data = data
+          if dialog.OnShow then dialog.OnShow(shown, data) end
+          _G[which .. "EditBox"]:SetText("") -- the same post-OnShow clear D61b answers
+          return shown
+        end
+        return {
+          shown = function() return shown end,
+          editBox = function() return _G[shown.which .. "EditBox"] end,
+          button1 = function() return _G[shown.which .. "Button1"] end,
+          pressEnter = function()
+            local dialog = _G.StaticPopupDialogs[shown.which]
+            if dialog.EditBoxOnEnterPressed then
+              dialog.EditBoxOnEnterPressed(_G[shown.which .. "EditBox"])
+            end
+          end,
+          click = function() _G[shown.which .. "Button1"].Click() end,
+          hide = function() shown:Hide() end,
+        }
+      end
+
+      describe("D64: the real client shape (name-addressed globals, no convenience fields)", function()
+        after_each(function()
+          for _, name in ipairs(globalNames or {}) do _G[name] = nil end
+        end)
+
+        it("prefills and highlights the SAME edit box the client would actually show", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local h = harnessRealShape()
+          Rotation.openNewRotationPopup()
+          assert.equal("My rotation", h.editBox():GetText())
+          assert.is_true(h.editBox().highlighted)
+        end)
+
+        it("reads the typed name on Accept, rather than refusing an empty one", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local h = harnessRealShape()
+          Rotation.openNewRotationPopup()
+          h.editBox():SetText("Real Client Name")
+          -- A spy, not a real fork: what matters here is only whether OnAccept resolved the typed
+          -- text at all, which is exactly the thing D61b's own field-shaped harness could not tell
+          -- apart from "the box was always empty" (both read as an empty-name refusal).
+          local seenName = "unset"
+          local realCreate = Rotation.createAndUse
+          Rotation.createAndUse = function(name) seenName = name; return true, "KEY" end
+          h.click()
+          Rotation.createAndUse = realCreate
+          assert.equal("Real Client Name", seenName)
+        end)
+
+        it("accepts on Enter, through the same name-addressed button", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local h = harnessRealShape()
+          Rotation.openNewRotationPopup()
+          h.editBox():SetText("Enter Name")
+          local seenName = "unset"
+          local realCreate = Rotation.createAndUse
+          Rotation.createAndUse = function(name) seenName = name; return true, "KEY" end
+          h.pressEnter()
+          Rotation.createAndUse = realCreate
+          assert.equal("Enter Name", seenName, "Enter must click the name-addressed button1, not a nil field")
+        end)
+
+        it("raises strata and level on the real frame, exactly as the field-shaped harness proved", function()
+          install()
+          installUserBuilds{ list = function() return {} end }
+          local h = harnessRealShape()
+          Rotation.openNewRotationPopup()
+          assert.equal("FULLSCREEN_DIALOG", h.shown():GetFrameStrata())
+          assert.is_true(h.shown():GetFrameLevel() > 100)
+        end)
+      end)
+
       before_each(function() outerShow = _G.StaticPopup_Show end)
       after_each(function() _G.StaticPopup_Show = outerShow end)
 
@@ -2693,6 +3257,15 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_false(Rotation.openCopyPopup("PALADIN_EXODIN", "Exodin"))
         assert.is_false(Rotation.openRenamePopup("USER_MINE", "My Exodin"))
         assert.is_false(Rotation.openSourcePopup("https://example.com"))
+      end)
+
+      -- `StaticPopup_Show` CAN answer nil even while it and the dialog table both exist (the real
+      -- client does this for a dialog key it does not recognise) -- `raiseAbovePanel`/`prefillNow`
+      -- must not error reaching into a dialog that never arrived.
+      it("does not error when StaticPopup_Show itself answers nil", function()
+        install()
+        _G.StaticPopup_Show = function() return nil end
+        assert.has_no.errors(function() assert.is_true(Rotation.openNewRotationPopup()) end)
       end)
 
       -- D61, driven through the harness's REAL sequence rather than a hand-built `self`. Every one
@@ -3091,6 +3664,62 @@ describe("Options/Rotation (the Rotation section)", function()
         end)
       end)
 
+      -- W1's `confirmThen`: the one popup every card-widget action with `confirm` set shows before
+      -- running its own `func` (see Rotation.lua's own comment on `confirmThen` for why the card
+      -- widget cannot lean on AceConfigDialog's internal confirm the way every OTHER page still
+      -- does). `%s` because the text is per-action; `data.onAccept` is `confirmThen`'s own closure.
+      describe("ELMIRA_CONFIRM", function()
+        local dialog
+        before_each(function() dialog = _G.StaticPopupDialogs.ELMIRA_CONFIRM end)
+
+        it("says nothing of its own, with Confirm/Cancel buttons", function()
+          assert.equal("%s", dialog.text)
+          assert.equal("Confirm", dialog.button1)
+          assert.equal("Cancel", dialog.button2)
+          assert.is_nil(dialog.hasEditBox)
+          assert.equal(0, dialog.timeout)
+          assert.is_true(dialog.whileDead)
+          assert.is_true(dialog.hideOnEscape)
+        end)
+
+        -- Single-arg style, matching ELMIRA_RENAME_ROTATION's own OnAccept tests above: `data`
+        -- read off `self.data` when the caller passes none directly, the real StaticPopup shape
+        -- (StaticPopup_OnClick hands the frame; `frame.data` is where `StaticPopup_Show`'s own
+        -- 4th argument lands).
+        it("runs the caller's onAccept when accepted", function()
+          local ran
+          dialog.OnAccept({ data = { onAccept = function() ran = true end } })
+          assert.is_true(ran)
+        end)
+
+        it("does nothing when shown with no onAccept at all, rather than erroring", function()
+          assert.has_no.errors(function() dialog.OnAccept({ data = {} }) end)
+        end)
+
+        -- The real StaticPopup sequence: `use.func()` shows the popup and does NOT switch yet;
+        -- only the dialog's own accept, driven through the harness, runs the actual action.
+        it("switches the rotation only once the popup is accepted, not when the action merely runs",
+          function()
+            installPack()
+            ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
+            ns.Display.activeBuild = function() return nil, nil end
+            ns.Detect = { hasFailures = function() return true end }
+            installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = false,
+              checks = { { key = "weapon", ok = false, text = "Weapon: 2H (you have 1H)" } } } }
+            local h = harness()
+            cards().card1.arg.actions.use.func()
+            assert.is_false(ns.db.profile.activeBuild)
+            h.click()
+            assert.equal("PALADIN_EXODIN", ns.db.profile.activeBuild)
+          end)
+      end)
+
+      it("does not re-register ELMIRA_CONFIRM on a second load either", function()
+        local first = _G.StaticPopupDialogs.ELMIRA_CONFIRM
+        Rotation = helper.load("Elmira/Options/Rotation.lua")
+        assert.equal(first, _G.StaticPopupDialogs.ELMIRA_CONFIRM)
+      end)
+
       -- Loading the file twice (every spec's before_each) must not stack a second OnAccept behind
       -- the first, or a rename would silently fire twice for one click.
       it("does not re-register the dialogs on a second load", function()
@@ -3125,6 +3754,29 @@ describe("Options/Rotation (the Rotation section)", function()
         install()
         ns.UserBuilds = nil
         local ok, err = Rotation.rename("USER_MINE", "New name")
+        assert.is_false(ok)
+        assert.truthy(err:find("not loaded", 1, true))
+      end)
+    end)
+
+    -- F1b (2026-09-07 bug round): the one plainly worded per-fork privacy toggle.
+    describe("setPrivate()", function()
+      it("sets through UserBuilds and notifies the tree", function()
+        install()
+        local set, notified = nil, 0
+        ns.UserBuilds = { setPrivate = function(k, v) set = { k, v }; return true end }
+        _G.LibStub = function() return { NotifyChange = function() notified = notified + 1 end } end
+        local ok = Rotation.setPrivate("USER_MINE", true)
+        _G.LibStub = nil
+        assert.is_true(ok)
+        assert.same({ "USER_MINE", true }, set)
+        assert.equal(1, notified)
+      end)
+
+      it("reports failure without erroring when the module is absent", function()
+        install()
+        ns.UserBuilds = nil
+        local ok, err = Rotation.setPrivate("USER_MINE", true)
         assert.is_false(ok)
         assert.truthy(err:find("not loaded", 1, true))
       end)
@@ -3256,77 +3908,200 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_false(rows[2].active)
     end)
 
-    -- D32's inline card, on the root page, made to READ as a card (D69): the group's own `name` is
-    -- the title now, not an empty string with a name row underneath repeating it.
-    it("titles the card with the playstyle name, an Open button, summary, difficulty and a source line",
+    -- W1 (try/card-widget, 2026-09-07): the root card is now ONE control -- a `dialogControl`d
+    -- `description`, at a RELATIVE width, its content handed through `arg` -- rather than an
+    -- AceGUI inline group of its own (D69's shape, which AceConfigDialog-3.0.lua:1131-1142 forces
+    -- full-width no matter what `width` says, and is exactly why three of them could never share a
+    -- row). `relWidth`/`dialogControl` are what let the widget draw three across; asserted here as
+    -- plain data, same as every other option in this file.
+    it("hands the widget a relative width and its own dialogControl, so it can share a row",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        local card = cards().card1
+        assert.equal("description", card.type)
+        assert.equal("ElmiraCard", card.dialogControl)
+        assert.equal("relative", card.width)
+        assert.equal(0.32, card.relWidth)
+      end)
+
+    it("titles the card with the playstyle name, an Open action, summary, pips and a Copy link action",
       function()
         installPack()
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", difficulty = "medium",
                          updated = "2026-08-01", summary = "Fast 2H.",
                          source = "https://www.wowhead.com/classic/guide/paladin",
                          recommended = true, fits = true } }
-        local card = Rotation.group().args.card1
-        assert.equal("group", card.type)
-        assert.is_true(card.inline)
-        -- The title IS the card's own bordered-pane heading (AceGUIContainer-InlineGroup.lua), the
-        -- observable D69 exists to fix.
-        assert.is_truthy(card.name:find("Exodin", 1, true))
-        assert.equal("execute", card.args.open.type)
-        assert.is_nil(card.args.open.set)
-        assert.equal("Open", card.args.open.name)
+        local card = cards().card1
+        -- The title IS the badge text the tree/D69 already used -- same string, new home (`arg`).
+        assert.is_truthy(card.arg.title:find("Exodin", 1, true))
+        assert.equal("Open", card.arg.actions.open.name)
         -- D69: the button no longer repeats the name the title already says.
-        assert.is_falsy(card.args.open.name:find("Exodin", 1, true))
-        assert.equal("Fast 2H.", card.args.summary.name)
-        -- D70: difficulty is now on the meta line.
-        assert.is_truthy(card.args.meta.name:find("medium", 1, true))
-        assert.is_truthy(card.args.meta.name:find("2026%-08%-01"))
-        assert.is_truthy(card.args.meta.name:find("recommended", 1, true))
-        -- D71: the source is no longer concatenated into that same line...
-        assert.is_falsy(card.args.meta.name:find("wowhead", 1, true))
-        -- ...it has its own line, phrased so the subject is unambiguous, and a link button.
-        assert.is_truthy(card.args.source.name:find("Source:", 1, true))
-        assert.is_truthy(card.args.source.name:find("wowhead%.com"))
-        assert.equal("execute", card.args.link.type)
+        assert.is_falsy(card.arg.actions.open.name:find("Exodin", 1, true))
+        assert.equal("Fast 2H.", card.arg.summary)
+        -- PA6: difficulty is its own level/label field now (CardWidget.lua draws the pip TEXTURES;
+        -- see PA6's own correction note above `DIFFICULTY_PIPS` -- a glyph string cannot render on
+        -- this client), not a word on the meta line.
+        assert.equal(2, card.arg.difficultyLevel)
+        assert.equal("Medium", card.arg.difficultyLabel)
+        assert.is_falsy(card.arg.meta:find("medium", 1, true))
+        assert.is_truthy(card.arg.meta:find("recommended", 1, true))
+        -- PA8: the exact date is no longer on the card face at all...
+        assert.is_falsy(card.arg.meta:find("2026%-08%-01"))
+        -- ...it moved to the mouseover tooltip.
+        assert.is_truthy(card.arg.tooltip:find("2026%-08%-01"))
+        -- PA4: no separate source text line any more, but the Copy link action survives.
+        assert.is_nil(card.arg.source)
+        assert.is_falsy(card.arg.meta:find("wowhead", 1, true))
+        assert.equal("Copy link", card.arg.actions.link.name)
         -- This row IS the one running (top before_each's default activeBuild), so there is no Use
-        -- button at all -- the sequence is Open, summary, meta, source, link.
-        assert.is_nil(card.args.use)
-        assert.equal(1, card.args.open.order)
-        assert.equal(2, card.args.summary.order)
-        assert.equal(3, card.args.meta.order)
-        assert.equal(4, card.args.source.order)
-        assert.equal(5, card.args.link.order)
+        -- action at all, and the card is flagged active.
+        assert.is_nil(card.arg.actions.use)
+        assert.is_true(card.arg.active)
       end)
 
-    -- Clicking Open navigates to the template's own page (D32), never a second `Open` of the panel.
-    it("navigates to the template's own page when its Open button is clicked", function()
+    -- PA5 (2026-09-08, PROVISIONAL split): a playstyle name that IS "Name -- description" prose
+    -- shows only the short name on the card, with the full prose in the tooltip.
+    it("splits the playstyle at the em-dash for the card title, keeping the rest for the tooltip",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin — fast 2H, single seal (Ret)",
+                         fits = true } }
+        local card = cards().card1
+        assert.equal("Exodin", card.arg.title)
+        assert.is_truthy(card.arg.tooltip:find("Exodin — fast 2H, single seal (Ret)", 1, true))
+      end)
+
+    -- PA7: "experimental" used to conflate unproven-and-hard; it now carries only provenance.
+    -- PB4: the wording itself claimed "no published guide", which the data disproves (every
+    -- experimental entry ships a source) -- the neutral `L["Unproven"]` makes no claim either way.
+    it("labels an experimental row as unproven, not the bare word 'experimental'",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", experimental = true,
+                         fits = true } }
+        local meta = cards().card1.arg.meta
+        assert.is_truthy(meta:find("Unproven", 1, true))
+        assert.is_falsy(meta:find("experimental", 1, true))
+        assert.is_falsy(meta:find("guide", 1, true))
+      end)
+
+    -- PA8: the card shows the catalog PHASE, not a raw "experimental" flag or date.
+    it("shows the catalog phase on the meta line", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", phase = "SoD P8",
+                       fits = true } }
+      assert.is_truthy(cards().card1.arg.meta:find("SoD P8", 1, true))
+    end)
+
+    -- PA9: the card hands the widget a plain `unavailable` flag; D48's own "still gives it a page,
+    -- muted" test above already proves the TITLE side, this proves the state flag CardWidget.lua's
+    -- border keys off.
+    it("flags an unavailable playstyle's card so the widget can dim it", function()
+      installPack()
+      ns.Display.activeBuild = function() return nil, nil end
+      installWizard{ { build = "PALADIN_TWIST", playstyle = "Seal twisting", available = false,
+                       fits = true } }
+      local card = cards().card1
+      assert.is_true(card.arg.unavailable)
+      assert.is_falsy(card.arg.active)
+    end)
+
+    -- The Label CreateControl falls back to when a `dialogControl` never registered
+    -- (AceConfigDialog-3.0.lua:1093-1104, W1d) reads the option's own `name` -- so an install
+    -- missing Options/CardWidget.lua must still show something readable, not an empty line.
+    it("keeps a readable fallback `name`, for the Label AceConfig falls back to without the widget",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true,
+                         summary = "Fast 2H." } }
+        local card = cards().card1
+        assert.is_truthy(card.name:find("Exodin", 1, true))
+        assert.is_truthy(card.name:find("Fast 2H.", 1, true))
+      end)
+
+    -- Clicking Open navigates to the template's own page (D32).
+    it("navigates to the template's own page when its Open action runs", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
       local selected
       ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
-      Rotation.group().args.card1.args.open.func()
+      cards().card1.arg.actions.open.func()
       assert.same({ "Elmira", "rotation", "PALADIN_EXODIN" }, selected)
     end)
 
-    -- D71: the link button opens the SAME StaticPopup layer as D35/D61/D67, never a second one, with
+    -- PB5 (2026-09-08): `SelectGroup` alone only schedules a DEFERRED rebuild, which is why a card
+    -- click used to land on the Builder instead of the clicked template -- every native AceConfig
+    -- control (an execute button, a slider) gets a SYNCHRONOUS `AceConfigDialog:Open(appName)`
+    -- refresh for free right after its own func runs (`ActivateControl`); the card body is a raw
+    -- Frame click that never went through that machinery, so it never got one. The fix is that same
+    -- bare, path-less `Open("Elmira")` call, made directly.
+    it("also forces a synchronous refresh after SelectGroup, the same one native controls get for free",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        local opened = {}
+        ns.Options = { dialog = { SelectGroup = function() end,
+                                   Open = function(_, ...) opened[#opened + 1] = { ... } end } }
+        cards().card1.arg.actions.open.func()
+        assert.equal(1, #opened, "the refresh must run exactly once per click, not zero and not twice")
+        assert.same({ "Elmira" }, opened[1], "a BARE Open with no path -- a path replaces the whole root (D20)")
+      end)
+
+    -- PB5's own warned-against regression: `Options.Open()` with no path arguments forces
+    -- `SelectGroup("Elmira", "general")` (D61e) -- routing the refresh through that wrapper instead
+    -- of calling AceConfigDialog directly would send every card click to General.
+    it("calls AceConfigDialog's own Open directly, never the Options.Open wrapper", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      local wrapperCalled = false
+      ns.Options = { dialog = { SelectGroup = function() end, Open = function() end },
+                     Open = function() wrapperCalled = true end }
+      cards().card1.arg.actions.open.func()
+      assert.is_false(wrapperCalled)
+    end)
+
+    -- The refresh must not depend on `SelectGroup` having succeeded first -- exactly the shape
+    -- `ActivateControl` uses (it always refreshes after a native control's func, unconditionally).
+    it("still refreshes even on a dialog stand-in that offers no SelectGroup at all", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      local opened = false
+      ns.Options = { dialog = { Open = function() opened = true end } }
+      assert.has_no.errors(function() cards().card1.arg.actions.open.func() end)
+      assert.is_true(opened)
+    end)
+
+    -- No options window loaded at all (an install order this addon has to tolerate elsewhere too)
+    -- must not error reaching into a `nil` dialog for either the select or the refresh.
+    it("does not error when there is no options dialog to navigate at all", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      ns.Options = nil
+      assert.has_no.errors(function() cards().card1.arg.actions.open.func() end)
+    end)
+
+    -- D71: the link action opens the SAME StaticPopup layer as D35/D61/D67, never a second one, with
     -- the FULL url (not the shortened host the source line shows).
-    it("opens the source URL popup, in full, when the card's link button is clicked", function()
+    it("opens the source URL popup, in full, when the card's Copy link action runs", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true,
                        source = "https://www.wowhead.com/classic/guide/paladin" } }
-      local link = Rotation.group().args.card1.args.link
+      local link = cards().card1.arg.actions.link
       assert.equal("Shows the full web address in a box you can select and copy.", link.desc)
       link.func()
       assert.equal("ELMIRA_SHOW_SOURCE", _G.__lastStaticPopup.which)
       assert.equal("https://www.wowhead.com/classic/guide/paladin", _G.__lastStaticPopup.data.prefill)
     end)
 
-    it("has no source line or link button at all when the catalog entry carries no source", function()
-      installPack()
-      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
-      local card = Rotation.group().args.card1
-      assert.is_nil(card.args.source)
-      assert.is_nil(card.args.link)
-    end)
+    it("has no source line or Copy link action at all when the catalog entry carries no source",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        local card = cards().card1
+        assert.is_nil(card.arg.source)
+        assert.is_nil(card.arg.actions.link)
+      end)
 
     -- The Wizard.lua heading, reused word for word so a player never sees it change.
     it("states level, class and weapon in the detection line", function()
@@ -3349,36 +4124,35 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_truthy(line:find("unknown", 1, true))
     end)
 
-    -- The row model carries `active`; the marker is what the player actually sees.
-    it("badges the running template's TITLE, and offers Use on the others", function()
-      installPack()
-      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
-                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
-      local args = Rotation.group().args
-      assert.is_truthy(args.card1.name:find("in use", 1, true))
-      assert.is_nil(args.card1.args.use, "the active row still offers a Use button")
-      assert.is_falsy(args.card2.name:find("in use", 1, true))
-      assert.equal("execute", args.card2.args.use.type)
-      assert.equal("Use", args.card2.args.use.name)
-      assert.is_nil(args.card2.args.use.desc, "a fitting row still explains a reason it does not have")
-      assert.is_nil(args.card2.args.use.confirm)
-      -- With a Use button present, it takes position 2 and everything after it shifts down one.
-      assert.equal(1, args.card2.args.open.order)
-      assert.equal(2, args.card2.args.use.order)
-      assert.equal(3, args.card2.args.summary.order)
-      assert.equal(4, args.card2.args.meta.order)
-    end)
+    -- PA9 (2026-09-08): the "· in use" badge is gone from the card's TITLE -- the widget's own
+    -- border/fill carry that now (CardWidget.lua's own tests prove the colour side); the row model
+    -- hands the card `active` as a plain flag instead, and offers Use on the others exactly as
+    -- before.
+    it("marks the running template's row active with no title badge, and offers Use on the others",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                       { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+        local args = cards()
+        assert.is_true(args.card1.arg.active)
+        assert.is_falsy(args.card1.arg.title:find("in use", 1, true))
+        assert.is_nil(args.card1.arg.actions.use, "the active row still offers a Use action")
+        assert.is_falsy(args.card2.arg.active)
+        assert.is_falsy(args.card2.arg.title:find("in use", 1, true))
+        assert.equal("Use", args.card2.arg.actions.use.name)
+        assert.is_nil(args.card2.arg.actions.use.desc, "a fitting row still explains a reason it does not have")
+      end)
 
-    -- D44: the Use button actually switches the rotation when clicked -- not just that the button
+    -- D44: the Use action actually switches the rotation when it runs -- not just that the action
     -- looks right, but that its own `func` runs `Rotation.use` and the switch takes.
-    it("actually switches to the rotation when the Use button is clicked", function()
+    it("actually switches to the rotation when the Use action runs", function()
       installPack()
       ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
                      { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
       local said = {}
       ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
-      Rotation.group().args.card2.args.use.func()
+      cards().card2.arg.actions.use.func()
       assert.equal("PALADIN_SHOCKADIN", ns.db.profile.activeBuild)
       assert.equal(1, #said, "only the success announcement, no failure warning")
       assert.equal("rotation", said[1][1])
@@ -3386,7 +4160,7 @@ describe("Options/Rotation (the Rotation section)", function()
 
     -- D44: `Rotation.use` returns `false, reason` and this call site used to drop it, so a failed
     -- click looked exactly like a dead button. It must say why instead.
-    it("announces the reason instead of doing nothing when the Use button fails to activate",
+    it("announces the reason instead of doing nothing when the Use action fails to activate",
       function()
         installPack()
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
@@ -3394,26 +4168,33 @@ describe("Options/Rotation (the Rotation section)", function()
         -- No ns.db in this describe block's default state, so Rotation.use refuses with "no profile".
         local said = {}
         ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
-        Rotation.group().args.card2.args.use.func()
+        cards().card2.arg.actions.use.func()
         assert.equal(1, #said)
         assert.equal("warning", said[1][1])
         assert.is_truthy(said[1][2]:find("could not set that playstyle", 1, true))
         assert.is_truthy(said[1][2]:find("no profile", 1, true))
       end)
 
-    it("does not error when Announce is not loaded and the Use button fails", function()
+    it("does not error when Announce is not loaded and the Use action fails", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
                      { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
       ns.Announce = nil
-      Rotation.group().args.card2.args.use.func()
+      cards().card2.arg.actions.use.func()
     end)
 
     -- Never a literal AceConfig `disabled`: `requires` is advisory (hard rule 8), so a card that
-    -- does not fit still offers a button, worded and confirmed rather than refused.
-    it("offers 'Use this anyway', confirmed, when a template needs gear or runes you do not have",
+    -- does not fit still offers an action, worded and confirmed rather than refused. The card's own
+    -- buttons are plain frames CardWidget.lua draws, never fed through AceConfigDialog's own
+    -- ActivateControl -- so `confirmThen` (Rotation.lua) bakes the confirm INTO `func` itself, and
+    -- what is observable here is exactly that: a StaticPopup, naming the same reason, whose OWN
+    -- accept is what finally runs `Rotation.use` -- clicking the action alone must not switch yet.
+    -- PB3: the label stays plain "Use" even when the row fails a check -- the confirm dialog is
+    -- where the caveat lives, named below via `_G.__lastStaticPopup.arg1`.
+    it("offers 'Use', confirmed, when a template needs gear or runes you do not have",
       function()
         installPack()
+        ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
         ns.Display.activeBuild = function() return nil, nil end -- nothing active: the row must not be badged
         ns.Detect = { hasFailures = function(checks)
           for _, c in ipairs(checks or {}) do if c.ok == false then return true end end
@@ -3421,13 +4202,32 @@ describe("Options/Rotation (the Rotation section)", function()
         end }
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = false,
                          checks = { { key = "weapon", ok = false, text = "Weapon: 2H (you have 1H)" } } } }
-        local use = Rotation.group().args.card1.args.use
-        assert.equal("Use this anyway", use.name)
-        assert.is_nil(use.disabled)
-        assert.is_true(use.confirm)
-        assert.equal("Weapon: 2H (you have 1H)", use.confirmText)
+        local use = cards().card1.arg.actions.use
+        assert.equal("Use", use.name)
         assert.equal("Weapon: 2H (you have 1H)", use.desc)
+        use.func()
+        assert.is_false(ns.db.profile.activeBuild, "must wait for the popup's own accept, not switch immediately")
+        assert.equal("ELMIRA_CONFIRM", _G.__lastStaticPopup.which)
+        assert.equal("Weapon: 2H (you have 1H)", _G.__lastStaticPopup.arg1)
+        _G.__lastStaticPopup.data.onAccept()
+        assert.equal("PALADIN_EXODIN", ns.db.profile.activeBuild)
       end)
+
+    -- `confirmThen`'s own degrade: a client with no StaticPopup layer at all (never true in game,
+    -- but the same defensive shape `openSourcePopup` etc. already use above) must still let the
+    -- action run, rather than leaving the Use button dead.
+    it("runs the action directly when no StaticPopup layer is present at all", function()
+      installPack()
+      ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
+      ns.Display.activeBuild = function() return nil, nil end
+      ns.Detect = { hasFailures = function() return true end }
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = false,
+                       checks = { { key = "weapon", ok = false, text = "Weapon: 2H (you have 1H)" } } } }
+      local use = cards().card1.arg.actions.use
+      _G.StaticPopup_Show = nil
+      use.func()
+      assert.equal("PALADIN_EXODIN", ns.db.profile.activeBuild)
+    end)
 
     -- D48. Two catalog entries ship with `available = false` today (seal twisting, seal stacking):
     -- the tree used to drop them, so the owner's answer to "where is seal twisting?" was silence.
@@ -3453,9 +4253,9 @@ describe("Options/Rotation (the Rotation section)", function()
 
       it("mutes its card's TITLE on the root page too, so the tree and the list agree", function()
         installTwist()
-        local args = Rotation.group().args
-        assert.equal(ns.Colors.wrap(ns.Colors.MUTED, "Seal twisting"), args.card2.name)
-        assert.equal("Exodin", args.card1.name)
+        local args = cards()
+        assert.equal(ns.Colors.wrap(ns.Colors.MUTED, "Seal twisting"), args.card2.arg.title)
+        assert.equal("Exodin", args.card1.arg.title)
       end)
 
       it("says why on its own page, in words, above the summary", function()
@@ -3467,15 +4267,19 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_nil(Rotation.group().args.PALADIN_EXODIN.args.about.args.blocked)
       end)
 
+      -- PB3: the label is plain "Use" on both rows -- the confirmed one carries the caveat only in
+      -- `confirm`/`confirmText`, which is what distinguishes it from Exodin's un-confirmed button.
       it("keeps a Use button, worded and confirmed with that same reason", function()
         installTwist()
         local use = Rotation.group().args.PALADIN_TWIST.args.header.args.use
-        assert.equal("Use this anyway", use.name)
+        assert.equal("Use", use.name)
         assert.is_nil(use.disabled)
         assert.is_true(use.confirm)
         assert.is_truthy(use.confirmText:find("no rotation has shipped", 1, true))
         assert.equal(use.confirmText, use.desc)
-        assert.equal("Use", Rotation.group().args.PALADIN_EXODIN.args.header.args.use.name)
+        local exodinUse = Rotation.group().args.PALADIN_EXODIN.args.header.args.use
+        assert.equal("Use", exodinUse.name)
+        assert.is_nil(exodinUse.confirm)
       end)
 
       -- The reason it cannot run comes first: "you need a two-hander" is true and beside the point
@@ -3487,8 +4291,9 @@ describe("Options/Rotation (the Rotation section)", function()
         installWizard{ { build = "PALADIN_TWIST", playstyle = "Seal twisting", available = false,
                          fits = false,
                          checks = { { key = "weapon", ok = false, text = "Weapon: 2H (you have 1H)" } } } }
-        local use = Rotation.group().args.card1.args.use
-        assert.is_truthy(use.confirmText:find("no rotation has shipped", 1, true))
+        local use = cards().card1.arg.actions.use
+        use.func()
+        assert.is_truthy(_G.__lastStaticPopup.arg1:find("no rotation has shipped", 1, true))
       end)
 
       it("does not claim the character is ready for a rotation that does not exist", function()
@@ -3510,13 +4315,29 @@ describe("Options/Rotation (the Rotation section)", function()
 
     -- D70: the difficulty the catalog carries (Classes/Paladin.lua etc.) reaches the card, which
     -- used to drop it entirely.
-    it("tags a card's meta line with its difficulty and marks an experimental one", function()
+    -- PA6: easy/medium/hard hand over a plain LEVEL NUMBER and a LABEL string -- CardWidget.lua owns
+    -- turning the level into pip textures (this client's font has no ●/○ glyphs, tasks/lessons.md;
+    -- a glyph string would have rendered as three identical boxes, which is exactly the bug the
+    -- 2026-09-08 correction replaced).
+    it("hands the card a difficulty level and label, one tier per level", function()
       installPack()
-      installWizard{ { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", difficulty = "hard",
-                       experimental = true, fits = true } }
-      local meta = Rotation.group().args.card1.args.meta.name
-      assert.is_truthy(meta:find("experimental", 1, true))
-      assert.is_truthy(meta:find("hard", 1, true))
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", difficulty = "easy",
+                       fits = true },
+                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", difficulty = "hard",
+                       fits = true } }
+      local args = cards()
+      assert.equal(1, args.card1.arg.difficultyLevel)
+      assert.equal("Easy", args.card1.arg.difficultyLabel)
+      assert.equal(3, args.card2.arg.difficultyLevel)
+      assert.equal("Hard", args.card2.arg.difficultyLabel)
+    end)
+
+    it("omits both difficulty fields when the catalog entry has none", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      local card = cards().card1
+      assert.is_nil(card.arg.difficultyLevel)
+      assert.is_nil(card.arg.difficultyLabel)
     end)
 
     -- A catalog `source` is always a URL string in practice; a malformed one must not error the
@@ -3527,33 +4348,83 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.has_no.errors(function() return Rotation.group() end)
     end)
 
+    -- PA5's split (`splitPlaystyle`) runs on `row.playstyle` before anything else touches it; a
+    -- catalog entry with a non-string playstyle must not take the whole panel down over it.
+    it("does not error when a catalog playstyle is not a string at all", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = 12345, fits = true } }
+      assert.has_no.errors(function() return Rotation.group() end)
+    end)
+
+    -- PA10's `classDisplay` only runs on a genuinely truthy `p.class`/`detection.class`; a pack
+    -- whose `class` field is present but not a string (malformed data, never Elmira's own) must
+    -- still render rather than erroring trying to `:sub()` a number.
+    it("does not error when the pack's class is not a string at all", function()
+      ns.Display.currentPack = function()
+        return { class = 12345, catalog = { PALADIN = CATALOG },
+                 builds = { PALADIN_EXODIN = {}, PALADIN_SHOCKADIN = {} } }
+      end
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      assert.has_no.errors(function() return Rotation.group() end)
+    end)
+
+    -- PA10: the pack's own `class` is preferred, but a pack that has none must still fall back to
+    -- DETECTION's class (also normally-capitalised), not silently say "?" for a class it could
+    -- have named.
+    it("falls back to detection's class for the playstyles header when the pack itself has none",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        ns.Display.currentPack = function()
+          return { catalog = { PALADIN = CATALOG }, builds = { PALADIN_EXODIN = {} } }
+        end
+        ns.Wizard.detection = function() return { class = "MAGE" } end
+        local header = Rotation.group().args.playstyles.name
+        assert.is_truthy(header:find("Mage", 1, true))
+      end)
+
+    -- PA5/PA8: a playstyle with no em-dash and no `updated` date has nothing extra to say in a
+    -- tooltip -- it must be genuinely ABSENT (nil), not an empty string that would still make
+    -- CardWidget.lua draw a tooltip box with nothing in it.
+    it("has no tooltip at all when the playstyle has no extra text and no updated date", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      assert.is_nil(cards().card1.arg.tooltip)
+    end)
+
     it("says so when the class ships no templates, and still offers New rotation", function()
       installPack()
       installWizard{}
       local root = Rotation.group().args
       assert.is_truthy(root.noPack.name:find("No playstyles for", 1, true))
       assert.equal("execute", root.newRotation.type)
-      assert.is_nil(root.header, "a header for an empty catalog names nothing")
+      assert.is_nil(root.playstyles, "an inline group for an empty catalog names nothing")
     end)
 
-    it("names the class and catalog phase in the root page's header", function()
+    -- PA10 (2026-09-08): the class TOKEN read as shouting ("Playstyles for PALADIN"); the header now
+    -- reads the normally-capitalised class name. PA11: the header text moved from its own
+    -- description line into the surrounding inline group's own title.
+    it("names the class and catalog phase in the root page's playstyles group title", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true, phase = "SoD P8" } }
-      assert.is_truthy(Rotation.group().args.header.name:find("PALADIN", 1, true))
-      assert.is_truthy(Rotation.group().args.header.name:find("SoD P8", 1, true))
+      local header = Rotation.group().args.playstyles.name
+      assert.is_truthy(header:find("Paladin", 1, true))
+      assert.is_falsy(header:find("PALADIN", 1, true))
+      assert.is_truthy(header:find("SoD P8", 1, true))
     end)
 
     -- Absolute positions, not just "each is unique": a shift here would leave every row still
     -- distinct from the others (the uniqueness test above would not notice), only reordered on
-    -- screen from what the artifact specifies -- detection, then New rotation, then the header.
-    it("puts detection, New rotation and the header in that exact order", function()
+    -- screen from what the artifact specifies -- detection, then New rotation, then the playstyles
+    -- group (PA11's inline group replaces the old separate header line + loose cards).
+    it("puts detection, New rotation and the playstyles group in that exact order", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
       local args = Rotation.group().args
       assert.equal(1, args.detection.order)
       assert.equal(2, args.newRotation.order)
-      assert.equal(3, args.header.order)
-      assert.equal(4, args.card1.order)
+      assert.equal(3, args.playstyles.order)
+      assert.equal(1, cards().card1.order)
     end)
 
     it("puts New rotation right after detection when the class has no catalog", function()
@@ -3860,6 +4731,31 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal(5, header.delete.order)
       end)
 
+    -- F1b (2026-09-07 bug round): the owner's per-fork override, over plain class-wide visibility.
+    it("gives a fork's page a private toggle, default off", function()
+      installPack()
+      installUserBuilds{ list = function() return { "USER_SCRATCH" } end,
+                        find = function() return {}, "fork", { name = "Scratch", private = false } end }
+      local toggle = Rotation.group().args.USER_SCRATCH.args.private
+      assert.equal("toggle", toggle.type)
+      assert.is_false(toggle.get())
+      assert.is_truthy(toggle.desc:find("only this one can", 1, true))
+    end)
+
+    it("reflects an already-private fork, and its set() calls UserBuilds.setPrivate", function()
+      installPack()
+      local calls = {}
+      installUserBuilds{
+        list = function() return { "USER_SCRATCH" } end,
+        find = function() return {}, "fork", { name = "Scratch", private = true } end,
+        setPrivate = function(key, v) calls[#calls + 1] = { key, v }; return true end,
+      }
+      local toggle = Rotation.group().args.USER_SCRATCH.args.private
+      assert.is_true(toggle.get())
+      toggle.set(nil, false)
+      assert.same({ { "USER_SCRATCH", false } }, calls)
+    end)
+
     it("gives a fork's page an Edit button that activates it and jumps to the Builder", function()
       installPack()
       ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
@@ -3948,5 +4844,27 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal("PALADIN_EXODIN", Rotation.displayName("PALADIN_EXODIN"))
       assert.equal("?", Rotation.displayName(nil))
     end)
+  end)
+end)
+
+-- PB1 (2026-09-08): this is the FOURTH time a popup shipped without `raiseAbovePanel`, once per
+-- call site that had to remember it by hand -- twice for the naming popups, once for the source
+-- popup, now the confirm dialog (`Rotation.lua:2267` called `StaticPopup_Show` directly and never
+-- raised or prefilled it). A source-level guard is unusual, but the alternative is trusting that
+-- whoever adds the SIXTH popup remembers a convention four people in a row have already forgotten:
+-- every popup in this file must go through the one `showPopup` helper, which is provable directly
+-- from the source text -- `StaticPopup_Show(` may appear EXACTLY ONCE, inside that helper's own
+-- definition. A normal behavioural spec cannot pin this: it would have to enumerate every call site
+-- by name, and would say nothing about a future one nobody wrote a test for yet.
+describe("Options/Rotation.lua source (PB1): every popup goes through one showPopup helper", function()
+  it("calls StaticPopup_Show from exactly one place in the file", function()
+    local f = assert(io.open("Elmira/Options/Rotation.lua", "r"))
+    local source = f:read("*a")
+    f:close()
+    local count = 0
+    for _ in source:gmatch("StaticPopup_Show%(") do count = count + 1 end
+    assert.equal(1, count,
+      "every popup must be shown through the one showPopup(which, text1, text2, data, prefill) " ..
+      "helper -- a second direct StaticPopup_Show( call site is how this bug shipped four times")
   end)
 end)

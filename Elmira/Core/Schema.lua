@@ -475,7 +475,7 @@ function Schema.compile(build, ctx)
   ctx = ctx or {}
   local ok, errors = Schema.validate(build, ctx)
   if not ok then
-    ns.log("Elmira: build '%s' failed validation (%d problem(s))", tostring(build and build.key), #errors)
+    ns.log("build '%s' failed validation (%d problem(s))", tostring(build and build.key), #errors)
     return nil, errors
   end
 

@@ -149,7 +149,7 @@ function Wizard.OfferOnLogin()
   if ns.Announce then
     ns.Announce.emit("status", text)
   else
-    ns.log("Elmira: %s", text)
+    ns.log("%s", text)
   end
   local char = charDB()
   -- Mark it seen either way. The prompt is once per catalog version, not once per login.

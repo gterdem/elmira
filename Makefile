@@ -10,7 +10,7 @@ REPORTS_DIR ?= /mnt/d/Addon-Testing/Elmira/reports
 PKGDIR      := .release
 ADDONS      := $(notdir $(wildcard Elmira*))
 
-.PHONY: test lint mutants coverage selftest package libs deploy deploy-package release-zip collect
+.PHONY: test lint mutants mutants-deep coverage selftest package libs deploy deploy-package release-zip collect
 
 test:
 	busted --lua=$(LUA) tests/spec
@@ -21,10 +21,19 @@ test:
 #          protected by any test -- this project's characteristic defect (a function with a spec and
 #          no call site) is invisible to everything else, including review. See tools/mutants.sh.
 #          Scoped to the diff by default so it runs in seconds; ALL=1 sweeps the whole tree.
+#          This IS the gate: deletion-only, 0 survivors required.
+# mutants-deep  same, plus a SUBSTITUTION pass (a line stays present with a different value of the
+#          same shape) that catches a value bug deletion masks by crashing downstream instead of
+#          failing an assertion. OPT-IN and NOT the gate: on this tree it currently reports ~100
+#          survivors, almost all AceConfig `name`/`desc` strings nobody intends to assert word for
+#          word. Consult it; do not wire it into CI or the definition of done.
 # coverage per-file, and treats a file NO spec loads as 0% rather than omitting it the way luacov
 #          does. Exemptions are declared with a reason in tools/coverage-exempt.txt.
 mutants:
 	@./tools/mutants.sh
+
+mutants-deep:
+	@DEEP=1 ./tools/mutants.sh
 
 coverage:
 	@./tools/coverage.sh

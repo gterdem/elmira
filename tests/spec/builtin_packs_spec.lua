@@ -72,7 +72,7 @@ describe("Core.Packs (ADR-0011 built-in class-pack registry)", function()
       -- "some log happened".
       assert.equal(1, #logged)
       assert.equal(
-        "Elmira: built-in pack for PALADIN rejected (data must be a function, got table)",
+        "built-in pack for PALADIN rejected (data must be a function, got table)",
         logged[1])
     end)
 
@@ -80,7 +80,7 @@ describe("Core.Packs (ADR-0011 built-in class-pack registry)", function()
       local ok = Packs.RegisterBuiltinPack("MAGE", nil)
       assert.is_false(ok)
       assert.equal(
-        "Elmira: built-in pack for MAGE rejected (data must be a function, got nil)",
+        "built-in pack for MAGE rejected (data must be a function, got nil)",
         logged[1])
     end)
 
@@ -125,13 +125,13 @@ describe("Core.Packs (ADR-0011 built-in class-pack registry)", function()
       local pack = Packs.BuiltinPack("MAGE")
       assert.is_nil(pack)
       assert.equal(1, #logged)
-      assert.equal("Elmira: built-in MAGE pack returned string, not a table", logged[1])
+      assert.equal("built-in MAGE pack returned string, not a table", logged[1])
     end)
 
     it("returns nil when the thunk returns nothing at all", function()
       Packs.RegisterBuiltinPack("MAGE", function() end)
       assert.is_nil(Packs.BuiltinPack("MAGE"))
-      assert.equal("Elmira: built-in MAGE pack returned nil, not a table", logged[1])
+      assert.equal("built-in MAGE pack returned nil, not a table", logged[1])
     end)
 
     it("a broken class file disables only that class, not the whole registry", function()

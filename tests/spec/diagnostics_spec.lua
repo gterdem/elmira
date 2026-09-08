@@ -238,6 +238,74 @@ describe("Core.Diagnostics", function()
     end)
   end)
 
+  -- R3 (D87): "a condition on a seal after the line that cast it was changed" -- the owner's own
+  -- worked example of the editor's RED state. Nothing else in the addon's model puts a seal on the
+  -- character, so a `seal`/`seal_linger` condition naming one no enabled line casts can never
+  -- become true as the build stands, however the character or the moment changes.
+  describe("deadSeal()", function()
+    it("names a seal condition no line of the build casts", function()
+      local found = Diagnostics.deadSeal(build{
+        { spell = "JUDGEMENT" },
+        { spell = "EXORCISM", when = { { "seal", "SEAL_OF_RIGHTEOUSNESS" } } },
+      })
+      assert.equal(1, #found)
+      assert.equal(2, found[1].index)
+      assert.equal("SEAL_OF_RIGHTEOUSNESS", found[1].key)
+    end)
+
+    it("says nothing once a line actually casts that seal", function()
+      assert.same({}, Diagnostics.deadSeal(build{
+        { spell = "SEAL_OF_RIGHTEOUSNESS" },
+        { spell = "EXORCISM", when = { { "seal", "SEAL_OF_RIGHTEOUSNESS" } } },
+      }))
+    end)
+
+    it("checks seal_linger the same way as seal", function()
+      local found = Diagnostics.deadSeal(build{
+        { spell = "EXORCISM", when = { { "seal_linger", "SEAL_OF_RIGHTEOUSNESS" } } },
+      })
+      assert.equal(1, #found)
+    end)
+
+    -- Schema recurses into all/any/not when it validates; a check that only looked at the top
+    -- level would miss exactly the nested shape the shipped builds actually use.
+    it("looks inside all, any and not", function()
+      local found = Diagnostics.deadSeal(build{
+        { spell = "EXORCISM", when = {
+          { "any", { "seal", "GONE_A" }, { "not", { "seal_linger", "GONE_B" } } },
+        } },
+      })
+      local keys = {}
+      for _, row in ipairs(found) do keys[row.key] = true end
+      assert.is_true(keys.GONE_A)
+      assert.is_true(keys.GONE_B)
+    end)
+
+    -- A disabled line neither casts a seal for real play nor is itself checked: Schema.compile
+    -- skips it, so it is not in the rotation at all.
+    it("does not count a disabled line's cast, and does not check a disabled line's own condition", function()
+      local found = Diagnostics.deadSeal(build{
+        { spell = "SEAL_OF_RIGHTEOUSNESS", disabled = true },
+        { spell = "EXORCISM", when = { { "seal", "SEAL_OF_RIGHTEOUSNESS" } } },
+        { spell = "JUDGEMENT", disabled = true, when = { { "seal", "GONE" } } },
+      })
+      assert.equal(1, #found)
+      assert.equal(2, found[1].index)
+    end)
+
+    it("stays quiet about every seal condition the shipped builds actually use", function()
+      for key, shipped in pairs(pack.builds) do
+        assert.same({}, Diagnostics.deadSeal(shipped), key)
+      end
+    end)
+
+    it("says nothing about an empty or malformed rotation", function()
+      assert.same({}, Diagnostics.deadSeal(nil))
+      assert.same({}, Diagnostics.deadSeal(build{ "not an entry" }))
+      assert.same({}, Diagnostics.deadSeal(build{ { item = 13 } }))
+    end)
+  end)
+
   describe("compare()", function()
     local MINE, THEIRS
 

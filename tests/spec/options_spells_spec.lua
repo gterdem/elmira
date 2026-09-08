@@ -37,17 +37,17 @@ describe("Options/Spells (the Spells page, R2 D52-D57)", function()
   end)
 
   describe("group()", function()
-    it("is a tree named Spells, ordered right after Rotations (0)", function()
+    it("is a tree named Abilities (M1b), ordered right after Rotations (M1a: 2, 3 of 1-8)", function()
       local g = SpellsPage.group()
       assert.equal("group", g.type)
       assert.equal("tree", g.childGroups)
-      assert.equal("Spells", g.name)
-      assert.equal(0.5, g.order)
+      assert.equal("Abilities", g.name)
+      assert.equal(3, g.order)
     end)
 
-    it("opens with the exact D52 sentence", function()
+    it("opens with the exact D52 sentence (M1b: 'Abilities', not 'Spells')", function()
       local g = SpellsPage.group()
-      assert.equal("Every spell, buff or debuff a rotation or a cue can use. Spells used by your"
+      assert.equal("Every spell, buff or debuff a rotation or a cue can use. Abilities used by your"
         .. " rotations are listed automatically; add anything else here.", g.args.intro.name)
     end)
 
@@ -146,6 +146,35 @@ describe("Options/Spells (the Spells page, R2 D52-D57)", function()
       assert.equal("Kick", values["901"])
     end)
 
+    -- I1c: resolved through the adapter (Display.spellIconByID), never a WoW API call from this
+    -- file; an entry with no resolvable icon still shows as a plain name, no gap, no broken box.
+    it("prefixes a resolvable icon onto the label, and leaves an unresolved one plain (I1c)", function()
+      ns.Display.spellIconByID = function(id)
+        return id == 900 and "Interface\\Icons\\Ability_Rogue_SliceDice" or nil
+      end
+      local values = SpellsPage.group().args.addSpellbook.args.pick.values
+      assert.equal("|TInterface\\Icons\\Ability_Rogue_SliceDice:14|t Slice and Dice", values["900"])
+      assert.equal("Kick", values["901"])
+    end)
+
+    -- I1b: a standing bug, confirmed in game ("the dropdown abilities should be sorted by name as
+    -- well, it is chaotic right now"). With no explicit `sorting`, AceGUIWidget-DropDown's own
+    -- `SetList` sorts the picker by its KEYS -- `tostring(entry.id)` here -- not by the display
+    -- text, so the list was always ordered by spell ID. Fixture id 500 sorts FIRST by id but its
+    -- name ("Zzz Ability") sorts LAST; id 901's name ("Aaa Ability") sorts FIRST. If `sorting`
+    -- were absent (today's behaviour), the picker's own key-sort would put "500" before "901" --
+    -- the opposite of the required, by-name order -- so this genuinely fails without the fix.
+    it("sorts the picker by NAME, not by the spell id its key happens to be (I1b)", function()
+      ns.Adapter.spellbookEntries = function()
+        return {
+          { id = 500, name = "Zzz Ability" }, -- lowest id, but last alphabetically
+          { id = 901, name = "Aaa Ability" }, -- highest id, but first alphabetically
+        }
+      end
+      local args = SpellsPage.group().args.addSpellbook.args
+      assert.same({ "901", "500" }, args.pick.sorting)
+    end)
+
     it("is shaped as an inline group named 'From your spellbook', ordered second", function()
       local row = SpellsPage.group().args.addSpellbook
       assert.equal("group", row.type)
@@ -240,20 +269,24 @@ describe("Options/Spells (the Spells page, R2 D52-D57)", function()
       assert.is_truthy(args.preview.name():find("Not found%.", nil))
     end)
 
-    it("registers on Add and navigates to the new page", function()
+    it("registers on Add, navigates to the new page, and clears the box", function()
       local args = SpellsPage.group().args.addId.args
       args.value.set(nil, "415073")
       args.add.func()
       assert.equal("id", ns.db.char.spells.EXORCISM.source)
       assert.same({ "Elmira", "spells", "EXORCISM" }, ns.selected)
+      assert.equal("", args.value.get(), "the box must clear after a successful add too")
     end)
 
-    it("does not store when Add is pressed on an unresolved id", function()
+    -- D95 (2026-09-07 in-game round): a refused attempt used to leave the typed text sitting in
+    -- the box, which read as if nothing had happened.
+    it("does not store when Add is pressed on an unresolved id, but still clears the box", function()
       local args = SpellsPage.group().args.addId.args
       args.value.set(nil, "1")
       args.add.func()
       assert.same({}, ns.db.char.spells)
       assert.is_nil(ns.selected)
+      assert.equal("", args.value.get(), "a refused attempt must still clear the box")
     end)
   end)
 
@@ -297,7 +330,9 @@ describe("Options/Spells (the Spells page, R2 D52-D57)", function()
       assert.is_true(args.error.hidden())
     end)
 
-    it("refuses an unresolved name IN RED, and leaves the registry unchanged", function()
+    -- D95 (2026-09-07 in-game round): the refusal message stays; the BOX clears -- the owner typed
+    -- a druid spell by name on a paladin, correctly got "Not found", and the box still held it.
+    it("refuses an unresolved name IN RED, clears the box, and leaves the registry unchanged", function()
       local args = SpellsPage.group().args.addName.args
       args.value.set(nil, "Something Unseen")
       args.add.func()
@@ -307,14 +342,16 @@ describe("Options/Spells (the Spells page, R2 D52-D57)", function()
       assert.is_truthy(shown:find("Not found: this character has not seen it. Try the ID.", 1, true))
       assert.is_truthy(shown:find("|cffE5544B", 1, true), "the refusal must render in red (Colors.BAD)")
       assert.is_nil(ns.selected, "a refusal must not navigate anywhere")
+      assert.equal("", args.value.get(), "the box clears even though the message stays")
     end)
 
-    it("clears the error and registers on a name the client resolves", function()
+    it("clears the error, registers on a name the client resolves, and clears the box", function()
       local args = SpellsPage.group().args.addName.args
       args.value.set(nil, "Exorcism")
       args.add.func()
       assert.equal("name", ns.db.char.spells.EXORCISM.source)
       assert.same({ "Elmira", "spells", "EXORCISM" }, ns.selected)
+      assert.equal("", args.value.get(), "the box must clear after a successful add too")
     end)
 
     it("clears a stale error as soon as the box is edited again", function()

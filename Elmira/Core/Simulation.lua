@@ -57,7 +57,7 @@ local function requireDep(name, value)
     -- D26 (2026-09-07 Notifications pass): a warning, not a plain print -- the queue going silent is
     -- exactly the kind of thing the panel's "Problems" category exists for.
     local text = string.format(
-      L["Elmira: rotation queue disabled — %s is not loaded (check Elmira_Vanilla.toc load order)."],
+      L["rotation queue disabled — %s is not loaded (check Elmira_Vanilla.toc load order)."],
       name)
     if ns.Announce then ns.Announce.emit("warning", text) else ns.log("%s", text) end
   end

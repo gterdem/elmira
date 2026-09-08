@@ -33,6 +33,20 @@ describe("Elmira.API v1 registry", function()
     assert.is_string(reason)
   end)
 
+  -- D93 (2026-09-07 in-game round): ns.log is AceConsole's Printf, which already prefixes the
+  -- addon name -- a literal "Elmira: " in the format string printed it twice. Pins both the count
+  -- and the content, so a mutation that drops the label/reason or reintroduces the literal fails.
+  it("logs the rejection once, naming the label and the reason, with no doubled prefix", function()
+    local logged = {}
+    helper.ns().log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+    local ok, reason = API.RegisterDataPack{}
+    assert.is_false(ok)
+    assert.equal(1, #logged)
+    assert.is_truthy(logged[1]:find("rejected", 1, true))
+    assert.is_truthy(logged[1]:find(reason, 1, true))
+    assert.is_falsy(logged[1]:find("Elmira:", 1, true), "ns.log already prefixes the addon name")
+  end)
+
   it("sorts bar providers by priority descending with a stable name tiebreak", function()
     API.RegisterBarProvider{ name = "Zeta", priority = 5 }
     API.RegisterBarProvider{ name = "ElvUI", priority = 10 }

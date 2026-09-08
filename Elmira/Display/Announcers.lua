@@ -31,7 +31,7 @@ local function call(f, method, ...)
   if type(fn) ~= "function" then
     if not reported[method] then
       reported[method] = true
-      ns.log("Elmira: this client's MessageFrame has no %s(); on-screen messages degrade.", method)
+      ns.log("this client's MessageFrame has no %s(); on-screen messages degrade.", method)
     end
     return
   end

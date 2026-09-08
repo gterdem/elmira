@@ -10,6 +10,15 @@
 #
 # A line that survives deletion is not protected by the suite. That is a finding, not a warning.
 #
+# Deletion alone has a blind spot: a line whose ABSENCE errors downstream (nil reference, nil
+# concatenation) is scored "caught" no matter what VALUE the line used to compute -- the suite went
+# red for a crash, not for an assertion. DEEP=1 adds a SUBSTITUTION pass that keeps the line PRESENT
+# with a different value of the same rough shape (a string stays a string, a bool flips), so only an
+# assertion on the actual value can catch it. It is OPT-IN: the default gate stays deletion-only and
+# is what "0 survivors" means for the definition of done. Substitution currently reports ~100
+# survivors on this tree, almost all AceConfig `name`/`desc` strings nobody intends to assert word for
+# word -- run it to consult, not as a blocking gate.
+#
 # It is affordable here because the suite runs in well under a second; most projects cannot gate a
 # commit on this. Nothing is ever mutated in the real working tree -- every run happens in a throwaway
 # copy under $TMPDIR, so an interrupted run cannot leave a half-mutated source file behind.
@@ -19,6 +28,7 @@
 #   make mutants FILES="a.lua b"  those files, every line
 #   make mutants ALL=1            every line of every shipped .lua -- slow, for a periodic sweep
 #   make mutants JOBS=8           parallel workers (default: every hardware thread)
+#   make mutants-deep             adds the substitution pass (DEEP=1) -- report only, not the gate
 #
 # Deliberately has no cache, no index and no fast path -- see ADR-0012 before adding one.
 set -uo pipefail
@@ -26,6 +36,8 @@ set -uo pipefail
 BASE="${BASE:-HEAD}"
 ALL="${ALL:-}"
 FILES="${FILES:-}"
+# Opt-in only (see header). Unset/empty: deletion-only, byte-identical to the pre-DEEP gate.
+DEEP="${DEEP:-}"
 # Default to EVERY hardware thread, not half of them. Each worker copies a ~4MB tree once and
 # then runs the suite per mutant, so this is CPU-bound with a negligible memory cost -- half
 # the cores left half the machine idle for the slowest gate in the project. Override with JOBS=.
@@ -114,6 +126,61 @@ filter_lines() {
 # on 16 cores and cost 89 lines and three vacuous-pass defects. ADR-0012 records why, and this comment
 # exists so the next reader reaches the ADR before rebuilding it. Every mutation runs the whole suite.
 
+parses() { "$LUA" -e "local f = loadfile('$1'); os.exit(f and 0 or 1)" >/dev/null 2>&1; }
+
+# The whole suite, every time. Running only the specs that load the mutated file was tried and
+# removed the same day (ADR-0012): it saved ~1.6s on a 16-core machine and cost 89 lines of index and
+# staleness handling, in the one component nothing else covers -- three separate defects in it made
+# the gate report a VACUOUS PASS. `--no-keep-going` stops at the first failure, which is the whole
+# speedup that is free of state.
+suite_green() { (cd "$1" && timeout "$TIMEOUT" busted --lua="$LUA" --no-keep-going tests/spec >/dev/null 2>&1); }
+
+# --- DEEP-only: substitution operator ----------------------------------------------------------
+# Textual and single-pass, same spirit as the deletion mutant above -- no AST, first applicable rule
+# wins, and a line with none of these tokens simply has no substitution mutant. Only invoked when
+# DEEP is set.
+substitute_value() {
+  local line="$1" out
+  if printf '%s' "$line" | grep -qE '"[^"]*"'; then
+    out="$(printf '%s' "$line" | sed -E 's/"([^"]*)"/"\1_MUTANT"/')"
+    printf '%s' "$out"; return
+  fi
+  if printf '%s' "$line" | grep -qE "'[^']*'"; then
+    out="$(printf '%s' "$line" | sed -E "s/'([^']*)'/'\\1_MUTANT'/")"
+    printf '%s' "$out"; return
+  fi
+  if printf '%s' "$line" | grep -qE '\btrue\b'; then
+    printf '%s' "$line" | sed -E 's/\btrue\b/false/'; return
+  fi
+  if printf '%s' "$line" | grep -qE '\bfalse\b'; then
+    printf '%s' "$line" | sed -E 's/\bfalse\b/true/'; return
+  fi
+  if printf '%s' "$line" | grep -qE '=='; then
+    printf '%s' "$line" | sed 's/==/~=/'; return
+  fi
+  if printf '%s' "$line" | grep -qE '~='; then
+    printf '%s' "$line" | sed 's/~=/==/'; return
+  fi
+  local n
+  n="$(printf '%s' "$line" | grep -oE '[0-9]+' | head -1)"
+  if [ -n "$n" ]; then
+    printf '%s' "$line" | sed -E "s/\b$n\b/$((n + 1))/"; return
+  fi
+  printf ''
+}
+
+# Rewrites line $2 of file $1 to exactly $3, whatever bytes it contains -- sed's `s|old|new|` needs
+# $3 escaped for its own delimiters and regex metacharacters, and a generated mutant text is exactly
+# the kind of string that breaks that escaping silently. awk takes it as a value, not a pattern -- via
+# ENVIRON rather than `-v`, since `-v var=value` runs backslash-escape processing on value and a Lua
+# string containing a literal backslash (a `\n` inside a message, a Windows-style path) would be
+# silently corrupted; environment variables are not escape-processed.
+replace_line() {
+  local file="$1" n="$2"
+  MUTANTS_LINE_TEXT="$3" awk -v n="$n" 'NR==n { print ENVIRON["MUTANTS_LINE_TEXT"]; next } { print }' \
+    "$file" > "$file.mutants_tmp" && mv "$file.mutants_tmp" "$file"
+}
+
 # --- worker -----------------------------------------------------------------------------------
 # Each worker owns a private copy of the tree, so mutations never race and never touch $ROOT.
 run_worker() {
@@ -128,31 +195,57 @@ run_worker() {
     echo "mutants: worker $id's copy fails the suite unmutated" >> "$WORKDIR/fatal"; return 1
   fi
 
-  local t f l orig
+  local t f l orig del_parsed subst subst_ok
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     f="${t%:*}"; l="${t##*:}"
     orig="$(sed -n "${l}p" "$work/$f")"
-    # Comment the line out rather than deleting it, so line numbers below it do not shift -- a shifted
-    # error message points at the wrong line and makes every survivor harder to read.
+
+    # Mutation A: delete. Comment the line out rather than removing it, so line numbers below it do
+    # not shift -- a shifted error message points at the wrong line and makes every survivor harder
+    # to read.
+    del_parsed=0
     sed -i "${l}s|^|-- MUTANT |" "$work/$f"
     # Commenting out one line of a multi-line expression leaves a file that will not parse. The suite
     # then fails for a reason that has nothing to do with any test, and counting that as "caught"
     # would overstate what this gate proves -- across this tree it is ~40% of all lines. Report those
     # separately as skipped, so the protected count means only what it says.
-    if "$LUA" -e "local f = loadfile('$work/$f'); os.exit(f and 0 or 1)" >/dev/null 2>&1; then
-      # The whole suite, every time. Running only the specs that load the mutated file was tried and
-      # removed the same day (ADR-0012): it saved ~1.6s on a 16-core machine and cost 89 lines of
-      # index and staleness handling, in the one component nothing else covers -- three separate
-      # defects in it made the gate report a VACUOUS PASS. `--no-keep-going` stops at the first
-      # failure, which is the whole speedup that is free of state.
-      if (cd "$work" && timeout "$TIMEOUT" busted --lua="$LUA" --no-keep-going tests/spec >/dev/null 2>&1); then
-        printf '%s\t%s\n' "$t" "$orig" >> "$out"    # suite still green: the line is unprotected
+    if parses "$work/$f"; then
+      del_parsed=1
+      if suite_green "$work"; then
+        if [ -n "$DEEP" ]; then
+          printf '%s\tdelete\t%s\n' "$t" "$orig" >> "$out"
+        else
+          printf '%s\t%s\n' "$t" "$orig" >> "$out"    # suite still green: the line is unprotected
+        fi
       fi
-    else
-      printf '%s\n' "$t" >> "$WORKDIR/skipped"
     fi
     sed -i "${l}s|^-- MUTANT ||" "$work/$f"
+
+    # Mutation B: substitute. DEEP-only (see header) -- default behaviour never runs this, so it
+    # cannot change what the gate reports or how many survivors it finds.
+    subst_ok=0
+    if [ -n "$DEEP" ]; then
+      subst="$(substitute_value "$orig")"
+      if [ -n "$subst" ]; then
+        replace_line "$work/$f" "$l" "$subst"
+        if parses "$work/$f"; then
+          subst_ok=1
+          if suite_green "$work"; then
+            printf '%s\tsubst\t%s -> %s\n' "$t" "$orig" "$subst" >> "$out"
+          fi
+        fi
+        replace_line "$work/$f" "$l" "$orig"
+      fi
+    fi
+
+    # A line is skipped only if NEITHER applicable mutation could even run. In DEEP mode substitution
+    # often parses fine on a line whose deletion would break a multi-line expression, so it recovers
+    # testability deletion alone could never offer; in default mode this reduces to the original
+    # "deletion didn't parse" check.
+    if [ "$del_parsed" -eq 0 ] && [ "$subst_ok" -eq 0 ]; then
+      printf '%s\n' "$t" >> "$WORKDIR/skipped"
+    fi
   done < "$list"
 }
 
@@ -175,7 +268,11 @@ if ! busted --lua="$LUA" tests/spec >/dev/null 2>&1; then
   exit 2
 fi
 
-echo "mutants: $TOTAL line(s), $JOBS worker(s), base=$BASE"
+if [ -n "$DEEP" ]; then
+  echo "mutants: $TOTAL line(s), $JOBS worker(s), base=$BASE, mode=deep (deletion + substitution)"
+else
+  echo "mutants: $TOTAL line(s), $JOBS worker(s), base=$BASE"
+fi
 split -n "l/$JOBS" -d "$WORKDIR/targets" "$WORKDIR/chunk" 2>/dev/null || cp "$WORKDIR/targets" "$WORKDIR/chunk00"
 
 i=0
@@ -193,7 +290,10 @@ fi
 EXEMPT=0
 [ -f "$WORKDIR/exempt" ] && EXEMPT=$(wc -l < "$WORKDIR/exempt" | tr -d ' ')
 SURV=0; SKIP=0
-[ -f "$WORKDIR/survivors" ] && SURV=$(wc -l < "$WORKDIR/survivors" | tr -d ' ')
+# A line can survive via BOTH mutation kinds in DEEP mode (delete and substitute); count the LINE
+# once, since TESTED below is lines, not mutation attempts. In default mode there is at most one
+# entry per line already, so this is the same count as before.
+[ -f "$WORKDIR/survivors" ] && SURV=$(cut -f1 "$WORKDIR/survivors" | sort -u | wc -l | tr -d ' ')
 [ -f "$WORKDIR/skipped" ] && SKIP=$(wc -l < "$WORKDIR/skipped" | tr -d ' ')
 TESTED=$((TOTAL - SKIP))
 
@@ -205,13 +305,23 @@ if [ "$SURV" -eq 0 ]; then
   exit 0
 fi
 
-echo "mutants: $SURV of $TESTED testable line(s) SURVIVED deletion — no test failed without them:"
+if [ -n "$DEEP" ]; then
+  echo "mutants: $SURV of $TESTED testable line(s) SURVIVED (deletion + substitution) — no test failed without them:"
+else
+  echo "mutants: $SURV of $TESTED testable line(s) SURVIVED deletion — no test failed without them:"
+fi
 [ "$SKIP" -gt 0 ] && echo "         ($SKIP of $TOTAL skipped: commenting them out does not parse)"
 [ "$EXEMPT" -gt 0 ] && echo "         ($EXEMPT line(s) marked 'mutants: equivalent' — grep for it to review them)"
 echo
-sort "$WORKDIR/survivors" | while IFS=$'\t' read -r loc src; do
-  printf '  %s\n      %s\n' "$loc" "$(printf '%s' "$src" | sed 's/^[[:space:]]*//')"
-done
+if [ -n "$DEEP" ]; then
+  sort "$WORKDIR/survivors" | while IFS=$'\t' read -r loc kind src; do
+    printf '  %s [%s]\n      %s\n' "$loc" "$kind" "$(printf '%s' "$src" | sed 's/^[[:space:]]*//')"
+  done
+else
+  sort "$WORKDIR/survivors" | while IFS=$'\t' read -r loc src; do
+    printf '  %s\n      %s\n' "$loc" "$(printf '%s' "$src" | sed 's/^[[:space:]]*//')"
+  done
+fi
 echo
 echo "Each is a line the suite does not actually check. Either it needs a test, or it is dead."
 exit 1

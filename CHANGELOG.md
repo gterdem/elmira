@@ -1,5 +1,43 @@
 # Changelog
 ## Unreleased
+- **Fixed: the Abilities page's "From your spellbook" list was sorted by an internal id, not by
+  name**, which looked like a random order in game. It's now sorted alphabetically.
+- **New: the Abilities page's "From your spellbook" list now shows each ability's icon** next to
+  its name; anything without one still shows a plain name.
+- **Fixed: a rotation you copied on one character could show up on another of a different class.**
+  Forks are stored account-wide, and the class check that keeps them apart used to fall back on
+  your class's own data pack — but only Paladin ships one, so every other class saw everyone else's
+  rotations too. It now always checks your actual class. A rotation now also has its own "Only this
+  character can see this rotation" toggle (off by default) for keeping one to yourself; every other
+  character of your class sees your rotations as before. "New rotation" also works now for a class
+  with no shipped pack yet, which the same fix had otherwise left creating something you could never
+  actually switch to.
+- **Changed: the Spells page is now called Abilities**, and the settings menu is reordered to
+  General, Rotations, Abilities, Queue, Action bars, Glow, Notifications. Nothing about how a spell
+  or rotation is stored changed — only the names you read.
+- **Fixed: editing a rotation printed "build '...' failed validation" to chat two or three times per
+  action.** A half-built rotation normally fails to compile while you are still working on it; the
+  live preview now checks that quietly and only shows the reason in the preview box itself. The same
+  message still prints once, as before, if a rotation actually fails to load at the start of a
+  session — that one is a real problem, not a normal part of editing.
+- **Fixed: several Status/Problems and chat messages still repeated "Elmira" twice**, following up
+  the earlier fix for the same thing.
+- **Fixed: the Abilities page's "by ID" and "by name" boxes kept your last attempt in them.** After
+  adding a spell, or after a name it could not find, the box now clears either way; a refused
+  attempt still shows why underneath it.
+- **New: the Builder is now a column of panels, one per line.** Collapsed, a line reads as a full
+  sentence — "Exorcism is cast when mana is at least 40%" — with its ability shown in an in-place
+  dropdown you can change without removing and re-adding the line, a status dot, and the reorder/
+  remove controls. Click the panel open to edit its conditions as sentence rows (subject, kind, key,
+  a "not" toggle), add another, or remove one; a condition's key list now also offers anything you've
+  registered on the Abilities page, with a link straight to that spell's own page.
+- **New: a third status colour for a rotation line's conditions.** Grey and amber keep their meaning
+  (cannot happen on this character right now; waiting on something that can still become true); red
+  is new — a condition that can never come true as the rotation stands, such as one checking a seal
+  no line of the rotation casts any more. The Rotation page now counts how many lines need attention.
+- **New: a live preview of your unsaved changes**, shown above the running rotation's own "Right now"
+  strip while the Builder is open, so you can see what a draft would suggest before pressing Save.
+  The rotation actually running on screen never changes until Save is pressed.
 - **Fixed: the Rotations page's playstyle cards read as one wall of text.** Each card is now a
   titled, bordered panel — its name is the border's own heading, not a repeated row inside it — with
   its difficulty shown again, and the source split onto its own unambiguous line ("Source: …") with a
@@ -11,7 +49,7 @@
 - **Changed: the status dots' colours are swapped.** Grey now means a line cannot happen on this
   character right now (missing gear or a rune, or switched off); amber means it can fire, it is just
   waiting on a condition (cooldown, target health, and so on).
-- **New: a Spells page**, right after Rotations, listing every spell, buff or debuff your rotations
+- **New: an Abilities page**, right after Rotations, listing every spell, buff or debuff your rotations
   use — added automatically as you use them — with three ways to add anything else: from your
   spellbook, by spell ID (previewing what it resolves to before you commit), or by name (only for a
   spell this character has learned or seen; anything else is refused, in red, and never stored). Each
@@ -29,12 +67,17 @@
   with the rest of the game. The suggested name survives being shown, Enter accepts the box exactly
   like clicking the button does, and a name that still cannot be used now says why instead of doing
   nothing.
+- **Fixed: New rotation and Copy and edit still refused a typed name as empty.** The name box and
+  the accept button are shared, client-owned widgets this addon does not hold a direct reference to
+  on every version of the client; the popups now find them the same way the game itself does, so
+  Enter and the button both read what was actually typed.
+- **Fixed: a couple of Status/Problems messages repeated "Elmira" twice** ("Elmira: Elmira: …").
 - **Fixed: the Builder's Save button could look enabled for a line it was about to refuse anyway.**
   If a line names a spell this character cannot resolve — a rotation you built on one character that
   names a spell only that character registered, opened on another — Save now greys out and names the
   line, before you click it, instead of after.
 - **Fixed: a spell you registered yourself (by ID, by name, or from your spellbook) now actually
-  works in a rotation.** Saving a line naming one used to be refused outright even after the Spells
+  works in a rotation.** Saving a line naming one used to be refused outright even after the Abilities
   page had accepted it; it now saves, and the rotation reads its cooldown, usability and whether you
   know it exactly the way it does for one of your class's own spells. If your class ever ships that
   same spell under its own name, the shipped one always wins. A rotation exported from one character

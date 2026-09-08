@@ -262,7 +262,7 @@ function BarGlow.noteMissing(spellKey)
   if ns.Announce then
     ns.Announce.emit("warning", text)
   elseif ns.log then
-    ns.log("Elmira: %s", text)
+    ns.log("%s", text)
   end
   return true
 end

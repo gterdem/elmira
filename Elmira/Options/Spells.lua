@@ -1,5 +1,7 @@
--- Elmira/Options/Spells.lua — the Spells page (R2, D52-D57). A tree, ordered right after Rotations:
--- one root page with the three add rows, then one child page per registered entry.
+-- Elmira/Options/Spells.lua — the Abilities page (R2, D52-D57; renamed from "Spells" for the
+-- player at M1b, 2026-09-07 -- the module, the `spells` group key and every internal identifier
+-- below are unchanged). A tree, ordered right after Rotations: one root page with the three add
+-- rows, then one child page per registered entry.
 --
 -- Named `SpellsPage` rather than `ns.Spells`, deliberately: Core/Spells.lua already owns `ns.Spells`
 -- for the pure registry (the CRUD this file drives), and Options/Rotation.lua sets the precedent for
@@ -78,20 +80,48 @@ end
 -- AceConfig `select` values are strings; the id round-trips through `tonumber`.
 local pickSpellbookId, idText, nameText, nameError = nil, "", "", nil -- mutants: equivalent globals; luacheck catches it
 
+-- I1a: item rows are 17px (`AceGUIWidget-DropDown-Items.lua:161`); 14 is the ceiling that still
+-- sits inside the row against `GameFontNormalSmall`. One named constant so a size change is a
+-- one-line edit; a judgement call for the owner to eyeball in game.
+local SPELLBOOK_ICON_SIZE = 14
+
+-- I1: `values` (id-as-string -> label) and `sorting` (id-as-string, ordered by NAME) for the
+-- "From your spellbook" select. Both come from here so they can never disagree.
+--
+-- I1b: this is a standing bug, not just a risk the icons introduce (owner, in game: "the dropdown
+-- abilities should be sorted by name as well, it is chaotic right now"). With no explicit `sorting`
+-- table, AceConfigDialog hands the dropdown control `values` alone, and
+-- `AceGUIWidget-DropDown.lua`'s own `SetList` (:592-606) then sorts the KEYS of that table itself
+-- (`sortTbl`, :584-591: numeric compare when both keys look numeric, else `tostring`) -- and our
+-- keys are `tostring(entry.id)`, so the list was always ordered by SPELL ID, never by name. Adding
+-- an icon prefix to the label changes nothing about that; the fix is the same regardless: hand the
+-- widget an explicit `sorting` array computed by name here, so ordering never depends on the key.
 local function spellbookChoices()
-  local out = {}
+  local out, rows = {}, {}
   if ns.Adapter and ns.Adapter.spellbookEntries then
-    for _, entry in ipairs(ns.Adapter.spellbookEntries()) do out[tostring(entry.id)] = entry.name end
+    for _, entry in ipairs(ns.Adapter.spellbookEntries()) do
+      local key = tostring(entry.id)
+      -- I1c: resolved through the adapter (`Display.spellIconByID`), never a WoW API call from
+      -- this file. No resolvable icon (or the adapter missing entirely) renders as the plain name,
+      -- with no gap and no broken-texture box left behind.
+      local icon = ns.Display and ns.Display.spellIconByID and ns.Display.spellIconByID(entry.id)
+      out[key] = icon and string.format("|T%s:%d|t %s", icon, SPELLBOOK_ICON_SIZE, entry.name) or entry.name
+      rows[#rows + 1] = { key = key, name = entry.name }
+    end
   end
-  return out
+  table.sort(rows, function(a, b) return a.name < b.name end)
+  local sorting = {}
+  for i, row in ipairs(rows) do sorting[i] = row.key end
+  return out, sorting
 end
 
 local function spellbookAddArgs(order)
+  local values, sorting = spellbookChoices()
   return {
     type = "group", inline = true, order = order, name = L["From your spellbook"],
     args = {
       pick = {
-        type = "select", order = 1, width = 1.5, name = L["Spell"], values = spellbookChoices(),
+        type = "select", order = 1, width = 1.5, name = L["Spell"], values = values, sorting = sorting,
         get = function() return pickSpellbookId end,
         set = function(_, v) pickSpellbookId = v end,
       },
@@ -137,9 +167,12 @@ local function idAddArgs(order)
         func = function()
           local id = tonumber(idText)
           local name = id and ns.Adapter and ns.Adapter.spellNameByID and ns.Adapter.spellNameByID(id)
+          -- D95 (2026-09-07 in-game round): the box clears after EVERY attempt, kept or refused --
+          -- a "Not found" left sitting in the box read as if nothing had happened.
+          idText = ""
           if not (id and name) then return end -- mutants: equivalent Spells.add's own id/name check refuses just as silently
           local key = ns.Spells.add(store(), { id = id, name = name, source = "id" })
-          if key then idText = ""; navigateToSpell(key) end
+          if key then navigateToSpell(key) end
         end,
       },
     },
@@ -171,15 +204,19 @@ local function nameAddArgs(order)
       add = {
         type = "execute", order = 4, name = L["Add"],
         func = function()
-          local id = ns.Adapter and ns.Adapter.spellIDByName and ns.Adapter.spellIDByName(nameText)
+          local typed = nameText
+          local id = ns.Adapter and ns.Adapter.spellIDByName and ns.Adapter.spellIDByName(typed)
+          -- D95 (2026-09-07 in-game round): the box clears after EVERY attempt, kept or refused;
+          -- the refusal message (nameError) is what stays visible, not the typed text.
+          nameText = ""
           if not id then
             nameError = L["Not found: this character has not seen it. Try the ID."]
             return -- mutants: equivalent falling through calls Spells.add with a nil id, which
                    -- refuses on its own and never resets nameError either
           end
-          local name = (ns.Adapter.spellNameByID and ns.Adapter.spellNameByID(id)) or nameText
+          local name = (ns.Adapter.spellNameByID and ns.Adapter.spellNameByID(id)) or typed
           local key = ns.Spells.add(store(), { id = id, name = name, source = "name" })
-          if key then nameText, nameError = "", nil; navigateToSpell(key) end
+          if key then nameError = nil; navigateToSpell(key) end
         end,
       },
     },
@@ -208,7 +245,7 @@ local function removeArgs(entry, rotations, order)
   end
   return {
     type = "execute", order = order, name = L["Remove"], confirm = true,
-    confirmText = string.format(L["Remove %s from your Spells list?"], entry.name),
+    confirmText = string.format(L["Remove %s from your Abilities list?"], entry.name),
     func = function()
       local ok = ns.Spells.remove(store(), entry.key, rotations)
       if ok then navigateToRoot() end
@@ -245,7 +282,7 @@ function SpellsPage.group()
   local args, a = {}, 0
   a = a + 1
   args.intro = { type = "description", order = a, width = "full", fontSize = "medium",
-    name = L["Every spell, buff or debuff a rotation or a cue can use. Spells used by your"
+    name = L["Every spell, buff or debuff a rotation or a cue can use. Abilities used by your"
       .. " rotations are listed automatically; add anything else here."] }
   a = a + 1; args.addSpellbook = spellbookAddArgs(a)
   a = a + 1; args.addId = idAddArgs(a)
@@ -261,7 +298,10 @@ function SpellsPage.group()
     args[entry.key] = entryPageGroup(entry, 1000 + i, rotations)
   end
 
-  return { type = "group", order = 0.5, name = L["Spells"], childGroups = "tree", args = args }
+  -- M1a: 3 of the owner's 1-8 top-level order, right after Rotations. M1b: the PLAYER-visible name
+  -- is now "Abilities"; the group key stays `spells` (Options.Open("spells"), SelectGroup(...,
+  -- "spells"), saved status-table entries and the module name `ns.SpellsPage` are all unchanged).
+  return { type = "group", order = 3, name = L["Abilities"], childGroups = "tree", args = args }
 end
 
 ns.SpellsPage = SpellsPage

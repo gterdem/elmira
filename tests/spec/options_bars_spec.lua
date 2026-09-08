@@ -162,9 +162,11 @@ describe("Options (action bars)", function()
   end)
 
   -- The panel's running order is a design decision, not an accident: General (the addon itself and
-  -- the window you are standing in), Queue (what you see), Action Bars (where it points), Glow (how
-  -- it looks), then the optional extras. Two groups sharing an `order` renders them in pairs()
-  -- order, which differs between openings.
+  -- the window you are standing in), Rotations, Abilities, Queue (what you see), Action Bars (where
+  -- it points), Glow (how it looks), then the optional extras. M1a (2026-09-07 menu-order pass) put
+  -- these into the owner's explicit 1-8 order (Abilities, the 8th being Profiles, is not this
+  -- table's concern -- see Options/Spells.lua and the M1 report for why). Two groups sharing an
+  -- `order` renders them in pairs() order, which differs between openings.
   it("orders the settings groups, each exactly once", function()
     local seen, orders = {}, {}
     for key, g in pairs(Options.table().args) do
@@ -174,10 +176,11 @@ describe("Options (action bars)", function()
       orders[#orders + 1] = g.order
     end
     table.sort(orders)
+    -- General is the owner's #1: the addon itself and the window you are standing in.
+    assert.equal("general", seen[orders[1]])
     -- The Rotation section is the front door (ADR-0015 SS1), so it sorts above the display settings
     -- rather than sitting at the bottom where Import/Export used to be.
-    assert.equal("rotation", seen[orders[1]])
-    assert.equal("general", seen[orders[2]])
+    assert.equal("rotation", seen[orders[2]])
     assert.equal("queue", seen[orders[3]])
     assert.equal("bars", seen[orders[4]])
     assert.equal("glow", seen[orders[5]])

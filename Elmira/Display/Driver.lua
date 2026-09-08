@@ -208,6 +208,16 @@ function Display.spellIcon(spellKey)
   return GetSpellTexture(data.id)
 end
 
+-- I1c: the Abilities page's "from your spellbook" picker lists spells that may not be registered
+-- under any key yet -- that is the whole point of the picker -- so it has no `spellKey` to hand
+-- `Display.spellIcon` above; it only has the raw spell id the adapter's `spellbookEntries()`
+-- already carries. Same guard, same source (`GetSpellTexture`), just keyed by id instead of by the
+-- merged-registry lookup: the "by id" sibling of `spellIcon`, the way `itemIcon` is its "by slot" one.
+function Display.spellIconByID(id)
+  if not (type(id) == "number" and id > 0 and GetSpellTexture) then return nil end
+  return GetSpellTexture(id)
+end
+
 -- The texture in an inventory SLOT, for the Builder's item palette. Slot-based, not item-based,
 -- because that is what a build entry binds to (`entry.item = 13`) -- the icon follows the trinket
 -- you swap in without the rotation changing.
@@ -315,7 +325,7 @@ local function renderAll(queue, key, visible)
         if ns.Announce then
           ns.Announce.emit("warning", text)
         else
-          ns.log("Elmira: %s", text)
+          ns.log("%s", text)
         end
       end
     else

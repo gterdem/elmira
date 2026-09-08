@@ -23,6 +23,24 @@ trap 'rm -rf "$SANDBOX"' EXIT
 cp -a "$ROOT/." "$SANDBOX/" 2>/dev/null
 cd "$SANDBOX" || exit 2
 
+# ROOT may be a LINKED worktree, where ".git" is a pointer FILE to shared per-worktree metadata
+# (HEAD/index/refs) under the real repo's .git/worktrees/<name> -- cp -a copies the pointer, not the
+# data. Left as-is, every git command below, including case 5's own snapshot commit, writes to that
+# SAME shared HEAD: it happened twice while building this file and put two commits on the real
+# branch, which is exactly what "Never commit" exists to prevent. Give the sandbox its own, fully
+# independent .git: copy the shared object/ref database, then this worktree's OWN HEAD and index on
+# top, so nothing run in here can ever reach the real one again.
+if [ -f "$SANDBOX/.git" ]; then
+  REAL_GITDIR="$(cd "$ROOT" && git rev-parse --absolute-git-dir)"
+  REAL_COMMONDIR="$(cd "$ROOT" && git rev-parse --git-common-dir)"
+  rm -f "$SANDBOX/.git"
+  mkdir "$SANDBOX/.git"
+  cp -a "$REAL_COMMONDIR/." "$SANDBOX/.git/"
+  cp -a "$REAL_GITDIR/HEAD" "$SANDBOX/.git/HEAD"
+  cp -a "$REAL_GITDIR/index" "$SANDBOX/.git/index" 2>/dev/null || true
+  rm -rf "$SANDBOX/.git/worktrees"
+fi
+
 # A small file keeps each case to a couple of seconds; the logic under test is the gate, not the file.
 TARGET="Elmira/Core/Visibility.lua"
 FAILED=0
@@ -158,6 +176,42 @@ sed -i 's|^local T = 1$|local BRANDNEW = 1|' Elmira/Core/BrandNew.lua
 check "an untracked new file is mutated, not skipped" "1" \
   "$(BASE=HEAD JOBS=4 ./tools/mutants.sh 2>&1 | grep -c 'BRANDNEW')"
 rmTempSource BrandNew
+
+# 7b. tasks/todo.md G1: deletion alone is scored "caught" when a line's ABSENCE errors downstream,
+#     whatever value the line used to compute -- this is the exact shape that let a dead
+#     `ns.Rotation.displayName` branch (D47) read as protected. Miniature of it: `prefix` feeds a
+#     concatenation, so deleting it crashes (caught, no assertion needed) while a spec that only
+#     checks the RESULT is a string -- never what string -- lets any other value through. Deletion
+#     mode alone (the default, blocking gate) must NOT flag this; DEEP=1 (the opt-in report) must.
+cat > Elmira/Core/SelftestBlind.lua <<'EOF'
+local M = {}
+function M.label(x)
+  local prefix = "ITEM: "
+  return prefix .. x
+end
+return M
+EOF
+sed -i "s|^Core\\\\Init.lua$|Core\\\\SelftestBlind.lua\nCore\\\\Init.lua|" Elmira/Elmira_Vanilla.toc
+cat > tests/spec/selftest_blind_spec.lua <<'EOF'
+local helper = require("tests.helper")
+describe("selftest blind-spot fixture (tasks/todo.md G1)", function()
+  it("reaches the mutated line but never asserts its value", function()
+    helper.reset()
+    local M = helper.load("Elmira/Core/SelftestBlind.lua")
+    assert.is_string(M.label("foo"))
+  end)
+end)
+EOF
+BLIND_DEFAULT="$(FILES=Elmira/Core/SelftestBlind.lua JOBS=4 ./tools/mutants.sh 2>&1)"
+check "default (deletion-only) gate does not flag the value bug (0 survivors)" "0" \
+  "$(printf '%s\n' "$BLIND_DEFAULT" | grep -c 'SURVIVED')"
+BLIND_DEEP="$(FILES=Elmira/Core/SelftestBlind.lua DEEP=1 JOBS=4 ./tools/mutants.sh 2>&1)"
+check "DEEP mode is masked by the downstream crash (no 'delete' survivor)" "0" \
+  "$(printf '%s\n' "$BLIND_DEEP" | grep -c 'SelftestBlind.*\[delete\]')"
+check "DEEP mode catches the value nothing asserts (a 'subst' survivor)" "1" \
+  "$(printf '%s\n' "$BLIND_DEEP" | grep -c 'SelftestBlind.*\[subst\]')"
+rm -f Elmira/Core/SelftestBlind.lua tests/spec/selftest_blind_spec.lua
+sed -i '/^Core\\SelftestBlind.lua$/d' Elmira/Elmira_Vanilla.toc
 
 # 8. `make lint` carries two gates that no spec and no mutation run can reach: the `UNVERIFIED(`
 #    grep and .luacheckrc's per-directory `read_globals`. tools/mutants.sh only mutates

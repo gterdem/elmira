@@ -151,6 +151,51 @@ function Diagnostics.unknown(build, ctx)
   return out
 end
 
+-- Diagnostics.deadSeal(build) -> { { index, key }, ... }
+--
+-- A `seal`/`seal_linger` condition naming a seal no ENABLED line of this build ever casts. Nothing
+-- else in the addon's model puts a seal on the character -- it is the rotation's own earlier lines
+-- or nothing -- so a condition naming one no line casts can never become true as the build stands,
+-- however the character or the moment changes. That is the editor's RED state (D87, 2026-09-07
+-- owner ruling): "a logic error the player should fix", the example given being exactly this --
+-- a condition on Seal of Righteousness after the line that cast it was changed to something else.
+--
+-- Structural, like `Diagnostics.unknown` above: decidable from the build alone, so it is never wrong
+-- about a situation nobody thought to sample. A disabled line neither casts nor is checked -- it is
+-- not in the rotation at all (Schema.compile skips it), so it can supply no seal and raise no dead
+-- condition of its own.
+function Diagnostics.deadSeal(build)
+  local out = {}
+  local entries = (build and build.entries) or {}
+  local cast = {}
+  for _, entry in ipairs(entries) do
+    if type(entry) == "table" and not entry.disabled and entry.spell then cast[entry.spell] = true end
+  end
+
+  local function walk(index, when)
+    for _, cond in ipairs(when or {}) do
+      if type(cond) == "table" then
+        local kind = cond[1]
+        if kind == "all" or kind == "any" or kind == "not" then
+          local nested = {}
+          for i = 2, #cond do nested[#nested + 1] = cond[i] end
+          walk(index, nested)
+        elseif kind == "seal" or kind == "seal_linger" then
+          local key = cond[2]
+          if type(key) == "string" and not cast[key] then
+            out[#out + 1] = { index = index, key = key }
+          end
+        end
+      end
+    end
+  end
+
+  for i, entry in ipairs(entries) do
+    if type(entry) == "table" and not entry.disabled then walk(i, entry.when) end
+  end
+  return out
+end
+
 -- Diagnostics.compare(mine, theirs) -> { onlyMine, onlyTheirs, changed, moved }
 --
 -- How one rotation differs from another, row by row (F35: "the template-updated diff names changed

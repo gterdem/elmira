@@ -510,6 +510,73 @@ describe("Core.UserBuilds", function()
       assert.same({}, UserBuilds.list(pack))
       assert.is_nil(UserBuilds.find(pack, "USER_A"))
     end)
+
+    -- F1 (2026-09-07 bug round): a paladin fork copied as "My-Shock" showed up on the owner's mage.
+    -- Root cause: `pack == nil` used to skip the class filter entirely, and Paladin is the only
+    -- class that ships a pack, so EVERY other class saw every OTHER class's forks. Verified directly
+    -- against the reported symptom: the paladin fork must stay invisible with no pack at all, using
+    -- the PLAYER's class (`db.keys.class`, F1a), not the pack's.
+    describe("F1a: a nil pack no longer disables the class filter", function()
+      before_each(function()
+        db.global.userBuilds.USER_PALLY = { build = { key = "USER_PALLY", entries = {} },
+                                             class = "PALADIN", name = "My-Shock" }
+      end)
+
+      it("hides a paladin's fork from a mage with no data pack of its own", function()
+        ns.db.keys = { class = "MAGE", char = "Arthorion - Realm" }
+        assert.same({}, UserBuilds.list(nil))
+        assert.is_nil(UserBuilds.find(nil, "USER_PALLY"))
+      end)
+
+      it("still lists and finds a fork of the viewer's OWN class with no data pack", function()
+        db.global.userBuilds.USER_MAGE = { build = { key = "USER_MAGE", entries = {} },
+                                            class = "MAGE", name = "Mine" }
+        ns.db.keys = { class = "MAGE", char = "Arthorion - Realm" }
+        assert.same({ "USER_MAGE" }, UserBuilds.list(nil))
+        local build = UserBuilds.find(nil, "USER_MAGE")
+        assert.equal("USER_MAGE", build.key)
+      end)
+
+      it("falls back to the pack's own class when db.keys is not populated (existing callers)", function()
+        assert.same({ "USER_PALLY" }, UserBuilds.list(pack))
+        assert.is_not_nil(UserBuilds.find(pack, "USER_PALLY"))
+      end)
+    end)
+
+    -- F1b: the owner's per-fork override, over plain class-wide visibility.
+    describe("F1b: a fork marked private is hidden from every other character of the class",
+      function()
+      it("stays visible to everyone of the class by default", function()
+        local key = UserBuilds.create(pack, "Shared")
+        ns.db.keys = { class = "PALADIN", char = "OtherToon - Realm" }
+        assert.same({ key }, UserBuilds.list(pack))
+      end)
+
+      it("hides the fork from a different character of the SAME class once marked private", function()
+        local key = UserBuilds.create(pack, "Mine alone")
+        ns.db.keys = { class = "PALADIN", char = "Arthorion - Realm" }
+        assert.is_true(UserBuilds.setPrivate(key, true))
+        assert.same({ key }, UserBuilds.list(pack), "still visible to the character that set it")
+        ns.db.keys = { class = "PALADIN", char = "OtherToon - Realm" }
+        assert.same({}, UserBuilds.list(pack))
+        assert.is_nil(UserBuilds.find(pack, key))
+      end)
+
+      it("becomes visible to everyone again once turned back off", function()
+        local key = UserBuilds.create(pack, "Mine alone")
+        ns.db.keys = { class = "PALADIN", char = "Arthorion - Realm" }
+        UserBuilds.setPrivate(key, true)
+        UserBuilds.setPrivate(key, false)
+        ns.db.keys = { class = "PALADIN", char = "OtherToon - Realm" }
+        assert.same({ key }, UserBuilds.list(pack))
+      end)
+
+      it("refuses on a key that is not one of your rotations", function()
+        local ok, err = UserBuilds.setPrivate("PALADIN_EXODIN", true)
+        assert.is_false(ok)
+        assert.truthy(err:find("not one of your rotations", 1, true))
+      end)
+    end)
   end)
 
   describe("exportKey() / remove()", function()
@@ -553,7 +620,7 @@ describe("Core.UserBuilds", function()
       assert.is_nil(fork.derivedFrom)
     end)
 
-    it("refuses without saved variables or a class pack", function()
+    it("refuses without saved variables, or with neither a class pack nor a known class", function()
       ns.db = nil
       local key, err = UserBuilds.create(pack, "My rotation")
       assert.is_nil(key)
@@ -562,6 +629,20 @@ describe("Core.UserBuilds", function()
       local key2, err2 = UserBuilds.create(nil, "My rotation")
       assert.is_nil(key2)
       assert.truthy(err2:find("data pack", 1, true))
+    end)
+
+    -- F1c: `create` refusing on a nil pack made F1a's fix incoherent -- a mage would correctly see
+    -- an empty fork list and then be unable to create anything at all. It takes the class from the
+    -- same `db.keys` source `find`/`list` now do, so a class with no shipped pack can still create.
+    it("F1c: creates for a class with no data pack, using db.keys.class", function()
+      ns.db.keys = { class = "MAGE", char = "Arthorion - Realm" }
+      local key, err = UserBuilds.create(nil, "My mage rotation")
+      assert.is_nil(err)
+      assert.is_truthy(key:find("^USER_"))
+      local build, origin = UserBuilds.find(nil, key)
+      assert.equal("fork", origin)
+      assert.equal("MAGE", db.global.userBuilds[key].class)
+      assert.same({}, build.entries)
     end)
 
     it("names collide safely, the same uniqueKey scheme fork() uses", function()

@@ -16,6 +16,36 @@ local function store()
   return db and db.global and db.global.userBuilds
 end
 
+-- F1a (2026-09-07 bug round): the player's own class TOKEN, from AceDB's own `db.keys.class` --
+-- computed once, at load, from `UnitClass("player")` inside the (already-loaded) AceDB-3.0 library,
+-- so reading the field here is not a WoW API call of our own. Falls back to the pack's `class`
+-- only for the handful of specs/callers that build a synthetic pack without ever populating
+-- `db.keys` -- in real play the two always agree, since a pack is looked up BY this same token
+-- (`Display.currentPack`). The bug this replaces: `pack == nil` used to mean "skip the class
+-- filter entirely", so a class with no shipped pack (every class but Paladin) saw every OTHER
+-- class's forks too, because the pack -- not the player -- was the only source of "which class".
+local function playerClass(pack)
+  local keys = ns.db and ns.db.keys
+  return (keys and keys.class) or (pack and pack.class)
+end
+
+-- F1b: this character's own identity (`db.keys.char`, e.g. "Name - Realm"), also AceDB's own and
+-- also not a WoW API call of ours. The only thing a private fork's `owner` field is ever compared
+-- against.
+local function playerChar()
+  local keys = ns.db and ns.db.keys
+  return keys and keys.char
+end
+
+-- A fork this (class, character) pair may see: the right class, and -- F1b -- either not marked
+-- private or private to exactly this character. `db.global` is shared account-wide, so class alone
+-- was always the only thing standing between a mage and a paladin's fork; privacy narrows that
+-- further, to one character of that class.
+local function visible(fork, class, char)
+  return type(fork) == "table" and fork.class == class
+    and (not fork.private or fork.owner == char)
+end
+
 function UserBuilds.isForkKey(key)
   return type(key) == "string" and key:sub(1, #UserBuilds.PREFIX) == UserBuilds.PREFIX
 end
@@ -27,20 +57,22 @@ function UserBuilds.find(pack, key)
   if pack and pack.builds and pack.builds[key] then return pack.builds[key], "pack" end
   local s = store()
   local fork = s and s[key]
-  if fork and type(fork.build) == "table" and (pack == nil or fork.class == pack.class) then
+  if fork and type(fork.build) == "table" and visible(fork, playerClass(pack), playerChar()) then
     return fork.build, "fork", fork
   end
   return nil -- mutants: equivalent Lua returns nil implicitly at the end of a function
 end
 
--- Sorted fork keys for this class (db.global is shared across characters, so class-tag filtering
--- is what keeps a mage from being offered a paladin's fork).
+-- Sorted fork keys for this class (db.global is shared across characters, so class-tag filtering --
+-- F1a: always against the PLAYER's own class, never the pack's, since the pack is legitimately nil
+-- for seven of the eight classes -- is what keeps a mage from being offered a paladin's fork).
 function UserBuilds.list(pack)
   local out = {}
   local s = store()
   if not s then return out end
+  local class, char = playerClass(pack), playerChar()
   for key, fork in pairs(s) do
-    if type(fork) == "table" and (pack == nil or fork.class == pack.class) then out[#out + 1] = key end
+    if visible(fork, class, char) then out[#out + 1] = key end
   end
   table.sort(out)
   return out
@@ -188,15 +220,41 @@ end
 -- nil/unknown template (line above), so this is a second, small writer rather than a fork with the
 -- guard loosened -- loosening it would let a typo'd template key silently create an untethered build
 -- and call it a fork of something that does not exist.
+--
+-- F1c: takes the class from the same source `find`/`list` now do (F1a), not `pack.class` alone --
+-- `pack` is nil for every class but Paladin, and refusing here unconditionally on that would leave
+-- a "New rotation" button that creates nothing for seven classes right after F1a correctly starts
+-- showing them an empty fork list of their own.
 function UserBuilds.create(pack, name)
   local s = store()
   if not s then return nil, "no saved variables" end
-  if not (pack and pack.class) then return nil, "no data pack for your class" end
+  local class = playerClass(pack)
+  if not class then return nil, "no data pack for your class" end
 
   local key = uniqueKey(s, UserBuilds.slug(name))
-  local build = { key = key, name = name, class = pack.class, entries = {} }
-  s[key] = { build = build, class = pack.class, name = name }
+  local build = { key = key, name = name, class = class, entries = {} }
+  s[key] = { build = build, class = class, name = name }
   return key
+end
+
+-- UserBuilds.setPrivate(key, private) -> true | false, reason
+--
+-- F1b (2026-09-07 bug round, owner's decision over plain class-wide): forks default visible to
+-- every character of the class; this is the one per-fork override. The flag lives on the fork
+-- record in ACCOUNT-WIDE storage (`db.global`, same as the record itself) and carries the OWNING
+-- character's identity (`db.keys.char`) -- a flag kept only in the toggling character's own
+-- `db.char` would be invisible to precisely the characters `find`/`list` (which read `db.global`
+-- for every character of the class) need it to hide the fork from. Turning it OFF leaves `owner`
+-- in place but unused (`visible` above only ever consults it while `private` is true); turning it
+-- back ON reassigns `owner` to whoever did that, which is always the current viewer -- nobody else
+-- can even reach this fork's page to click the toggle while it is private to someone else.
+function UserBuilds.setPrivate(key, private)
+  local s = store()
+  local fork = s and s[key]
+  if not (fork and type(fork.build) == "table") then return false, "not one of your rotations" end
+  fork.private = private and true or nil
+  if fork.private then fork.owner = playerChar() end
+  return true
 end
 
 -- UserBuilds.rename(key, name) -> true | false, reason
