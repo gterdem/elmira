@@ -41,6 +41,9 @@ describe("Setup.Wizard", function()
     helper.load("Elmira/Core/Schema.lua")
     helper.load("Elmira/Core/Advisor.lua")
     helper.load("Elmira/Setup/Detect.lua")
+    -- D2: the first-run popup now goes through ns.Popups.show (Display/Popups.lua), the addon's one
+    -- StaticPopup_Show call site, rather than calling StaticPopup_Show itself.
+    helper.load("Elmira/Display/Popups.lua")
     Wizard = helper.load("Elmira/Setup/Wizard.lua")
     Wizard.resetFirstRunOffer()
     ns.log = function() end
@@ -343,6 +346,25 @@ describe("Setup.Wizard", function()
       _G.StaticPopup_Show = function() return shownWidget end
       Wizard.maybeShowFirstRun()
       assert.equal("Choose a playstyle", renamed)
+    end)
+
+    -- D2 (review of 65896ad): this was the fifth StaticPopup_Show call site in the
+    -- addon, and the only one with no raiseAbovePanel, so it could open BEHIND the options window
+    -- exactly like the naming popups did before D61-D67. Pinned the same way those are: a fake
+    -- dialog with the real frame methods, asserting the ACTUAL strata/level values `ns.Popups.show`
+    -- leaves it at, not merely that some function got called.
+    it("raises the first-run popup above the options panel, same as every other popup", function()
+      install(packWith{ { build = "PALADIN_EXODIN", available = true } })
+      local frame = { level = 5 }
+      function frame:SetFrameStrata(s) self.strata = s end
+      function frame:GetFrameStrata() return self.strata end
+      function frame:SetFrameLevel(l) self.level = l end
+      function frame:GetFrameLevel() return self.level end
+      function frame:HookScript() end
+      _G.StaticPopup_Show = function() return frame end
+      Wizard.maybeShowFirstRun()
+      assert.equal("FULLSCREEN_DIALOG", frame:GetFrameStrata())
+      assert.equal(106, frame:GetFrameLevel())
     end)
 
     it("also drops the D39 first-login Status line, so it is not missed if the popup is", function()

@@ -75,16 +75,22 @@ files["Elmira/Display/"] = { read_globals = { "CreateFrame", "UIParent", "GameTo
   -- D25: which chat windows show System messages (Announcers.systemChatFrames), the FrameXML
   -- helper the chat tab's own "Chat Settings" checkbox reads.
   "ChatFrame_ContainsMessageGroup",
-  "SendChatMessage", "IsInGroup", "IsInRaid" } }
+  "SendChatMessage", "IsInGroup", "IsInRaid",
+  -- D2: Popups.lua is the addon's one `StaticPopup_Show` call site; it only READS
+  -- `StaticPopupDialogs` (to check the dialog key exists), never registers one of its own, so it
+  -- takes no `globals` entry the way Setup/ and Options/ do.
+  "StaticPopup_Show", "StaticPopupDialogs" } }
 -- StaticPopupDialogs is a WRITABLE global (every addon registers its own dialogs into it as
 -- FIELDS), unlike everything else in read_globals here, which is only ever called or read -- hence
 -- its own `globals` entry rather than joining the `read_globals` list, which luacheck treats as
 -- read-only all the way down to field assignment.
+-- D2: `StaticPopup_Show` itself is named ONLY in Elmira/Display/ now (Popups.lua is the addon's one
+-- call site); Setup/ and Options/ still WRITE StaticPopupDialogs entries (their own dialogs'
+-- text/buttons/handlers) and so keep that `globals` entry, but no longer read the bare function.
 files["Elmira/Setup/"] = { read_globals = { "CreateFrame", "UIParent", "UnitClass", "UnitLevel",
   "GetTalentTabInfo", "C_Engraving",
-  -- D37: the first-run popup -- a real frame, never AceConfig -- and the combat guard on when it
-  -- may appear.
-  "StaticPopup_Show", "InCombatLockdown" },
+  -- D37: the combat guard on when the first-run popup may appear.
+  "InCombatLockdown" },
   globals = { "StaticPopupDialogs" } }
 files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent",
   -- M5h, the options window's own chrome (Options.lua): the reposition button's tooltip, and
@@ -93,10 +99,7 @@ files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent",
   "GameTooltip", "CLOSE",
   -- Pass 2: a post-call hook on AceConfigDialog's own Open, filtered to our app name, so a refresh
   -- neither Options.Open nor AceConfigDialog's pooling triggers still re-runs Options.Decorate.
-  "hooksecurefunc",
-  -- R1 (D31/D35): the FeedGroup post-hook that expands a clicked tree node and mutes its tooltip,
-  -- and the "New rotation"/"Copy and edit"/"Rename" edit-box popups.
-  "StaticPopup_Show" },
+  "hooksecurefunc" },
   globals = { "StaticPopupDialogs" } }
 
 -- Shipped class data (ADR-0011): data only, and held to Core's bar. A WoW API call here is as wrong

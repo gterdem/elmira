@@ -249,11 +249,15 @@ function Wizard.maybeShowFirstRun()
     ns.Announce.emit("status", L["Elmira is not set up yet. Open Rotations to pick a playstyle."])
   end
 
-  if not (_G.StaticPopup_Show and _G.StaticPopupDialogs and _G.StaticPopupDialogs.ELMIRA_FIRST_RUN) then
-    return false
-  end
-  local shown = StaticPopup_Show("ELMIRA_FIRST_RUN", text)
-  if shown and shown.button1 and shown.button1.SetText then shown.button1:SetText(choose) end
+  -- D2 (review of 65896ad): this was the fifth `StaticPopup_Show` call site in the
+  -- addon, and the only one with no `raiseAbovePanel` -- so this popup, unlike the four in
+  -- Options/Rotation.lua, could open BEHIND the options window. Routed through `ns.Popups.show`
+  -- like every other popup now; it still retitles button1 itself, on the DIALOG `show` raised,
+  -- because that title depends on `hasCatalog` above, which the static `StaticPopupDialogs` entry
+  -- cannot know.
+  local ok, dialog = ns.Popups.show("ELMIRA_FIRST_RUN", text)
+  if not ok then return false end
+  if dialog and dialog.button1 and dialog.button1.SetText then dialog.button1:SetText(choose) end
   return true
 end
 

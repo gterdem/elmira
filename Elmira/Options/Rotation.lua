@@ -300,153 +300,65 @@ end
 --   * D61a -- always occluded, not intermittently: AceGUI's options Frame renders at
 --     FULLSCREEN_DIALOG (Elmira/Libs/AceGUI-3.0/widgets/AceGUIContainer-Frame.lua:81-82/185-186/194),
 --     strictly ABOVE every Blizzard StaticPopup's default DIALOG strata -- so with the Builder open,
---     the popup was always drawn behind it. Fixed by `raiseAbovePanel` below.
+--     the popup was always drawn behind it. Fixed by `raiseAbovePanel` (now `Display/Popups.lua`,
+--     see D2 below).
 --   * D61b -- the edit box was always empty: `StaticPopup_Show` clears the edit box AFTER `OnShow`
 --     runs, so a prefill written from inside OnShow is wiped before the player ever sees it. Fixed
---     by `prefillNow` below, applied to the RETURN VALUE of `StaticPopup_Show` -- which happens
---     after that clear -- with `OnShow`'s own prefill kept only as a fallback.
+--     by `prefillNow` (also moved), applied to the RETURN VALUE of `StaticPopup_Show` -- which
+--     happens after that clear -- with `OnShow`'s own prefill kept only as a fallback.
 --   * D61c -- the button (and Enter) did nothing: neither dialog defined `EditBoxOnEnterPressed`
 --     (Blizzard requires it for Enter to do anything at all), and every `OnAccept` discarded its
 --     handler's `ok, err` -- so an empty-name refusal caused by D61b's own bug looked exactly like a
 --     dead button, and there was no way to tell the two apart from in-game alone.
 
--- D62 (review finding on D61a): raising STRATA alone was not enough. AceGUI's options Frame is
--- FULLSCREEN_DIALOG at FRAME LEVEL 100 with SetToplevel(true) (AceGUIContainer-Frame.lua:185-186,
--- 194), and SetFrameStrata never touches a frame's level -- two frames in the same strata still
--- draw by level, so StaticPopup1 at its own (low) level kept losing to level 100. Verified against
--- code that solves this exact clash on this client: ElvUI's
--- Game/Shared/General/StaticPopups.lua:409-420 ("boost static popups over ace gui") raises both,
--- mirrored here.
---
--- D63 (same review): the OnHide restore must be gated on OUR OWN raise, not fired unconditionally --
--- StaticPopup1-4 are shared with every other addon's popups, and a hook that always forces DIALOG/
--- whatever-level-we-found on hide would still fire (HookScript chains, and never unregisters) the
--- next time some OTHER addon's popup uses the same frame WITHOUT us having raised it, corrupting
--- THEIR strata/level. `elmiraRaised` is that gate, set here and cleared by the restore; the
--- double-hook guard (`elmiraStrataHooked`) is separate and unchanged -- it stops a SECOND hook from
--- stacking, not a hide handler from over-firing. ElvUI gates its own restore the same way
--- (`self.frameStrataIncreased`, StaticPopups.lua:565-573).
---
--- D67 (re-review, pass with two residuals): the level-100/level-101 THRESHOLD this
--- inherited from ElvUI is asymmetric at level 0 -- raise fires when `level < 100`, restore only
--- when `level > 100`, so a frame that started at 0 goes to 100 and STAYS there forever (probed:
--- `0 -> 100 -> 100`), permanently mutating a frame shared with every other addon. ElvUI has the
--- same flaw; citing it was evidence about frame LEVELS existing at all, never a specification to
--- copy verbatim. Fixed by storing the PRE-RAISE level (`elmiraOriginalLevel`) next to the raised
--- flag and restoring exactly that value -- correct at level 0, at level 100, and above it, with no
--- threshold anywhere in either direction. Captured only on the FIRST raise of a given showing (the
--- `not dialog.elmiraRaised` guard): a second `open*Popup` call before the popup has hidden must not
--- re-capture the ALREADY-raised level as if it were the original.
---
--- The raise itself adds 101, not ElvUI's 100: a frame starting at level 0 (the exact case D67's
--- probe used) would otherwise land at exactly 100, TIED with AceGUI's Frame rather than above it --
--- ties are not a reliable "we win" in frame stacking. +101 clears it from every starting level
--- without needing a floor/threshold check.
-local function raiseAbovePanel(dialog)
-  if not (dialog and dialog.SetFrameStrata and dialog.GetFrameLevel and dialog.SetFrameLevel) then
-    return
-  end
-  if not dialog.elmiraRaised then
-    dialog.elmiraOriginalLevel = dialog:GetFrameLevel()
-    dialog.elmiraRaised = true
-  end
-  dialog:SetFrameStrata("FULLSCREEN_DIALOG")
-  dialog:SetFrameLevel(dialog.elmiraOriginalLevel + 101)
-  if not dialog.elmiraStrataHooked and dialog.HookScript then
-    dialog.elmiraStrataHooked = true
-    dialog:HookScript("OnHide", function(self)
-      if not self.elmiraRaised then return end
-      self.elmiraRaised = nil
-      self:SetFrameStrata("DIALOG")
-      self:SetFrameLevel(self.elmiraOriginalLevel)
-      self.elmiraOriginalLevel = nil -- mutants: equivalent the next raise re-captures it regardless, gated on elmiraRaised alone
-    end)
-  end
+-- D2 (review of 65896ad): `raiseAbovePanel`, the name-addressed edit-box/button1
+-- lookup and the prefill-after-clear fix all moved to `Display/Popups.lua` (`ns.Popups`), which is
+-- now the ONE place in the addon `StaticPopup_Show` is called from -- a fifth call site
+-- (`Setup/Wizard.lua`'s first-run popup) had shipped with none of D61-D67's fixes, because this
+-- file's own guard only ever read this file. `ns.Popups.show` is the D61-D67 mechanism (D62's
+-- strata+level raise, D63's other-addon-safe restore gate, D67's original-level capture, D61b's
+-- prefill-after-clear); this file still owns the edit box's OWN `OnShow` fallback prefill below, and
+-- `acceptOnEnter`'s D61c click-through, both of which need `ns.Popups.editBox`/`ns.Popups.button1`
+-- to find the real, name-addressed widgets (D64).
+local function acceptOnEnter(self)
+  local parent = self:GetParent()
+  local button1 = ns.Popups.button1(parent)
+  if button1 then button1:Click() end
 end
 
--- D64 (priority fix, 2026-09-07 in-game): `dialog.editBox`/`dialog.button1` are NOT how Blizzard's
--- shared StaticPopup frames expose their children on this client -- verified live: `/run print(
--- StaticPopup1EditBox, StaticPopup1Button1, StaticPopup1.button1)` answered two real widgets and a
--- `nil`. The children are NAME-ADDRESSED GLOBALS (`StaticPopup1EditBox`, `StaticPopup1Button1`), so
--- every `.editBox`/`.button1` read in this file was silently `nil` on the real client: `prefillNow`
--- early-returned (D61b never actually ran), `OnAccept` read no text at all (a typed name refused as
--- empty), and `acceptOnEnter`'s `parent.button1` was `nil` (Enter did nothing). Every earlier D61-D67
--- spec passed because the FAKE dialog in this file's own tests attaches `.editBox`/`.button1` as
--- convenience fields -- a shape no real StaticPopup has -- so the suite asserted our own assumption
--- back to us. Field checked FIRST (so a fake, or a future client shape, that DOES carry the field
--- keeps working) and the name-addressed global second, never the reverse -- trading one assumption
--- for the opposite one would only move the bug.
-local function popupChild(dialog, field, suffix)
-  if not dialog then return nil end
-  if dialog[field] then return dialog[field] end
-  local name = dialog.GetName and dialog:GetName()
-  return name and _G[name .. suffix] or nil
-end
-
-local function editBoxOf(dialog) return popupChild(dialog, "editBox", "EditBox") end
-local function button1Of(dialog) return popupChild(dialog, "button1", "Button1") end
-
--- D61b: writes the prefill AFTER the client's own post-OnShow clear, which is what `OnShow`'s own
--- prefill (kept below as a fallback for anything that does not go through this helper) cannot do.
-local function prefillNow(dialog, text)
-  local box = editBoxOf(dialog)
-  if not box then return end
-  box:SetText(text or "")
-  if box.HighlightText then box:HighlightText() end
-end
-
--- PB1 (2026-09-08, owner: "the FOURTH time this bug has shipped"): every popup in this file goes
--- through ONE call site for `StaticPopup_Show`, so raising above the options panel is not a
--- discipline the next call site has to remember -- it is what this function does. `prefill` is
--- optional (the confirm dialog below has no edit box to prefill) and, when given, is applied AFTER
--- the return from `StaticPopup_Show` for the same reason D61b's own `prefillNow` exists: the client
--- clears the edit box after `OnShow`, so writing the prefill any earlier would be wiped. The return
--- value reports whether a popup was AVAILABLE to try (the same guard every call site had before this
--- helper existed) -- not whether `StaticPopup_Show` itself answered a real dialog, which the real
--- client can decline to do for reasons callers here have never needed to distinguish.
-local function showPopup(which, text1, text2, data, prefill)
-  if not (StaticPopup_Show and StaticPopupDialogs and StaticPopupDialogs[which]) then
-    return false
-  end
-  local dialog = StaticPopup_Show(which, text1, text2, data)
-  raiseAbovePanel(dialog)
-  if prefill ~= nil then prefillNow(dialog, prefill) end
-  return true
-end
-
+-- Each wrapper below keeps `Rotation`'s own return shape a plain boolean (`ns.Popups.show` answers
+-- a second value too, the raised dialog, for the one caller -- Wizard's first-run popup -- that
+-- needs to touch it further) -- a `local ok = ...; return ok` rather than a bare tail call, so this
+-- file's public surface does not silently grow a second return value nobody here asked for.
 function Rotation.openNewRotationPopup()
   local prefill = Rotation.newRotationPrefillName()
-  return showPopup("ELMIRA_NAME_ROTATION", nil, nil, { prefill = prefill }, prefill)
+  local ok = ns.Popups.show("ELMIRA_NAME_ROTATION", nil, nil, { prefill = prefill }, prefill)
+  return ok
 end
 
 function Rotation.openCopyPopup(templateKey, templateName)
   local prefill = Rotation.copyPrefillName(templateName)
-  return showPopup("ELMIRA_NAME_ROTATION", nil, nil,
+  local ok = ns.Popups.show("ELMIRA_NAME_ROTATION", nil, nil,
     { prefill = prefill, templateKey = templateKey }, prefill)
+  return ok
 end
 
 function Rotation.openRenamePopup(key, currentName)
-  return showPopup("ELMIRA_RENAME_ROTATION", currentName, nil,
+  local ok = ns.Popups.show("ELMIRA_RENAME_ROTATION", currentName, nil,
     { prefill = currentName, renameKey = key }, currentName)
+  return ok
 end
 
 -- D71 (2026-09-07 in-game round): "Maybe we can provide direct link for the source?" -- WoW cannot
 -- open a URL, so the convention (same as the wizard's old rune links) is a popup showing the full
 -- address in a selectable, pre-highlighted edit box the player copies out. SAME mechanism as the
 -- three popups above -- one more StaticPopupDialogs entry through `registerPopups`, the same
--- `raiseAbovePanel`/`prefillNow` pair -- never a second popup layer, and never the strata-only fix
--- that left the D61 naming popups behind the options window twice before it was actually fixed.
+-- `ns.Popups.show` -- never a second popup layer, and never the strata-only fix that left the D61
+-- naming popups behind the options window twice before it was actually fixed.
 function Rotation.openSourcePopup(url)
   local text = url ~= nil and tostring(url) or ""
-  return showPopup("ELMIRA_SHOW_SOURCE", nil, nil, { prefill = text }, text)
-end
-
--- D61c: the standard Blizzard idiom (StaticPopup's edit box has no OnEnterPressed of its own) --
--- click the dialog's own accept button, so Enter and the button always agree about what happens.
-local function acceptOnEnter(self)
-  local parent = self:GetParent()
-  local button1 = button1Of(parent)
-  if button1 then button1:Click() end
+  local ok = ns.Popups.show("ELMIRA_SHOW_SOURCE", nil, nil, { prefill = text }, text)
+  return ok
 end
 
 -- Registered once, guarded so re-loading this file (every spec's before_each) does not stack a
@@ -464,7 +376,7 @@ local function registerPopups()
       EditBoxOnEnterPressed = acceptOnEnter,
       OnShow = function(self, data)
         data = data or self.data
-        local box = editBoxOf(self)
+        local box = ns.Popups.editBox(self)
         if box then
           box:SetText((data and data.prefill) or "")
           if box.HighlightText then box:HighlightText() end
@@ -472,7 +384,7 @@ local function registerPopups()
       end,
       OnAccept = function(self, data)
         data = data or self.data
-        local box = editBoxOf(self)
+        local box = ns.Popups.editBox(self)
         local name = box and box:GetText()
         local ok, err -- mutants: equivalent deleting the declaration only makes both globals; luacheck catches it
         if data and data.templateKey then
@@ -493,7 +405,7 @@ local function registerPopups()
       EditBoxOnEnterPressed = acceptOnEnter,
       OnShow = function(self, data)
         data = data or self.data
-        local box = editBoxOf(self)
+        local box = ns.Popups.editBox(self)
         if box then
           box:SetText((data and data.prefill) or "")
           if box.HighlightText then box:HighlightText() end
@@ -502,7 +414,7 @@ local function registerPopups()
       OnAccept = function(self, data)
         data = data or self.data
         if not (data and data.renameKey) then return end
-        local box = editBoxOf(self)
+        local box = ns.Popups.editBox(self)
         local name = box and box:GetText()
         local ok, err = Rotation.rename(data.renameKey, name)
         if not ok then announceFailure(err, L["could not rename that rotation (%s)."]) end
@@ -519,7 +431,7 @@ local function registerPopups()
       hasEditBox = true, timeout = 0, whileDead = true, hideOnEscape = true,
       OnShow = function(self, data)
         data = data or self.data
-        local box = editBoxOf(self)
+        local box = ns.Popups.editBox(self)
         if box then
           box:SetText((data and data.prefill) or "")
           if box.HighlightText then box:HighlightText() end
@@ -2295,9 +2207,9 @@ end
 -- fields (read only by its internal ActivateControl, :661-829) would otherwise be silently ignored.
 local function confirmThen(text, fn)
   return function()
-    -- PB1: routed through `showPopup` like every other popup in this file, so this dialog raises
-    -- above the options panel too -- the exact bug the owner hit here (D-list PB1).
-    if not showPopup("ELMIRA_CONFIRM", text, nil, { onAccept = fn }) then fn() end
+    -- PB1: routed through `ns.Popups.show` like every other popup in the addon, so this dialog
+    -- raises above the options panel too -- the exact bug the owner hit here (D-list PB1).
+    if not ns.Popups.show("ELMIRA_CONFIRM", text, nil, { onAccept = fn }) then fn() end
   end
 end
 

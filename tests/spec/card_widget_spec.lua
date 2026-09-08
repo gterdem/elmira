@@ -536,6 +536,19 @@ describe("Elmira/Options/CardWidget.lua (W1, the card widget)", function()
         assert.is_true(seen[first], "the first button must come back out of the Button pool")
         assert.is_true(seen[second], "the second button must come back out of the Button pool")
       end)
+
+    -- D4 (review of 65896ad): releasing a card while the cursor is still over it used
+    -- to rely on the client firing OnLeave first; GameTooltip is shared cross-addon state, so a
+    -- stuck tooltip pointing at a widget that no longer belongs to this card is ours to clean up,
+    -- not the next addon's.
+    it("hides a showing tooltip when the card is released, even with no OnLeave", function()
+      local card = newCard()
+      card:SetCustomData({ title = "T", tooltip = "full text" })
+      card.frame:Enter()
+      assert.is_true(tooltip.shown)
+      card:Release()
+      assert.is_false(tooltip.shown)
+    end)
   end)
 
   describe("PA9: border and fill carry state, hover brightens the border", function()

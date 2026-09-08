@@ -61,6 +61,9 @@ Display\BarProviders.lua
 Display\Queue.lua
 Display\Overlay.lua
 Display\Announcers.lua
+# D2: the one StaticPopup_Show call site in the addon. Loads before Setup\Wizard.lua and
+# Options\Rotation.lua, both of which use ns.Popups, so neither has to reach forward for it.
+Display\Popups.lua
 
 # Setup
 Setup\Detect.lua

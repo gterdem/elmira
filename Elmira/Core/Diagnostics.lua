@@ -164,6 +164,17 @@ end
 -- about a situation nobody thought to sample. A disabled line neither casts nor is checked -- it is
 -- not in the rotation at all (Schema.compile skips it), so it can supply no seal and raise no dead
 -- condition of its own.
+--
+-- D1 (review of 65896ad, fix first): only report from a purely CONJUNCTIVE context.
+-- `{ "not", { "seal", X } }` is TRUE exactly when the seal is ABSENT -- i.e. always, when no line
+-- casts it -- so flagging it dead told the player a trivially-true, always-firing line was broken.
+-- `{ "any", { "seal", X }, other }` can still fire through `other` even though the seal never comes
+-- up, so it is not dead either. A false RED lies about a working rotation; a missed RED only fails
+-- to warn, which this project treats as the safer failure (see the walk below). The top-level
+-- `entry.when` list stays an implicit AND, and descending into a NESTED `all` stays conjunctive too
+-- -- both keep reporting exactly as before -- but crossing into `any` or `not` turns reporting off
+-- for that whole subtree, including any `all` further nested inside it, because nothing under a
+-- non-conjunctive branch can be shown dead from the shape alone.
 function Diagnostics.deadSeal(build)
   local out = {}
   local entries = (build and build.entries) or {}
@@ -172,15 +183,15 @@ function Diagnostics.deadSeal(build)
     if type(entry) == "table" and not entry.disabled and entry.spell then cast[entry.spell] = true end
   end
 
-  local function walk(index, when)
+  local function walk(index, when, conjunctive)
     for _, cond in ipairs(when or {}) do
       if type(cond) == "table" then
         local kind = cond[1]
         if kind == "all" or kind == "any" or kind == "not" then
           local nested = {}
           for i = 2, #cond do nested[#nested + 1] = cond[i] end
-          walk(index, nested)
-        elseif kind == "seal" or kind == "seal_linger" then
+          walk(index, nested, conjunctive and kind == "all")
+        elseif conjunctive and (kind == "seal" or kind == "seal_linger") then
           local key = cond[2]
           if type(key) == "string" and not cast[key] then
             out[#out + 1] = { index = index, key = key }
@@ -191,7 +202,7 @@ function Diagnostics.deadSeal(build)
   end
 
   for i, entry in ipairs(entries) do
-    if type(entry) == "table" and not entry.disabled then walk(i, entry.when) end
+    if type(entry) == "table" and not entry.disabled then walk(i, entry.when, true) end
   end
   return out
 end

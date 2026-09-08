@@ -1,5 +1,11 @@
 # Changelog
 ## Unreleased
+- **Fixed: a rotation line could be wrongly marked red ("a logic error to fix") for a seal condition
+  written as "not" or as one option of several ("any").** Both are working conditions — a negated
+  seal check is often meant to always be true when nothing casts that seal, and an "any" branch can
+  still fire through its other option — so the page no longer treats either as broken.
+- **Fixed: the first-time setup popup could open behind the settings window** if the window was
+  already open when it appeared, the same way the rotation-naming popups once did.
 - **Fixed: the Abilities page's "From your spellbook" list was sorted by an internal id, not by
   name**, which looked like a random order in game. It's now sorted alphabetically.
 - **New: the Abilities page's "From your spellbook" list now shows each ability's icon** next to
@@ -38,12 +44,12 @@
 - **New: a live preview of your unsaved changes**, shown above the running rotation's own "Right now"
   strip while the Builder is open, so you can see what a draft would suggest before pressing Save.
   The rotation actually running on screen never changes until Save is pressed.
-- **Fixed: the Rotations page's playstyle cards read as one wall of text.** Each card is now a
-  titled, bordered panel — its name is the border's own heading, not a repeated row inside it — with
-  its difficulty shown again, and the source split onto its own unambiguous line ("Source: …") with a
-  "Copy link" button that opens the full web address in a copyable popup, in front of the settings
-  window. A playstyle's own page (what you get from a card's Open button) gets the same treatment:
-  difficulty on its summary line, the source on its own line with the same Copy link button.
+- **Fixed: the Rotations page's playstyle cards read as one wall of text.** Playstyles now show as
+  cards, three across: a short title, a short description with the full text on hover, difficulty
+  shown as pips, a muted line of extra detail, and two stacked buttons — Use, and Copy link (which
+  opens the full web address in a copyable popup, in front of the settings window). Clicking anywhere
+  on a card's body opens that playstyle's own page. The card in use has a gold border; one you cannot
+  use yet (missing gear or a rune) is dimmed instead.
 - **New: spell icons appear before each line in a rotation's "top to bottom" list**, matching the
   Builder's own rotation list and the queue mirror.
 - **Changed: the status dots' colours are swapped.** Grey now means a line cannot happen on this

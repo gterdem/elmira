@@ -92,6 +92,9 @@ describe("Options/Rotation (the Rotation section)", function()
       _G.__lastStaticPopup = { which = which, arg1 = arg1, arg2 = arg2, data = data }
       return { which = which }
     end
+    -- D2: the popup plumbing (raiseAbovePanel, editBox/button1, the prefill fix) now lives in
+    -- Display/Popups.lua (ns.Popups), which Rotation.lua calls into rather than defining itself.
+    helper.load("Elmira/Display/Popups.lua")
     Rotation = helper.load("Elmira/Options/Rotation.lua")
   end)
 
@@ -1895,6 +1898,18 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_true(Rotation.save())
         queue = queueOf(1)
         assert.equal("amber", Rotation.lineState(3))
+      end)
+
+      -- D1 (review of 65896ad, fix first): the same seal, NEGATED, is trivially true
+      -- whenever nothing casts it -- an always-firing line, not a broken one -- so it must not read
+      -- red even though nothing in the build casts the named seal.
+      it("does not read red for a dead seal condition sitting under 'not'", function()
+        Rotation.addCondition(3, "seal")
+        Rotation.setCondition(3, 1, "key", "SEAL_OF_TESTING") -- still no entry casts this seal
+        Rotation.setCondition(3, 1, "negated", true)
+        assert.is_true(Rotation.save())
+        queue = queueOf(1)
+        assert.are_not.equal("red", Rotation.lineState(3))
       end)
 
       it("counts only red lines as needing attention, in the page's own header", function()
@@ -4844,27 +4859,5 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal("PALADIN_EXODIN", Rotation.displayName("PALADIN_EXODIN"))
       assert.equal("?", Rotation.displayName(nil))
     end)
-  end)
-end)
-
--- PB1 (2026-09-08): this is the FOURTH time a popup shipped without `raiseAbovePanel`, once per
--- call site that had to remember it by hand -- twice for the naming popups, once for the source
--- popup, now the confirm dialog (`Rotation.lua:2267` called `StaticPopup_Show` directly and never
--- raised or prefilled it). A source-level guard is unusual, but the alternative is trusting that
--- whoever adds the SIXTH popup remembers a convention four people in a row have already forgotten:
--- every popup in this file must go through the one `showPopup` helper, which is provable directly
--- from the source text -- `StaticPopup_Show(` may appear EXACTLY ONCE, inside that helper's own
--- definition. A normal behavioural spec cannot pin this: it would have to enumerate every call site
--- by name, and would say nothing about a future one nobody wrote a test for yet.
-describe("Options/Rotation.lua source (PB1): every popup goes through one showPopup helper", function()
-  it("calls StaticPopup_Show from exactly one place in the file", function()
-    local f = assert(io.open("Elmira/Options/Rotation.lua", "r"))
-    local source = f:read("*a")
-    f:close()
-    local count = 0
-    for _ in source:gmatch("StaticPopup_Show%(") do count = count + 1 end
-    assert.equal(1, count,
-      "every popup must be shown through the one showPopup(which, text1, text2, data, prefill) " ..
-      "helper -- a second direct StaticPopup_Show( call site is how this bug shipped four times")
   end)
 end)

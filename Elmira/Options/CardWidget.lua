@@ -323,7 +323,12 @@ local methods = {
   -- a slot it should have gotten back. Blank the fields (and hide/clear the still-live buttons)
   -- BEFORE releasing them -- releasing first would leave `applyData`'s own button loop indexing
   -- widgets that no longer belong to this card.
+  -- D4 (review of 65896ad): releasing a card whose tooltip is showing used to rely on
+  -- the client firing OnLeave first -- but a release can happen without that (AceConfigDialog
+  -- rebuilding the page out from under the cursor), and GameTooltip is shared cross-addon state, so
+  -- a stuck tooltip pointing at a widget that no longer belongs to this card is ours to clean up.
   ["OnRelease"] = function(self)
+    hideTooltip()
     applyData(self, nil)
     for i = 1, #BUTTON_ACTIONS do
       if self.buttons[i] then self.buttons[i]:Release() end

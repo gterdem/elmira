@@ -267,18 +267,43 @@ describe("Core.Diagnostics", function()
       assert.equal(1, #found)
     end)
 
-    -- Schema recurses into all/any/not when it validates; a check that only looked at the top
-    -- level would miss exactly the nested shape the shipped builds actually use.
-    it("looks inside all, any and not", function()
+    -- D1 (review of 65896ad, fix first): a nested `all` stays conjunctive, so a seal
+    -- condition inside one is still reportable -- the shape Schema itself recurses into.
+    it("still looks inside a nested 'all', which stays conjunctive", function()
       local found = Diagnostics.deadSeal(build{
+        { spell = "EXORCISM", when = { { "all", { "seal", "GONE" } } } },
+      })
+      assert.equal(1, #found)
+      assert.equal("GONE", found[1].key)
+    end)
+
+    -- The audit's own probe: `{ "not", { "seal", X } }` is TRUE exactly when the seal is ABSENT --
+    -- i.e. always, when no line casts it -- so the old code's report was a false "this is broken"
+    -- for a condition that is trivially true and always fires.
+    it("says nothing about a seal condition sitting under 'not'", function()
+      assert.same({}, Diagnostics.deadSeal(build{
+        { spell = "EXORCISM", when = { { "not", { "seal", "GONE" } } } },
+      }))
+    end)
+
+    -- The audit's other probe: a line under `any` can still fire through the OTHER branch even
+    -- though the seal it names never comes up, so naming it dead was wrong here too.
+    it("says nothing about a seal condition sitting under 'any', even when the other branch never fires", function()
+      assert.same({}, Diagnostics.deadSeal(build{
         { spell = "EXORCISM", when = {
           { "any", { "seal", "GONE_A" }, { "not", { "seal_linger", "GONE_B" } } },
         } },
-      })
-      local keys = {}
-      for _, row in ipairs(found) do keys[row.key] = true end
-      assert.is_true(keys.GONE_A)
-      assert.is_true(keys.GONE_B)
+      }))
+    end)
+
+    -- Crossing into `any`/`not` must stay off for the rest of the subtree, including an `all`
+    -- nested further inside it -- not just the immediate child.
+    it("keeps 'any' suppression through a nested 'all'", function()
+      assert.same({}, Diagnostics.deadSeal(build{
+        { spell = "EXORCISM", when = {
+          { "any", { "all", { "seal", "GONE" } }, { "spell", "JUDGEMENT" } },
+        } },
+      }))
     end)
 
     -- A disabled line neither casts a seal for real play nor is itself checked: Schema.compile
