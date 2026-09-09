@@ -331,7 +331,6 @@ describe("Display.BarGlow", function()
   describe("noteMissing() announces rather than prints", function()
     before_each(function()
       ns.db = { profile = { glow = { enabled = true, barGlow = true } } }
-      BarGlow.resetAnnouncements()
     end)
 
     it("sends a warning naming the spell it could not place", function()
@@ -342,6 +341,24 @@ describe("Display.BarGlow", function()
       assert.equal("warning", said[1][1])
       assert.is_truthy(said[1][2]:find("EXORCISM"))
       assert.is_truthy(said[1][2]:find("/elm debug bars"))
+    end)
+
+    -- FX1-D2. The owner's log read "No visible action-bar button holds DIVINE_STORM": an internal
+    -- key, in the one message whose whole job is to send somebody to look at their bars for a spell
+    -- the game calls something else.
+    it("says the spell's own name rather than its symbolic key", function()
+      local said = {}
+      ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
+      ns.Display.spellName = function(key)
+        return key == "DIVINE_STORM" and "Divine Storm" or nil
+      end
+      assert.is_true(BarGlow.noteMissing("DIVINE_STORM"))
+      assert.is_truthy(said[1][2]:find("Divine Storm", 1, true))
+      assert.is_nil(said[1][2]:find("DIVINE_STORM", 1, true), "the raw key is still in the message")
+      -- A spell the client cannot name still has to produce a sentence, and the key is the only
+      -- thing left to say.
+      assert.is_true(BarGlow.noteMissing("SEAL_OF_MARTYRDOM"))
+      assert.is_truthy(said[2][2]:find("SEAL_OF_MARTYRDOM", 1, true))
     end)
 
     it("still says it the old way on a load where Announce is missing", function()
@@ -358,7 +375,6 @@ describe("Display.BarGlow", function()
     before_each(function()
       helper.ns().db = { profile = { glow = { enabled = true, barGlow = true } } }
       helper.ns().log = function(...) helper.ns()._logged = { ... } end
-      BarGlow.resetAnnouncements()
     end)
 
     it("says which spell has no button", function()
@@ -376,14 +392,45 @@ describe("Display.BarGlow", function()
       helper.ns().db.profile.glow.barGlow = false
       assert.is_false(BarGlow.noteMissing("EXORCISM"))
       helper.ns().db.profile.glow.barGlow = true
-      BarGlow.resetAnnouncements()
       assert.is_true(BarGlow.noteMissing("JUDGEMENT"))
     end)
 
-    it("will speak again after the bars change, because the spell may have been placed", function()
+    -- FX1-D1, the owner's bug: FIVE copies of the same "no button holds Divine Storm" line in one
+    -- session. `Invalidate` runs on seven client events (Core/Init.lua), UPDATE_SHAPESHIFT_FORM and
+    -- ACTIONBAR_SLOT_CHANGED among them, so on a paladin it fires many times a fight -- and it used
+    -- to wipe this latch, so the next suggestion complained all over again about bars that had not
+    -- changed at all.
+    it("says it once however many bar events fire while the spell is still unplaced", function()
+      local said = {}
+      helper.ns().Announce = { emit = function() said[#said + 1] = true end }
       assert.is_true(BarGlow.noteMissing("EXORCISM"))
+      for _ = 1, 5 do
+        BarGlow.Invalidate()
+        assert.is_false(BarGlow.noteMissing("EXORCISM"))
+      end
+      assert.equal(1, #said, "the bar events made it complain again about the same spell")
+    end)
+
+    -- The regression the latch still has to report: the spell WAS on a bar and now is not. Detected
+    -- from a button actually being found, not from a bar event, which is the whole of D1.
+    it("speaks again once a render has found a button and then lost it", function()
+      local said = {}
+      helper.ns().Announce = { emit = function() said[#said + 1] = true end }
+      assert.is_true(BarGlow.noteMissing("EXORCISM"))
+      assert.is_false(BarGlow.noteMissing("EXORCISM"))
+
+      -- A button turns up on the bars, and the next render finds it.
+      mock.actionInfo[1] = { "spell", 415073 }
+      setButton("ActionButton1", { action = 1 })
       BarGlow.Invalidate()
-      assert.is_true(BarGlow.noteMissing("EXORCISM"))
+      assert.equal(1, #BarGlow.buttonsFor("EXORCISM"))
+
+      -- ...and it is dragged off again.
+      mock.actionInfo[1] = nil
+      BarGlow.Invalidate()
+      assert.same({}, BarGlow.buttonsFor("EXORCISM"))
+      assert.is_true(BarGlow.noteMissing("EXORCISM"), "a real regression went unreported")
+      assert.equal(2, #said)
     end)
   end)
 end)

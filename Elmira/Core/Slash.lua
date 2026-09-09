@@ -372,10 +372,15 @@ Slash.register{
       local caps = {}
       for k, v in pairs(d.caps or {}) do caps[#caps + 1] = k .. "=" .. tostring(v) end
       table.sort(caps)
+      -- FX1-D5: which Move mode is running, if any. The options window HIDES itself for as long as
+      -- one is -- so "my configuration window vanished" is a question this command now has an
+      -- answer to, for a player who missed the little bar at the top of the screen.
+      local moving = ns.Options and ns.Options.moveSubject and ns.Options.moveSubject()
       return {
         string.format("project=%s version=%s interface=%s", tostring(d.project), tostring(d.version), tostring(d.interface)),
         "capabilities: " .. table.concat(caps, " "),
         "state: " .. tostring(d.state),
+        "moving: " .. tostring(moving or "nothing"),
       }
     elseif sub == "gates" then
       -- Which rows of the active build cannot fire for this character, and why. The same answer

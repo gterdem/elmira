@@ -1164,4 +1164,54 @@ describe("Display.Queue", function()
       assert.equal(1, dirty)
     end)
   end)
+  -- FX1-D5. The options window is very often sitting exactly where the strip is being dragged to,
+  -- so entering a Move mode hides it and leaves a small bar on screen instead. Asked for from HERE
+  -- rather than from the button that started the mode: "Lock all positions" and /elm lock end this
+  -- mode too (Queue.SetLocked), and neither goes anywhere near the panel.
+  describe("positioning mode and the options window (FX1-D5)", function()
+    local moves
+
+    before_each(function()
+      moves = {}
+      ns.Options = {
+        BeginMove = function(what, key) moves[#moves + 1] = { "begin", what, key } end,
+        EndMove = function() moves[#moves + 1] = { "end" } end,
+      }
+    end)
+
+    it("asks the window to step aside when positioning starts", function()
+      assert.is_true(Queue.StartPositioning())
+      assert.is_true(container().shown, "the strip is not even on screen to be positioned")
+      assert.same({ "begin", "strip" }, moves[1])
+      assert.equal(1, #moves)
+    end)
+
+    it("gives the window back when positioning ends", function()
+      Queue.StartPositioning()
+      assert.is_true(Queue.StopPositioning())
+      assert.same({ "end" }, moves[2])
+      assert.equal(2, #moves)
+    end)
+
+    -- The exit nobody remembers: locking positions ends the mode without the panel's button.
+    it("gives the window back when the positions are locked instead", function()
+      Queue.StartPositioning()
+      Queue.SetLocked(true)
+      assert.same({ "end" }, moves[2])
+    end)
+
+    it("says nothing when there was no mode to start or to end", function()
+      Queue.StartPositioning()
+      assert.is_false(Queue.StartPositioning())
+      Queue.StopPositioning()
+      assert.is_false(Queue.StopPositioning())
+      assert.equal(2, #moves)
+    end)
+
+    it("does not need an options window to be positioned at all", function()
+      ns.Options = nil
+      assert.is_true(Queue.StartPositioning())
+      assert.is_true(Queue.StopPositioning())
+    end)
+  end)
 end)

@@ -55,13 +55,49 @@ describe("Options window", function()
     function f:GetRegions() return unpack(self.regions) end
     function f:GetFrameLevel() return self.level end
     function f:SetFrameLevel(v) self.level = v end
+    function f:SetFrameStrata(v) self.strata = v end
     function f:SetWidth(v) self.width = v end
     function f:SetHeight(v) self.height = v end
+    -- The four the AceGUI mover/sizer handler reads back off the frame it just dropped
+    -- (AceGUIContainer-Frame.lua:39-48). `top`/`left` are set by a test to say where it was dragged.
+    function f:GetWidth() return self.width end
+    function f:GetHeight() return self.height end
+    function f:GetTop() return self.top end
+    function f:GetLeft() return self.left end
+    function f:GetParent() return self.parent end
+    function f:SetText(v) self.text = v end
+    function f:SetAllPoints(other) self.allPointsOf = other end
+    function f:SetColorTexture(...) self.colorTexture = { ... } end
+    function f:CreateTexture()
+      local t = fakeTexture(nil)
+      t.SetAllPoints = function(tex, other) tex.allPointsOf = other end
+      t.SetColorTexture = function(tex, ...) tex.colorTexture = { ... } end
+      self.textures = (self.textures or 0) + 1
+      self.lastTexture = t
+      return t
+    end
     function f:SetScript(name, fn) self.scripts[name] = fn end
+    function f:GetScript(name) return self.scripts[name] end
+    -- The real HookScript APPENDS: the original handler still runs, and ours runs after it. A fake
+    -- that replaced would let a SetScript -- which would delete AceGUI's own resize -- pass here.
+    function f:HookScript(name, fn)
+      local prior = self.scripts[name]
+      self.scripts[name] = function(...)
+        if prior then prior(...) end
+        return fn(...)
+      end
+    end
     function f:SetNormalTexture(t) self.normalTexture = t end
     function f:SetPushedTexture(t) self.pushedTexture = t end
     function f:SetHighlightTexture(t) self.highlightTexture = t end
-    function f:Hide() self.hidden = true end
+    -- The client fires OnHide when a shown frame is hidden, and does NOT when it was hidden
+    -- already. The move bar's own OnHide is how Escape ends a Move mode, so a fake that hid
+    -- quietly would make the Done button and Escape indistinguishable here.
+    function f:Hide()
+      if self.hidden then return end
+      self.hidden = true
+      if self.scripts.OnHide then self.scripts.OnHide(self) end
+    end
     function f:Show() self.hidden = false end
     -- The version font string (D12): a plain child created directly on the frame, the same way the
     -- X and the reposition button are.
@@ -99,6 +135,18 @@ describe("Options window", function()
     w.other = fakeTexture(137057)
     w.frame.regions = { w.titlebg, w.capLeft, w.capRight, w.other }
 
+    -- AceGUI wires the frame's OnHide to fire OnClose (AceGUIContainer-Frame.lua:28-30, 195), so
+    -- HIDING this frame -- by any route, a Move mode included -- runs the whole close chain. A fake
+    -- that hid quietly would make "the close chain stood down while it was hidden" untestable, and
+    -- the leak it guards against invisible. The client does not fire OnHide on a frame that is
+    -- already hidden, and neither does this.
+    function w.frame:Hide()
+      if self.hidden then return end
+      self.hidden = true
+      if w.events.OnClose then w.events.OnClose(w, "OnClose") end
+    end
+    function w.frame:Show() self.hidden = false end
+
     -- AceGUI's SetTitle: sets the text and re-sizes titlebg to fit it, on EVERY open.
     function w:SetTitle(t) self.titletext:SetText(t); self.titlebg:SetWidth(80) end
     -- A line-for-line stand-in for AceGUIContainer-Frame.lua:145-158.
@@ -127,26 +175,64 @@ describe("Options window", function()
     local notAButton = fakeFrame()   -- a child with no text at all, e.g. the status bar
     w.frame.children = { notAButton, close }
     w.stockClose = close
+
+    -- The title drag bar and the three sizers. All four carry the SAME OnMouseUp function
+    -- (`MoverSizer_OnMouseUp`, AceGUIContainer-Frame.lua:39-48, installed at :237/:283/:290/:297),
+    -- and only the sizers are named on the widget -- which is why Options finds them by that shared
+    -- function rather than by name. Behaviour copied line for line: it writes the dropped frame's
+    -- size and place into the status table and nothing else.
+    w.frame.obj = w
+    local function moverUp(mover)
+      local frame = mover:GetParent()
+      local self = frame.obj
+      local status = self.status or self.localstatus
+      status.width, status.height = frame:GetWidth(), frame:GetHeight()
+      status.top, status.left = frame:GetTop(), frame:GetLeft()
+    end
+    w.movers = {}
+    for _, name in ipairs({ "title", "sizer_se", "sizer_s", "sizer_e" }) do
+      local mover = fakeFrame()
+      mover.parent = w.frame
+      mover:SetScript("OnMouseUp", moverUp)
+      w[name] = mover
+      w.movers[#w.movers + 1] = mover
+      w.frame.children[#w.frame.children + 1] = mover
+    end
+
     if opts.noCloseButton then w.frame.children = { notAButton }; w.stockClose = nil end
     if opts.noChildren then w.frame.GetChildren = nil end
     return w
   end
 
+  -- Drag the window: AceGUI's own handler runs, exactly as it does in game, and whatever Options
+  -- has hooked onto it runs after.
+  local function dragTo(w, top, left)
+    w.frame.top, w.frame.left = top, left
+    w.title.scripts.OnMouseUp(w.title)
+  end
+
   -- AceConfigDialog, reduced to what Options.Open touches. `FrameOnClose` is the real one's
   -- behaviour: clear OpenFrames and let the widget go back to the pool.
   local function fakeDialog(widget)
-    local d = { OpenFrames = {}, defaultSize = nil }
+    -- `frame` is the library's own OnUpdate driver, and `closeAllOverride` the opt-out from its
+    -- close-everything sweep (AceConfigDialog-3.0.lua:17-22, 1774-1782) -- the one thing FX1-D5
+    -- writes on the library itself.
+    local d = { OpenFrames = {}, defaultSize = nil, selected = {},
+                frame = { closeAllOverride = {} } }
     function d:SetDefaultSize(app, w, h) self.defaultSize = { app, w, h } end
     -- D61e: Options.Open() with no path now selects "general" explicitly (AceConfigDialog-3.0
     -- would otherwise default to the lowest-order group, Rotations); this fake only needs to answer
     -- the call, not track it -- the selection itself is options_spec.lua's job.
-    function d:SelectGroup() end
+    function d:SelectGroup(app, ...) self.selected[#self.selected + 1] = { app, ... } end
     function d:Open()
       self.OpenFrames.Elmira = widget
       widget:SetCallback("OnClose", function(wid)
         self.OpenFrames.Elmira = nil
         wid.released = true
       end)
+      -- AceConfigDialog-3.0.lua:1930-1933: every Open ends by showing the frame, whether it was
+      -- just created or came back out of the pool.
+      widget.frame:Show()
     end
     -- A line-for-line stand-in for AceConfigDialog-3.0.lua:401-425: one status table per appName,
     -- nested one level per path segment, memoized so the SAME table comes back on the next call --
@@ -224,10 +310,13 @@ describe("Options window", function()
     }
     _G.CreateFrame = function(kind, name, parent, template)
       local f = fakeFrame()
-      f.kind, f.parent, f.template = kind, parent, template
+      f.kind, f.name, f.parent, f.template = kind, name, parent, template
       created[#created + 1] = f
       return f
     end
+    -- The client's list of frame NAMES Escape closes. A table, because that is what the move bar
+    -- joins itself to (FX1-D5).
+    _G.UISpecialFrames = {}
     -- A real wrapping hooksecurefunc, not the record-only fake other specs use: D13/D15 need the
     -- installed hook to actually FIRE when something (production code, or a test simulating
     -- AceConfigDialog's own refresh) calls the wrapped method, forwarding whatever args the call
@@ -246,6 +335,7 @@ describe("Options window", function()
   after_each(function()
     _G.CLOSE, _G.UIParent, _G.GameTooltip, _G.CreateFrame, _G.hooksecurefunc =
       nil, nil, nil, nil, nil
+    _G.UISpecialFrames = nil
   end)
 
   -- Opens the panel the way /elm config does, and hands back the widget it opened onto.
@@ -257,12 +347,21 @@ describe("Options window", function()
   end
 
   describe("scale", function()
-    it("draws the frame at the stored scale, clamped so it cannot walk off screen", function()
+    it("draws the frame at the stored scale", function()
       local w = open()
       assert.equal(1.2, w.frame.scale)
-      -- Scaling happens about the anchor, so without this a scaled-up window drags its own title
-      -- bar off the top of the screen -- and the title bar is the only handle it has.
-      assert.is_true(w.frame.clamped)
+    end)
+
+    -- FX1-D6, the owner: "you can push off many of the addon's screens, so I don't think clamping
+    -- was a good idea." The window is free to hang off the edge like every other frame; what
+    -- clamping was really guaranteeing -- that the title bar can always be grabbed -- is kept by
+    -- the off-screen check below instead.
+    it("never clamps the window to the screen", function()
+      local w = open()
+      assert.is_nil(w.frame.clamped, "the window is still pinned inside the screen")
+      Options.SetWindowScale(1.4)
+      Options.ResetWindow()
+      assert.is_nil(w.frame.clamped)
     end)
 
     it("ships at 1.2, not at AceGUI's 1.0", function()
@@ -358,6 +457,50 @@ describe("Options window", function()
       assert.same({ "LEFT", "UIParent", "LEFT", 240, 0 }, w.frame.points[2])
     end)
 
+    -- FX1-D6. Nothing is clamped any more, so the one thing clamping guaranteed is kept on its own:
+    -- a position stored at another resolution or another scale can leave the title bar -- the only
+    -- handle the window has -- entirely off the monitor, and the window would open there with no way
+    -- to reach it. Screen is 1920x1080 and the window's scale is 1.2, so the frame's own coordinate
+    -- space is 1600x900 wide.
+    describe("a stored position that is no longer on the screen", function()
+      local function opensAt(top, left)
+        ns.db.global.window.top, ns.db.global.window.left = top, left
+        return open()
+      end
+
+      it("centres, and forgets the position, when the title bar is off the bottom", function()
+        local w = opensAt(0, 240)
+        assert.same({ "CENTER" }, w.frame.points[1])
+        assert.equal(1, #w.frame.points)
+        assert.is_false(ns.db.global.window.top, "it would find the same place again next time")
+        assert.is_false(ns.db.global.window.left)
+      end)
+
+      it("centres when the title bar is above the top of the screen", function()
+        -- 900 in frame coordinates is the top edge; the bar is 40 tall, so 941 puts all of it out.
+        assert.same({ "CENTER" }, opensAt(941, 240).frame.points[1])
+        assert.same({ "TOP", "UIParent", "BOTTOM", 0, 939 }, opensAt(939, 240).frame.points[1])
+      end)
+
+      it("centres when the window is off either side", function()
+        assert.same({ "CENTER" }, opensAt(700, 1600).frame.points[1])
+        assert.same({ "CENTER" }, opensAt(700, -960).frame.points[1])  -- 960 wide, so nothing shows
+        assert.same({ "TOP", "UIParent", "BOTTOM", 0, 700 }, opensAt(700, -959).frame.points[1])
+      end)
+
+      it("keeps a position that is on the screen", function()
+        assert.is_true(Options.positionOnScreen(700, 240, 960))
+        assert.is_false(Options.positionOnScreen(0, 240, 960))
+        assert.is_false(Options.positionOnScreen(941, 240, 960))
+        assert.is_false(Options.positionOnScreen(700, 1600, 960))
+        assert.is_false(Options.positionOnScreen(700, -960, 960))
+        -- The measurement is in the FRAME's coordinates, which the scale divides: the same 941 that
+        -- is off the top at 1.2 is comfortably on screen at 0.9.
+        ns.db.global.window.scale = 0.9
+        assert.is_true(Options.positionOnScreen(941, 240, 960))
+      end)
+    end)
+
     -- AceGUI writes size and position into the status table on every drag-stop, but that table is
     -- memory-only and is wiped when the widget goes back to the pool. Closing is the last moment
     -- the numbers exist.
@@ -373,6 +516,108 @@ describe("Options window", function()
       assert.equal(900, stored.top)
       assert.equal(300, stored.left)
       assert.is_true(w.released, "AceConfigDialog's own cleanup was skipped")
+    end)
+
+    -- FX1-D7, the owner: "whenever I hit Preview for texture, the Configuration popup is centred on
+    -- screen again." Every `execute` button makes AceConfigDialog re-Open the same frame
+    -- (AceConfigDialog-3.0.lua:867-872), ApplyWindow re-applied db.top/left on every one of those,
+    -- and SaveWindow only ran on close -- so a window dragged since it was opened snapped back to
+    -- its last SAVED spot, or to the centre when it had never been positioned.
+    describe("staying where the player dragged it", function()
+      it("saves the position on drag-stop, without waiting for the window to close", function()
+        local w = open()
+        dragTo(w, 900, 300)
+        assert.equal(900, ns.db.global.window.top, "the drag was never remembered")
+        assert.equal(300, ns.db.global.window.left)
+      end)
+
+      it("saves the size on resize-stop, from every sizer", function()
+        local w = open()
+        for _, sizer in ipairs({ w.sizer_se, w.sizer_s, w.sizer_e }) do
+          w.frame.width, w.frame.height = w.frame.width + 10, w.frame.height + 5
+          sizer.scripts.OnMouseUp(sizer)
+          assert.equal(w.frame.width, ns.db.global.window.width)
+          assert.equal(w.frame.height, ns.db.global.window.height)
+        end
+      end)
+
+      -- HookScript, never SetScript: AceGUI's own handler is what fills in the status table this
+      -- reads, and it is also what ends the drag or the resize itself.
+      it("leaves AceGUI's own drag-stop handler running", function()
+        local w = open()
+        dragTo(w, 880, 260)
+        assert.equal(880, w.status.top, "AceGUI's own handler was replaced, not chained")
+        assert.equal(260, w.status.left)
+      end)
+
+      it("keeps the dragged position through a re-open, and does not re-centre", function()
+        local w = open()
+        dragTo(w, 900, 300)
+        local points = #w.frame.points
+
+        -- What every execute button does: AceConfigDialog:Open on the SAME frame.
+        Options.dialog:Open("Elmira")
+        assert.equal(points, #w.frame.points, "the window was re-anchored under the player")
+        assert.equal(900, w.status.top, "the status table was overwritten from the database")
+        assert.equal(300, w.status.left)
+        assert.equal(900, ns.db.global.window.top)
+      end)
+
+      -- The other half of the same bug: a window that had NEVER been positioned re-centred on
+      -- every execute, which is what the owner actually saw.
+      it("keeps a dragged position even when nothing was ever stored", function()
+        local w = open()
+        assert.same({ "CENTER" }, w.frame.points[1])
+        dragTo(w, 700, 200)
+        Options.dialog:Open("Elmira")
+        assert.equal(1, #w.frame.points, "it was centred again on top of the drag")
+        assert.equal(700, w.status.top)
+      end)
+
+      -- ...but a window being PUT on screen still gets the stored geometry, which is the whole
+      -- point of storing it.
+      it("applies the stored position again the next time the window is opened", function()
+        local w = open()
+        dragTo(w, 900, 300)
+        w.frame.elmiraClose.scripts.OnClick()
+        ns.db.global.window.top, ns.db.global.window.left = 500, 100
+
+        Options.dialog:Open("Elmira")
+        assert.same({ "TOP", "UIParent", "BOTTOM", 0, 500 }, w.frame.points[1])
+        assert.same({ "LEFT", "UIParent", "LEFT", 100, 0 }, w.frame.points[2])
+      end)
+
+      -- AceGUI's Frame pool is shared with every other Ace3 addon and a script hook cannot be taken
+      -- off again, so the hook has to check whose frame it is on before it writes anything.
+      it("writes nothing when the frame it was hooked on now belongs to another addon", function()
+        local w = open()
+        w.frame.elmiraClose.scripts.OnClick()
+        assert.is_nil(Options.dialog.OpenFrames.Elmira)
+        Options.dialog.OpenFrames.ElvUI = { frame = w.frame }
+
+        ns.db.global.window.top, ns.db.global.window.left = 500, 100
+        dragTo(w, 111, 222)
+        assert.equal(500, ns.db.global.window.top, "another addon's drag was saved as ours")
+        assert.equal(100, ns.db.global.window.left)
+      end)
+
+      it("hooks each mover once however many times the panel is decorated", function()
+        local w = open()
+        local saves = 0
+        local real = Options.SaveWindow
+        Options.SaveWindow = function(...) saves = saves + 1; return real(...) end
+        Options.Decorate()
+        Options.Decorate()
+        dragTo(w, 900, 300)
+        assert.equal(1, saves, "the title bar's drag-stop hook was installed more than once")
+        -- The sizers, separately: a second decoration can still SEE `sizer_se` (its handler is our
+        -- own wrapper by then, which is what it is compared against), so it is the one a missing
+        -- guard would hook again -- and a size saved twice per drag is a save from stale numbers.
+        w.frame:SetWidth(1000)
+        w.sizer_se.scripts.OnMouseUp(w.sizer_se)
+        Options.SaveWindow = real
+        assert.equal(2, saves, "the sizer's drag-stop hook was installed more than once")
+      end)
     end)
 
     it("records 'never positioned' as false, not nil, so AceDB writes it", function()
@@ -709,6 +954,21 @@ describe("Options window", function()
       assert.equal(1, stopped)
       assert.is_true(w.released)
     end)
+
+    it("still releases the frame when leaving the strip's positioning mode fails, and says so",
+      function()
+        ns.Queue = { StopPositioning = function() error("the strip is gone") end }
+        local w = open()
+        local logged = {}
+        ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+        w.events.OnClose(w, "OnClose")
+        assert.is_true(w.released, "an error leaving the mode skipped the dialog's cleanup")
+        local found = false
+        for _, msg in ipairs(logged) do
+          if msg:find("positioning mode", 1, true) then found = true end
+        end
+        assert.is_true(found, "no log line mentioned the mode it could not leave")
+      end)
 
     it("still releases the frame when leaving the texture Move mode fails, and says so", function()
       ns.Textures = { StopMoveMode = function() error("the anchor is gone") end }
@@ -1094,6 +1354,297 @@ describe("Options window", function()
         Options.dialog = nil
         assert.is_false(Options.seedAbilityTree())
       end)
+    end)
+  end)
+
+  -- FX1-D5. The owner, trying to place a texture: "I can not move it around since the Configuration
+  -- page is too big and I can not move the configuration page out of the screen." Every Move mode
+  -- now hides the window and leaves a small bar behind, the way ElvUI's movers do.
+  --
+  -- The load-bearing distinction, and the reason this whole block exists: the window is HIDDEN, not
+  -- CLOSED. AceGUI fires OnClose from the frame's OnHide either way, so without the guard the close
+  -- chain would end the mode one line after it started and hand the widget back to the pool.
+  describe("hiding the window while something is being moved (FX1-D5)", function()
+    local stopped
+
+    local function bar()
+      for _, f in ipairs(created) do
+        if f.name == "ElmiraMoveBar" then return f end
+      end
+    end
+
+    before_each(function()
+      stopped = { strip = 0, textures = 0, messages = 0 }
+      ns.Queue = { StopPositioning = function() stopped.strip = stopped.strip + 1 end }
+      ns.Textures = { StopMoveMode = function() stopped.textures = stopped.textures + 1 end }
+      ns.Announcers = { StopMoving = function() stopped.messages = stopped.messages + 1 end }
+    end)
+
+    it("takes the window off the screen and puts a bar there instead", function()
+      local w = open()
+      assert.is_true(Options.BeginMove("strip"))
+      assert.is_true(w.frame.hidden, "the window is still covering what is being dragged")
+      local b = bar()
+      assert.is_table(b, "no bar was left on screen")
+      assert.is_false(b.hidden)
+      assert.is_truthy(b.elmiraText.text:find("the queue strip", 1, true))
+      assert.is_truthy(b.elmiraText.text:find("Done", 1, true))
+      assert.equal("Done", b.elmiraDone.text)
+    end)
+
+    -- A bar with no size, no anchor and no backdrop is a bar nobody can see, which is the same as
+    -- no bar at all -- and there is nothing else on screen saying how to get the window back.
+    it("is a readable bar and not an invisible one", function()
+      open()
+      Options.BeginMove("strip")
+      local b = bar()
+      assert.equal("Frame", b.kind)
+      assert.equal(_G.UIParent, b.parent)
+      assert.equal("FULLSCREEN_DIALOG", b.strata, "the bar draws under the frames being moved")
+      assert.equal(380, b.width)
+      assert.equal(76, b.height)
+      assert.same({ "TOP", _G.UIParent, "TOP", 0, -40 }, b.points[1])
+      assert.equal(1, b.textures, "no backdrop was drawn behind the text")
+      assert.equal(b, b.lastTexture.allPointsOf, "the backdrop does not cover the bar")
+      assert.same({ 0, 0, 0, 0.85 }, b.lastTexture.colorTexture, "the backdrop is invisible")
+      -- Both horizontal anchors, which is what makes the sentence wrap instead of running off the
+      -- ends of the bar.
+      assert.same({ "TOPLEFT", b, "TOPLEFT", 10, -10 }, b.elmiraText.points[1])
+      assert.same({ "TOPRIGHT", b, "TOPRIGHT", -10, -10 }, b.elmiraText.points[2])
+      assert.equal("CENTER", b.elmiraText.justify)
+
+      local done = b.elmiraDone
+      assert.equal("UIPanelButtonTemplate", done.template)
+      assert.equal(b, done.parent)
+      assert.equal(110, done.width)
+      assert.equal(22, done.height)
+      assert.same({ "BOTTOM", b, "BOTTOM", 0, 10 }, done.points[1])
+    end)
+
+    -- Every word on it goes through AceLocale, the same as every other user-facing string.
+    it("puts everything it says through the locale", function()
+      open()
+      setmetatable(ns.L, { __index = function(_, k) return "[" .. k .. "]" end })
+      ns.Display = { spellName = function() return "Exorcism" end }
+      Options.BeginMove("texture", "EXORCISM")
+      assert.equal("[Exorcism's texture]", Options.moveSubject())
+      assert.equal("[Moving [Exorcism's texture]. Drag it where you want it, then press Done.]",
+                   bar().elmiraText.text)
+      assert.equal("[Done]", bar().elmiraDone.text)
+      Options.EndMove()
+      Options.BeginMove("strip")
+      assert.equal("[Moving [the queue strip]. Drag it where you want it, then press Done.]",
+                   bar().elmiraText.text)
+    end)
+
+    -- A client with no CreateFrame at all is only reachable in a spec, but the mode still has to
+    -- start: the window getting out of the way is the part that matters.
+    it("still hides the window on a client that will not make the bar", function()
+      local w = open()
+      _G.CreateFrame = nil
+      assert.is_true(Options.BeginMove("strip"))
+      assert.is_true(w.frame.hidden)
+      assert.is_nil(bar())
+      assert.is_true(Options.EndMove())
+      assert.is_false(w.frame.hidden)
+    end)
+
+    -- The whole of the difference between hiding and closing. If the chain runs, it stops the mode
+    -- that just started, saves the window, undoes the chrome and -- through `prior` -- hands the
+    -- widget back to AceGUI's pool for another addon to acquire while we still intend to show it.
+    it("does not run the close chain, and does not let go of the frame", function()
+      local w = open()
+      Options.BeginMove("indicators")
+      assert.equal(0, stopped.strip, "the close chain stopped the mode that had just started")
+      assert.equal(0, stopped.textures)
+      assert.equal(0, stopped.messages)
+      assert.is_nil(w.released, "the widget went back to the pool while it was only hidden")
+      assert.equal(w, Options.dialog.OpenFrames.Elmira, "the panel is no longer the open one")
+      assert.is_false(w.frame.elmiraClose.hidden, "the chrome was undecorated by a mere hide")
+    end)
+
+    -- The button that starts a Move mode is an `execute`, and AceConfigDialog re-Opens the whole
+    -- panel the instant its func returns (AceConfigDialog-3.0.lua:867-872) -- Open ending in
+    -- f:Show() (:1930-1933). Without the re-hide the mode's own button undoes the mode's own hide,
+    -- which is the "looks right, does nothing in game" shape exactly.
+    it("stays hidden through the re-open every execute button triggers", function()
+      local w = open()
+      Options.BeginMove("strip")
+      Options.dialog:Open("Elmira")
+      assert.is_true(w.frame.hidden, "the window came straight back over what is being moved")
+      assert.is_nil(w.released, "re-hiding it released the widget to the pool")
+      assert.equal(w, Options.dialog.OpenFrames.Elmira)
+      assert.is_not_nil(Options.moveSubject(), "the mode was ended by the refresh")
+      -- ...and it still comes back when the mode ends.
+      Options.EndMove()
+      assert.is_false(w.frame.hidden)
+    end)
+
+    it("leaves an ordinary refresh alone: it only re-hides while a mode is running", function()
+      local w = open()
+      Options.dialog:Open("Elmira")
+      assert.is_false(w.frame.hidden, "a plain refresh hid the panel")
+      assert.is_nil(w.released)
+    end)
+
+    it("puts the same window back, on the page it was on, and takes the bar away", function()
+      local w = open()
+      Options.dialog:GetStatusTable("Elmira", {}).groups = { selected = "spells\001list" }
+      Options.BeginMove("strip")
+      local before = #Options.dialog.selected
+
+      assert.is_true(Options.EndMove())
+      assert.is_false(w.frame.hidden, "the window never came back")
+      assert.is_true(bar().hidden, "the bar is still on screen with nothing being moved")
+      assert.is_nil(Options.moveSubject())
+      assert.same({ "Elmira", "spells", "list" }, Options.dialog.selected[before + 1],
+        "it came back on a different page from the one it left")
+    end)
+
+    it("ends every Move mode there is, not only the one that started it", function()
+      open()
+      Options.BeginMove("texture", "EXORCISM")
+      Options.EndMove()
+      assert.equal(1, stopped.strip)
+      assert.equal(1, stopped.textures)
+      assert.equal(1, stopped.messages)
+    end)
+
+    it("is a no-op when nothing is being moved", function()
+      local w = open()
+      assert.is_false(Options.EndMove())
+      assert.is_false(Options.BeginMove("not a mode"))
+      assert.is_false(w.frame.hidden)
+      assert.equal(0, stopped.strip)
+    end)
+
+    -- Each Stop* calls EndMove, so EndMove must not call them back round again.
+    it("does not loop when the mode it stops ends the mode itself", function()
+      open()
+      ns.Queue.StopPositioning = function()
+        stopped.strip = stopped.strip + 1
+        Options.EndMove()
+      end
+      Options.BeginMove("strip")
+      assert.is_true(Options.EndMove())
+      assert.equal(1, stopped.strip)
+    end)
+
+    it("names what is being moved, per mode, as a phrase a sentence can be built round", function()
+      open()
+      local function subjectOf(what, key)
+        Options.EndMove()
+        Options.BeginMove(what, key)
+        return Options.moveSubject()
+      end
+      assert.is_truthy(subjectOf("strip"):find("the queue strip", 1, true))
+      assert.is_truthy(subjectOf("indicators"):find("the indicator row", 1, true))
+      assert.is_truthy(subjectOf("messages"):find("your screen messages", 1, true))
+      -- The ability as the player knows it, through the merged lookup -- not EXORCISM.
+      ns.Display = { spellName = function(key) return key == "EXORCISM" and "Exorcism" or nil end }
+      assert.is_truthy(subjectOf("texture", "EXORCISM"):find("Exorcism's texture", 1, true))
+      ns.Display = nil
+      assert.is_truthy(subjectOf("texture", "JUDGEMENT"):find("JUDGEMENT's texture", 1, true))
+    end)
+
+    -- Escape reaches the bar through the client's own UISpecialFrames list, which is a list of
+    -- global frame NAMES.
+    it("joins the list of frames Escape closes, once", function()
+      open()
+      Options.BeginMove("strip")
+      Options.EndMove()
+      Options.BeginMove("strip")
+      local named = 0
+      for _, name in ipairs(_G.UISpecialFrames) do
+        if name == "ElmiraMoveBar" then named = named + 1 end
+      end
+      assert.equal(1, named)
+    end)
+
+    -- Done and Escape both end the mode, and each has to keep working after the other has been
+    -- used: the flag that tells them apart is reset, not left standing.
+    it("ends the mode by Escape again after the Done button was used once", function()
+      local w = open()
+      Options.BeginMove("strip")
+      bar().elmiraDone.scripts.OnClick()
+      Options.BeginMove("indicators")
+      assert.is_true(w.frame.hidden)
+      bar().scripts.OnHide()
+      assert.is_nil(Options.moveSubject(), "Escape no longer ends the mode")
+      assert.is_false(w.frame.hidden)
+    end)
+
+    it("ends the mode when Escape hides the bar", function()
+      local w = open()
+      Options.BeginMove("strip")
+      bar().scripts.OnHide()
+      assert.is_nil(Options.moveSubject())
+      assert.equal(1, stopped.strip)
+      assert.is_false(w.frame.hidden, "Escape ended the mode but left the window hidden")
+    end)
+
+    -- AceConfigDialog wraps CloseSpecialWindows to close every options window a frame after Escape
+    -- hides the bar (AceConfigDialog-3.0.lua:1854-1860, 1774-1782). Without the library's own opt-out
+    -- the window we are putting back would be shut again on the next OnUpdate.
+    it("keeps the restored window out of the close-everything sweep Escape triggers", function()
+      open()
+      Options.BeginMove("strip")
+      bar().scripts.OnHide()
+      assert.is_true(Options.dialog.frame.closeAllOverride.Elmira)
+    end)
+
+    it("leaves that sweep alone when the Done button ends the mode", function()
+      local w = open()
+      Options.BeginMove("strip")
+      bar().elmiraDone.scripts.OnClick()
+      assert.is_nil(Options.dialog.frame.closeAllOverride.Elmira,
+        "a later Escape would no longer close the panel")
+      assert.is_nil(Options.moveSubject())
+      assert.is_false(w.frame.hidden)
+    end)
+
+    it("ends the mode rather than opening a second window over it", function()
+      local w = open()
+      Options.BeginMove("strip")
+      assert.is_true(Options.Open("queue"))
+      assert.is_nil(Options.moveSubject(), "the mode is still running with the window on top of it")
+      assert.is_true(bar().hidden)
+      assert.is_false(w.frame.hidden)
+    end)
+
+    -- The Builder's live refresh ends in AceConfigDialog re-Opening the app, which SHOWS the frame.
+    -- While a mode has it hidden that would pop the window back up over the sample being dragged.
+    it("keeps the Builder's live refresh from re-showing the hidden window", function()
+      open()
+      local status = Options.dialog:GetStatusTable("Elmira", { "rotation" })
+      status.groups = { selected = "builder" }
+      assert.is_true(Options.builderIdle())
+      Options.BeginMove("strip")
+      assert.is_false(Options.builderIdle())
+      Options.EndMove()
+      assert.is_true(Options.builderIdle())
+    end)
+
+    -- The pool again: if anything released the frame while it was hidden, showing it would put our
+    -- page back onto a window that now belongs to somebody else.
+    it("opens a fresh panel rather than showing a frame the pool has handed on", function()
+      local w = open()
+      Options.BeginMove("strip")
+      Options.dialog.OpenFrames.Elmira = nil     -- released while we were not looking
+      Options.dialog.OpenFrames.ElvUI = { frame = w.frame }
+      local opened = 0
+      Options.dialog.Open = function() opened = opened + 1 end
+
+      assert.is_true(Options.EndMove())
+      assert.equal(1, opened, "no panel was opened in its place")
+      assert.is_true(w.frame.hidden, "another addon's window was shown with our page on it")
+    end)
+
+    it("says so rather than erroring when there is no window to hide", function()
+      Options.dialog = { OpenFrames = {} }
+      assert.is_true(Options.BeginMove("strip"))
+      assert.is_false(bar().hidden, "the bar is the only thing left saying a mode is on")
+      assert.is_true(Options.EndMove())
     end)
   end)
 

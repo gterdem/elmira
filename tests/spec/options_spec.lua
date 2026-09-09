@@ -783,24 +783,62 @@ describe("Options (the settings pages)", function()
 
     it("says so plainly when nothing has been said yet", function()
       assert.is_truthy(logArgs().logEmpty.name:find("Nothing yet"))
-      assert.is_nil(logArgs().log1)
+      assert.is_nil(logArgs().lines, "an empty box was offered with nothing to copy out of it")
     end)
 
-    it("lists what was said, newest first, in the category's own colour", function()
-      ns.Announce.emit("status", "first")
-      ns.Announce.emit("warning", "second")
-      local args = logArgs()
-      assert.is_truthy(args.log1.name:find("second"))
-      assert.is_truthy(args.log1.name:find(ns.Colors.WARN.hex))
-      assert.is_truthy(args.log2.name:find("first"))
-      -- PE14-D1: the prefix on a log row is the category's label, so the rename shows here too.
-      assert.is_truthy(args.log2.name:find("Settings and setup", 1, true))
-      assert.is_nil(args.logEmpty)
-      -- Each line is its own row, in order, under the header and above the Clear button.
-      assert.equal("description", args.log1.type)
-      assert.equal(2, args.log1.order)
-      assert.equal(3, args.log2.order)
-      assert.is_true(args.log2.order < args.logClear.order)
+    -- FX1-D3, the owner: "I think I should be able to copy any lines I want". The lines used to be
+    -- `description` rows, which no widget lets you select -- the only way to quote one into a bug
+    -- report was to retype it. One read-only multiline box in their place: newest first, plain
+    -- text, and it scrolls rather than growing the page.
+    describe("copying the log out", function()
+      it("puts every line in a box the player can select and copy", function()
+        ns.Announce.emit("status", "first")
+        ns.Announce.emit("warning", "second")
+        local box = logArgs().lines
+        assert.equal("input", box.type)
+        assert.is_true(box.multiline > 1, "a single-line box cannot show a log")
+        assert.equal("full", box.width)
+        assert.equal(2, box.order)
+        assert.is_true(box.order < logArgs().logClear.order)
+
+        local text = box.get()
+        local shown = {}
+        for line in (text .. "\n"):gmatch("(.-)\n") do shown[#shown + 1] = line end
+        assert.equal(2, #shown)
+        assert.is_truthy(shown[1]:find("second", 1, true), "newest is not first")
+        assert.is_truthy(shown[2]:find("first", 1, true))
+        -- PE14-D1: the prefix on a log line is the category's label, so the rename shows here too.
+        assert.is_truthy(shown[2]:find("Settings and setup", 1, true))
+        assert.is_nil(logArgs().logEmpty)
+      end)
+
+      -- Copied text carries whatever is in the string, so a colour code would land in the middle of
+      -- a pasted bug report.
+      it("carries no colour escapes into what gets copied", function()
+        ns.Announce.emit("warning", "second")
+        assert.is_nil(logArgs().lines.get():find("|c", 1, true))
+        assert.is_nil(logArgs().lines.get():find("|r", 1, true))
+      end)
+
+      -- Read-only: typing in the box must not become the record of what the addon said.
+      it("keeps the box read-only", function()
+        ns.Announce.emit("status", "first")
+        local box = logArgs().lines
+        assert.is_function(box.set, "AceConfig needs a setter even on a read-only box")
+        box.set(nil, "typed over it")
+        assert.equal(1, #ns.Announce.log())
+        assert.is_truthy(logArgs().lines.get():find("first", 1, true))
+      end)
+
+      -- The box is fed by `get`, which AceConfig calls again on every refresh -- so a line said
+      -- after the page was built is in the box without anything rebuilding the options table.
+      it("reads the log again rather than freezing at what was said when the page was built",
+        function()
+          ns.Announce.emit("status", "first")
+          local box = logArgs().lines
+          ns.Announce.emit("status", "later")
+          assert.is_truthy(box.get():find("later", 1, true))
+        end)
     end)
 
     it("empties the log on request", function()
@@ -1159,10 +1197,12 @@ describe("Options (the settings pages)", function()
     -- unreachable on a long session.
     it("lists at most twenty log lines however many there are", function()
       for i = 1, 25 do ns.Announce.emit("status", "line " .. i) end
-      local args = logArgs()
-      assert.is_not_nil(args.log20)
-      assert.is_nil(args.log21)
-      assert.is_truthy(args.log1.name:find("line 25"))
+      local text = logArgs().lines.get()
+      local shown = 0
+      for _ in (text .. "\n"):gmatch("(.-)\n") do shown = shown + 1 end
+      assert.equal(20, shown)
+      assert.is_truthy(text:find("line 25", 1, true))
+      assert.is_nil(text:find("line 5\n", 1, true), "a line past the cap is in the box")
     end)
   end)
 

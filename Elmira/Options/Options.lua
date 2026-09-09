@@ -558,6 +558,27 @@ local LOG_LINES = 20
 -- After every setting on the page (the highest of which is 67), with room left over: this number is
 -- the whole point of the panel, so it is a constant rather than a literal buried in the table.
 local LOG_ORDER = 90
+-- How tall the copy box is. Fewer than the lines it can hold, on purpose: the widget scrolls, and a
+-- box that grew with the log would put the settings above it back on the moving page PE13-D1 fixed.
+local LOG_BOX_LINES = 12
+
+-- FX1-D3. The log as plain text, newest first, one line per message with the category that carried
+-- it. No colour codes: they would be copied out with the text, and "|cffE05555Warning|r" in a bug
+-- report is worse than no colour at all.
+--
+-- A function rather than a string built into the options table, because AceConfig reads `get` again
+-- on every refresh -- a captured string would freeze the box at whatever had been said when the
+-- page was last rebuilt.
+function Options.logText()
+  local A = ns.Announce
+  local rows = (A and A.log(LOG_LINES)) or {}
+  local lines = {}
+  for i, row in ipairs(rows) do
+    local cat = A.category(row.category)
+    lines[i] = string.format("%s  %s", L[(cat and cat.label) or row.category], A.plain(row.text))
+  end
+  return table.concat(lines, "\n")
+end
 
 -- D22: the same sentence, on every toggle in a category's row -- chat, screen, sound, party and
 -- raid alike -- because what a user needs to know before flipping a switch is WHEN this kind of
@@ -617,12 +638,16 @@ local function announceGroup()
       name = ns.Colors.wrap(ns.Colors.MUTED, L["Nothing yet."]),
     }
   end
-  for i, row in ipairs(rows) do
-    local cat = A.category(row.category)
-    logArgs["log" .. i] = {
-      type = "description", fontSize = "medium", order = 1 + i,
-      name = ns.Colors.wrap(ns.Colors.MUTED, L[(cat and cat.label) or row.category]) .. "  " ..
-             ns.Colors.wrap((cat and ns.Colors[cat.color]) or ns.Colors.MUTED, A.plain(row.text)),
+  if #rows > 0 then
+    logArgs.lines = {
+      type = "input", multiline = LOG_BOX_LINES, width = "full", order = 2, name = L["Messages"],
+      get = function() return Options.logText() end,
+      -- Read-only. The box exists so the widget's own click-drag, Ctrl-A and Ctrl-C work on the
+      -- text (FX1-D3, the owner: "I think I should be able to copy any lines I want"); storing
+      -- anything typed into it would let a stray keystroke rewrite the record of what was said.
+      -- AceConfig needs the key to be there, so it is a function that does nothing rather than
+      -- nothing at all.
+      set = function() end,
     }
   end
   logArgs.logClear = {
@@ -826,9 +851,59 @@ local function openWidget()
   return d and d.OpenFrames and d.OpenFrames.Elmira or nil
 end
 
+-- The screen, in UIParent's own units. A client that will not answer still has to get a bounded,
+-- placeable window rather than an arithmetic error on the way to opening the panel.
+local function screenSize()
+  local maxW, maxH = 1024, 768
+  if UIParent and UIParent.GetWidth then
+    maxW, maxH = UIParent:GetWidth() or maxW, UIParent:GetHeight() or maxH
+  end
+  return maxW, maxH
+end
+
+-- The title bar's height (AceGUIContainer-Frame.lua:229). Named because the ONE thing that matters
+-- about a stored position is whether that bar can still be grabbed.
+local TITLE_HEIGHT = 40
+
+-- FX1-D6. Is a stored position still on the monitor?
+--
+-- Clamping is gone (the owner: "you can push off many of the addon's screens, so I don't think
+-- clamping was a good idea"), and this is the single guarantee clamping was carrying: a position
+-- saved at another resolution, on another monitor or at another scale can put the title bar -- the
+-- only handle the window has -- entirely off the screen, and the window would open there with no
+-- way to reach it.
+--
+-- `top` is the frame's top edge measured UP FROM THE BOTTOM of the screen and `left` its left edge
+-- from the left, both in the FRAME's own coordinates (AceGUIContainer-Frame.lua:151-156) -- which
+-- is why the screen is divided by our scale here rather than multiplied.
+function Options.positionOnScreen(top, left, width)
+  local scale = Options.windowScale()
+  local maxW, maxH = screenSize()
+  maxW, maxH = maxW / scale, maxH / scale
+  if top <= 0 then return false end                      -- the bar is at or below the bottom edge
+  if top - TITLE_HEIGHT >= maxH then return false end    -- ...or entirely above the top edge
+  if left >= maxW then return false end                  -- ...or off the right-hand side
+  if left + (width or 0) <= 0 then return false end      -- ...or off the left-hand side
+  return true
+end
+
+-- The frame we have already placed. Geometry is pushed onto a window that is being PUT on screen
+-- and never onto one already on it (FX1-D7): every `execute` button makes AceConfigDialog re-Open
+-- the same frame (AceConfigDialog-3.0.lua:867-872), and re-applying `db.top/left` on each of those
+-- snapped a window the player had since dragged back to its last SAVED spot -- or to the centre,
+-- when it had never been positioned at all. That is the owner's "whenever I hit Preview for
+-- texture, the Configuration popup is centred on screen again".
+--
+-- Cleared on close, because AceGUI's pool can hand this same table back later and the frame it
+-- hands back is one that is being put on screen again.
+local placedWidget = nil -- mutants: equivalent deleting the local only makes it a global
+
 -- Push db.global.window onto the frame that is open right now. Scale FIRST: every measurement below
 -- is in the frame's own coordinates, which SetScale changes underneath them.
-function Options.ApplyWindow()
+--
+-- `force` moves a frame that is already on screen: the scale slider and the reposition button both
+-- have to be seen to do something by the person looking at the window they act on.
+function Options.ApplyWindow(force)
   local widget = openWidget()
   local frame = widget and widget.frame
   if not frame then return false end
@@ -836,15 +911,8 @@ function Options.ApplyWindow()
   local defaults = windowDefaults()
 
   frame:SetScale(Options.windowScale())
-  -- SetScale scales about the frame's current anchor, so a window the user has dragged near the top
-  -- walks its own title bar off the screen as it grows -- and the title bar is the only thing you
-  -- can drag it back by. Clamping is what makes the scale slider safe to drag.
-  frame:SetClampedToScreen(true)
 
-  local maxW, maxH = 1024, 768
-  if UIParent and UIParent.GetWidth then
-    maxW, maxH = UIParent:GetWidth() or maxW, UIParent:GetHeight() or maxH
-  end
+  local maxW, maxH = screenSize()
   -- SetResizeBounds replaced SetMinResize/SetMaxResize in 10.0 and Classic Era has been given it in
   -- stages, so ask the frame which one it has rather than the client which version it is.
   if frame.SetResizeBounds then
@@ -856,12 +924,22 @@ function Options.ApplyWindow()
 
   local status = widget.status or widget.localstatus
   if not status then return true end
+  if not (force or placedWidget ~= widget) then return true end
+  placedWidget = widget
   status.width = w.width or defaults.width
   status.height = w.height or defaults.height
   -- `false`, not nil, is what "never positioned" looks like on disk (Core/DB.lua), and AceGUI reads
   -- nil as "centre me" (AceGUIContainer-Frame.lua:151-157). The two spellings meet here.
-  status.top = (w.top ~= false) and w.top or nil
-  status.left = (w.left ~= false) and w.left or nil
+  local top = (w.top ~= false) and w.top or nil
+  local left = (w.left ~= false) and w.left or nil
+  if top and left and not Options.positionOnScreen(top, left, status.width) then
+    -- Thrown away rather than nudged back: the numbers describe a screen that is not this one, and
+    -- the centre is the only place that is certainly reachable. Written back to disk too, or the
+    -- next open would rediscover the same unreachable position.
+    w.top, w.left = false, false
+    top, left = nil, nil
+  end
+  status.top, status.left = top, left
   if widget.ApplyStatus then widget:ApplyStatus() end
   return true
 end
@@ -889,7 +967,7 @@ function Options.SetWindowScale(v)
   -- different place on screen at a different scale; re-centring is the only reading of it that is
   -- still true, and it is also what guarantees the title bar is reachable afterwards.
   db.top, db.left = false, false
-  Options.ApplyWindow()
+  Options.ApplyWindow(true)
   return true
 end
 
@@ -902,7 +980,7 @@ function Options.ResetWindow()
   local d = windowDefaults()
   db.scale, db.width, db.height = d.scale, d.width, d.height
   db.top, db.left = false, false
-  Options.ApplyWindow()
+  Options.ApplyWindow(true)
   return true
 end
 
@@ -1061,6 +1139,58 @@ local function decorateButtons(widget)
   if frame.elmiraReposition.Show then frame.elmiraReposition:Show() end
 end
 
+-- FX1-D7. Where the window was dragged to, saved the moment the mouse is let go.
+--
+-- AceGUI writes the new size and position into its status table on drag-stop and on resize-stop
+-- (`MoverSizer_OnMouseUp`, AceGUIContainer-Frame.lua:39-48) and nothing read that table until the
+-- window CLOSED -- so anything that re-Opened the frame in between put it back where it had last
+-- been saved, and every `execute` button re-Opens it.
+--
+-- HOOKED, never replaced. `HookScript` appends, so AceGUI's own handler still runs and still fills
+-- in the numbers this reads a moment later; `SetScript` would take the resize itself with it (the
+-- same one-handler rule that has cost this addon two outages, on the frame-script side).
+--
+-- The four frames carrying that handler are the title drag bar and the three sizers, and only the
+-- sizers are exposed on the widget -- `title` is a local (AceGUIContainer-Frame.lua:232-234). So
+-- all four are found the same way: by carrying the SAME function `sizer_se` does.
+local function moverFrames(widget)
+  local out = {}
+  local frame = widget.frame
+  local sizer = widget.sizer_se
+  local mark = sizer and sizer.GetScript and sizer:GetScript("OnMouseUp")
+  -- Read fresh every time, and it answers a SHORTER list from the second decoration onward: hooking
+  -- appends by replacing the script pointer with a wrapper, so `sizer_se`'s handler is no longer the
+  -- same function as the title bar's and only it still matches. That is exactly right -- everything
+  -- this would find is already hooked, and the flag below is what keeps the one that still matches
+  -- from being hooked a second time.
+  if not (mark and frame.GetChildren) then return out end
+  for _, child in ipairs({ frame:GetChildren() }) do
+    if child.GetScript and child.HookScript and child:GetScript("OnMouseUp") == mark then
+      out[#out + 1] = child
+    end
+  end
+  return out
+end
+
+local function decorateDrag(widget)
+  for _, mover in ipairs(moverFrames(widget)) do
+    -- A script hook cannot be taken off again, and AceGUI's pool will hand this same frame to
+    -- ElvUI or WeakAuras once we let go of it -- so the flag that stops it being installed twice
+    -- has to SURVIVE Undecorate (hooking again would save the same drag twice), and the hook
+    -- itself has to check that the frame being dragged is still ours before it writes. It writes
+    -- nothing at all otherwise, and it draws nothing ever, so the frame the pool hands on carries
+    -- no visible trace of us.
+    if not mover.elmiraDragHooked then
+      mover.elmiraDragHooked = true
+      local frame = widget.frame
+      mover:HookScript("OnMouseUp", function()
+        local open = openWidget()
+        if open and open.frame == frame then Options.SaveWindow(open) end
+      end)
+    end
+  end
+end
+
 -- Everything the stock AceGUI frame does not give us, applied to whatever frame is open now.
 -- Called after every Open (see Options.Open) because AceConfigDialog pools and re-titles frames --
 -- and, since D13/D15, after every OTHER refresh of THIS app too (the hook installed below) so a
@@ -1074,6 +1204,7 @@ function Options.Decorate()
   decorateTitle(widget)
   decorateVersion(widget)
   decorateButtons(widget)
+  decorateDrag(widget)
   return true
 end
 
@@ -1104,6 +1235,240 @@ function Options.Undecorate(widget)
   if frame.elmiraClose and frame.elmiraClose.Hide then frame.elmiraClose:Hide() end
   if frame.elmiraReposition and frame.elmiraReposition.Hide then frame.elmiraReposition:Hide() end
   if frame.elmiraVersion and frame.elmiraVersion.Hide then frame.elmiraVersion:Hide() end
+  -- FX1-D7: this frame is going back to the pool, so whatever comes out of it next is a window
+  -- being put on screen and gets the stored geometry again.
+  placedWidget = nil
+  return true
+end
+
+-- ============================================================ Move modes (FX1-D5)
+--
+-- The owner, trying to place a texture: "I can not move it around since the Configuration page is
+-- too big and I can not move the configuration page out of the screen." Every Move mode puts a
+-- sample on screen and asks the player to drag it -- under a 960x680 window that is very often
+-- sitting exactly where they want to drop it. ElvUI answers this by closing its config entirely and
+-- leaving a small toggle bar behind (ElvUI/Game/Shared/Modules/Misc/Movers); Elmira does the same,
+-- except the window is HIDDEN rather than closed, so it comes back on the page, the tab and the row
+-- the player was reading.
+--
+-- HIDDEN, NOT CLOSED, is load-bearing in both directions:
+--   * AceGUI fires OnClose from the frame's OnHide script (AceGUIContainer-Frame.lua:28-30, 195),
+--     so hiding the window runs our whole close chain -- which STOPS every move mode, one line
+--     after one started. `hiddenForMove` is what makes that chain stand down.
+--   * And because it stands down, AceConfigDialog's own FrameOnClose does not run either:
+--     OpenFrames.Elmira still holds this widget, nothing else can acquire it, and the window that
+--     comes back is the same one with the same content. A frame left hidden and still in OpenFrames
+--     IS the M5g leak if it is never shown again -- which is why every exit from every mode ends up
+--     in Options.EndMove below, and why Options.Open ends the mode instead of opening over it.
+
+-- What a running Move mode consists of. Every one of these is a bare `local` declaration, so
+-- deleting it only turns the name into a global -- which luacheck fails on and no test can see.
+local moveSubject = nil   -- mutants: equivalent local-only; what is being moved, and "is a mode on"
+local hiddenForMove = false -- mutants: equivalent local-only; did WE hide the panel
+local moveWidget = nil    -- mutants: equivalent local-only; the widget we hid, to show that one back
+local movePath = nil      -- mutants: equivalent local-only; the tree path to re-select
+local moveBar = nil       -- the floating bar, created once
+local closingBar = false  -- mutants: equivalent local-only; are WE hiding the bar, or is Escape
+
+-- What is being moved, in the player's words. Tokens rather than sentences cross the Display
+-- boundary: Display decides what a mode DOES, Options decides what it is called, and only this side
+-- goes through AceLocale.
+local MOVE_SUBJECTS = {
+  strip      = "the queue strip",
+  indicators = "the indicator row",
+  messages   = "your screen messages",
+  texture    = "%s's texture",
+}
+
+-- What is being moved right now ("the indicator row"), or nil when nothing is. Read by the bar's
+-- own sentence and by `/elm debug state` (Core/Slash.lua), which has to be able to answer "where
+-- did my configuration window go" for a player who missed the bar.
+function Options.moveSubject() return moveSubject end
+
+-- Ends every Move mode there is, whichever one is running. ONE function, shared by the Done button
+-- and by the panel's close chain: a guard written twice is a guard that will be forgotten once, and
+-- a mode left running holds a sample on screen that the render loop is told to leave alone.
+--
+-- pcall throughout, and for the same reason the close path always has: this runs from a frame's
+-- OnHide and from a button, and ours must never be the reason the rest is skipped. Reported, not
+-- swallowed -- failing to leave move mode leaves a mouse-eating frame across the middle of the
+-- screen, which is precisely the kind of thing nobody files a bug about because it does not look
+-- like an error.
+local function stopMoveModes()
+  if ns.Announcers then
+    local ok, err = pcall(ns.Announcers.StopMoving)
+    if not ok then
+      ns.log("could not leave move mode: %s", tostring(err))
+    end
+  end
+  -- PE11-D5. Positioning mode holds the strip on screen with sample icons and the render loop
+  -- deliberately leaves it alone, so a panel closed mid-drag would strand it there -- visible in
+  -- town, draggable while locked, with the button that ends it now behind a window the player has
+  -- just shut.
+  if ns.Queue and ns.Queue.StopPositioning then
+    local ok, err = pcall(ns.Queue.StopPositioning)
+    if not ok then
+      ns.log("could not leave the strip's positioning mode: %s", tostring(err))
+    end
+  end
+  -- AB3-D2, the third of the same guard: placing the Indicators row or dragging one texture both
+  -- put a sample on screen that the render loop is told to leave alone.
+  if ns.Textures and ns.Textures.StopMoveMode then
+    local ok, err = pcall(ns.Textures.StopMoveMode)
+    if not ok then
+      ns.log("could not leave the texture move mode: %s", tostring(err))
+    end
+  end
+end
+
+-- Which page, tab and row the player was reading, as a path SelectGroup can be handed back.
+-- AceConfigDialog stores a tree's selection as its nodes joined with \001
+-- (AceConfigDialog-3.0.lua:459-474); everything deeper than the top-level tree keeps its own status
+-- table and is restored by the library itself.
+local function selectedPath()
+  local dialog = Options.dialog
+  local status = dialog and dialog.GetStatusTable and dialog:GetStatusTable("Elmira", {})
+  local selected = status and status.groups and status.groups.selected
+  if type(selected) ~= "string" then return nil end
+  local path = {}
+  for part in selected:gmatch("[^\001]+") do path[#path + 1] = part end
+  return path
+end
+
+local function hidePanel()
+  local widget = openWidget()
+  local frame = widget and widget.frame
+  if not frame then return end
+  movePath = selectedPath()
+  moveWidget, hiddenForMove = widget, true
+  frame:Hide()
+end
+
+-- AceConfigDialog re-Opens the whole panel the instant an `execute` button's own func returns
+-- (ActivateControl, AceConfigDialog-3.0.lua:867-872) and Open ends by SHOWING the frame
+-- (:1930-1933) -- so without this the button that starts a Move mode would put the window straight
+-- back over the thing being moved, one frame after hiding it. Called from the refresh hook, AFTER
+-- the close callback has been re-chained: a hide with AceConfigDialog's own FrameOnClose sitting
+-- unchained on OnClose would release the widget to the pool instead of standing down.
+local function rehideForMove()
+  if not hiddenForMove then return end
+  hidePanel()
+end
+
+local function showPanel()
+  if not hiddenForMove then return end
+  local widget, path = moveWidget, movePath
+  hiddenForMove, moveWidget, movePath = false, nil, nil
+  -- Never show a widget the pool may have handed on: if anything released the frame while it was
+  -- hidden, opening a fresh one is the only honest answer -- putting our page back on a window that
+  -- now belongs to another addon is the pool bug D15 exists to prevent, in its worst form.
+  if openWidget() ~= widget then
+    Options.Open(unpack(path or {}))
+    return
+  end
+  widget.frame:Show()
+  local dialog = Options.dialog
+  if path and #path > 0 and dialog and dialog.SelectGroup then
+    dialog:SelectGroup("Elmira", unpack(path))
+  end
+end
+
+-- Escape, rather than the Done button. The client's own CloseSpecialWindows hides every frame named
+-- in UISpecialFrames -- which is how Escape reaches our bar at all -- and AceConfigDialog wraps that
+-- same function to ALSO close every open options window a frame later
+-- (AceConfigDialog-3.0.lua:1854-1860 -> CloseAll -> RefreshOnUpdate's `closeAll` sweep, :1774-1782).
+-- Without this the window we are in the middle of putting back would be shut again on the next
+-- OnUpdate, so Escape would read as "end the mode AND close the panel" while Done read as "end the
+-- mode". `closeAllOverride` is the library's own opt-out from that sweep, set here for exactly the
+-- reason its own Open sets it (:1936-1938): something is deliberately putting this window on screen
+-- at the moment everything is being told to close.
+local function keepPanelThroughCloseAll()
+  local dialog = Options.dialog
+  local frame = dialog and dialog.frame
+  if frame and frame.closeAllOverride then frame.closeAllOverride.Elmira = true end
+end
+
+-- The bar. One line saying what is being moved and a Done button, and that is deliberately all of
+-- it: it is on screen precisely because the window it stands in for was in the way.
+local MOVE_BAR_W, MOVE_BAR_H = 380, 76
+local function moveBarFrame()
+  if moveBar then return moveBar end
+  if not CreateFrame then return nil end
+  -- NAMED, because UISpecialFrames is a list of global frame names and that list is the only way
+  -- the client's Escape reaches a frame of ours.
+  local f = CreateFrame("Frame", "ElmiraMoveBar", UIParent)
+  f:SetFrameStrata("FULLSCREEN_DIALOG")
+  f:SetWidth(MOVE_BAR_W)
+  f:SetHeight(MOVE_BAR_H)
+  f:SetPoint("TOP", UIParent, "TOP", 0, -40)
+  local bg = f:CreateTexture(nil, "BACKGROUND")
+  bg:SetAllPoints(f)
+  bg:SetColorTexture(0, 0, 0, 0.85)
+  local text = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  -- Anchored on BOTH sides so the sentence wraps inside the bar: a font string with one horizontal
+  -- anchor grows in one line and runs off the ends of a 380px frame, and the longest of these names
+  -- an ability ("Moving Hammer of the Righteous's texture. Drag it...").
+  text:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -10)
+  text:SetPoint("TOPRIGHT", f, "TOPRIGHT", -10, -10)
+  if text.SetJustifyH then text:SetJustifyH("CENTER") end
+  f.elmiraText = text
+  local done = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  done:SetWidth(110)
+  done:SetHeight(22)
+  done:SetPoint("BOTTOM", f, "BOTTOM", 0, 10)
+  done:SetText(L["Done"])
+  done:SetScript("OnClick", function() Options.EndMove() end)
+  f.elmiraDone = done
+  f:SetScript("OnHide", function()
+    if closingBar then return end
+    keepPanelThroughCloseAll()
+    Options.EndMove()
+  end)
+  if type(UISpecialFrames) == "table" then
+    UISpecialFrames[#UISpecialFrames + 1] = "ElmiraMoveBar"
+  end
+  moveBar = f
+  return f
+end
+
+-- Called by the mode itself (Display/Queue, Display/Textures, Display/Announcers), never by the
+-- button that started it: /elm lock, entering combat and the panel closing all end a mode too, and
+-- a bar left on screen after the mode behind it stopped is the same stranded-frame bug from the
+-- other side.
+function Options.BeginMove(what, key)
+  local subject = MOVE_SUBJECTS[what]
+  if not subject then return false end
+  if what == "texture" then
+    local name = (ns.Display and ns.Display.spellName and ns.Display.spellName(key)) or tostring(key)
+    subject = string.format(L[subject], name)
+  else
+    subject = L[subject]
+  end
+  moveSubject = subject
+  local bar = moveBarFrame()
+  if bar then
+    if bar.elmiraText then
+      bar.elmiraText:SetText(
+        string.format(L["Moving %s. Drag it where you want it, then press Done."], subject))
+    end
+    bar:Show()
+  end
+  hidePanel()
+  return true
+end
+
+-- Ends the mode and gives the window back. Idempotent: every Stop* calls it, and so does the Done
+-- button, which has to end whichever mode is running.
+function Options.EndMove()
+  if not moveSubject then return false end
+  moveSubject = nil
+  if moveBar then
+    closingBar = true
+    moveBar:Hide()
+    closingBar = false
+  end
+  stopMoveModes()
+  showPanel()
   return true
 end
 
@@ -1127,35 +1492,15 @@ local function chainClose(dialog)
   if prior == ourClose then prior = ourPrior end
   ourPrior = prior
   ourClose = function(widget, event, ...)
-    -- pcall because this runs from a frame's OnHide: ours must never be the reason the dialog's own
-    -- cleanup below is skipped. Reported, not swallowed -- failing to leave move mode leaves a
-    -- mouse-eating frame across the middle of the screen, which is precisely the kind of thing
-    -- nobody files a bug about because it does not look like an error.
-    if ns.Announcers then
-      local ok, err = pcall(ns.Announcers.StopMoving)
-      if not ok then
-        ns.log("could not leave move mode when the panel closed: %s", tostring(err))
-      end
-    end
-    -- PE11-D5, the same guard for the same reason. Positioning mode holds the strip on screen with
-    -- sample icons and the render loop deliberately leaves it alone, so a panel closed mid-drag
-    -- would strand it there -- visible in town, draggable while locked, with the button that ends
-    -- it now behind a window the player has just shut.
-    if ns.Queue and ns.Queue.StopPositioning then
-      local ok, err = pcall(ns.Queue.StopPositioning)
-      if not ok then
-        ns.log("could not leave the strip's positioning mode when the panel closed: %s", tostring(err))
-      end
-    end
-    -- AB3-D2, the third of the same guard: placing the Indicators row or dragging one texture both
-    -- put a sample on screen that the render loop is told to leave alone, so a panel closed
-    -- mid-drag would strand it there with the button that ends it now behind a shut window.
-    if ns.Textures and ns.Textures.StopMoveMode then
-      local ok, err = pcall(ns.Textures.StopMoveMode)
-      if not ok then
-        ns.log("could not leave the texture move mode when the panel closed: %s", tostring(err))
-      end
-    end
+    -- FX1-D5: the window is HIDDEN, not closed, while a Move mode is on -- and AceGUI fires OnClose
+    -- from the frame's OnHide either way (AceGUIContainer-Frame.lua:195). Standing down is the
+    -- whole of the difference: every line below would undo the mode that just hid the window, and
+    -- `prior` -- AceConfigDialog's FrameOnClose -- would release the widget to the pool while we
+    -- still intend to show it again.
+    if hiddenForMove then return end
+    -- Every Move mode, through the one function the Done button uses, so the two can never disagree
+    -- about what "leave move mode" means.
+    stopMoveModes()
     -- Where and how big it was left. Same pcall discipline, and for the same reason: the dialog's
     -- own cleanup below runs whatever happens here. AceGUI wipes the status table when the widget
     -- goes back to the pool, so this is the last moment the numbers exist.
@@ -1199,6 +1544,8 @@ local function installRefreshHook(dialog)
       if appName ~= "Elmira" then return end
       Options.Decorate()
       chainClose(dialog)
+      -- Last, and only while a Move mode is running: see rehideForMove.
+      rehideForMove()
     end)
   end
   return true
@@ -1891,6 +2238,11 @@ end
 function Options.builderIdle()
   local dialog = Options.dialog
   if not dialog then return false end
+  -- FX1-D5: a fourth question. The standalone frame is still in OpenFrames while a Move mode has it
+  -- hidden, and `NotifyChange` ends in AceConfigDialog re-Opening the app -- which SHOWS the frame
+  -- (AceConfigDialog-3.0.lua:1784-1788, 1930-1933). The window would pop back up over the very
+  -- sample the player is dragging.
+  if hiddenForMove then return false end
   local standalone = dialog.OpenFrames and dialog.OpenFrames.Elmira
   local embedded = Options.frame and Options.frame.IsVisible and Options.frame:IsVisible()
   if not (standalone or embedded) then return false end
@@ -1926,6 +2278,11 @@ end
 -- frame's `basepath` and feeds it as the window's ROOT (AceConfigDialog-3.0.lua ~1897-1930), which
 -- replaces the whole tree -- including the left menu -- with just that one group.
 function Options.Open(...)
+  -- FX1-D5. Asking for the panel ends a Move mode rather than opening on top of one: the window is
+  -- only hidden while a mode runs, so an Open that skipped this would put a window on screen that
+  -- the mode still believes it has hidden -- and the mode's Done button would then hide it a second
+  -- time with no bar left to bring it back. EndMove is a no-op when no mode is running.
+  Options.EndMove()
   if not Options.dialog then Options.Register() end
   if Options.dialog then
     -- BEFORE Open, because Open reads the status table it writes into and applies it on the way up

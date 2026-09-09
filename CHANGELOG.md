@@ -1,5 +1,23 @@
 # Changelog
 ## Unreleased
+- **Fixed: the "no visible action-bar button holds X" warning no longer repeats.** It is said once
+  per ability, and not again until a button for that ability turns up and is taken away again. It
+  used to be forgotten every time the client reported any change to the action bars — which on a
+  paladin is every aura swap — so the same warning could fill the log several times a fight while
+  nothing about the bars had changed. It also names the ability the way the game does ("Divine
+  Storm") instead of by Elmira's internal key.
+- **Fixed: the Notifications Log can be copied.** Its lines are in a read-only box you can select
+  and copy out of, newest first, instead of text no widget could reach.
+- **Fixed: every Move mode gets the options window out of the way.** Position the Strip, Position
+  the Indicators, Move This Texture and Move screen messages hide the window and leave a small bar
+  on screen naming what is being moved, with a Done button; Done or Escape brings the window back
+  exactly where it was, on the same page and tab.
+- **Fixed: the options window stays where you drag it.** Its position and size are saved the moment
+  you let go, so pressing Preview, Test or any other button no longer snaps it back to where it was
+  last saved — or to the centre of the screen.
+- **Changed: the options window is no longer clamped to the screen** and can hang off an edge like
+  any other frame. A saved position that would leave its title bar entirely off-screen — after a
+  resolution or scale change — is still discarded, and the window opens centred.
 - **New: the Texture tab works.** Any ability can put a texture on screen: its own spell icon, one
   of eight shapes that ship with Elmira (ring, disc, square, diamond, arrow, star, bar, chevron) or
   any texture file you name. Pick its size, colour and opacity, and which of five moments it appears

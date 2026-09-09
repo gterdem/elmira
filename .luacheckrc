@@ -106,7 +106,10 @@ files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent",
   -- Pass 2: a post-call hook on AceConfigDialog's own Open, filtered to our app name, so a refresh
   -- neither Options.Open nor AceConfigDialog's pooling triggers still re-runs Options.Decorate.
   "hooksecurefunc" },
-  globals = { "StaticPopupDialogs" } }
+  -- Both are WRITABLE globals rather than functions we call: every addon registers its own dialogs
+  -- into StaticPopupDialogs, and UISpecialFrames (FX1-D5) is the client's LIST of frame names
+  -- Escape closes -- an addon joins it by appending its own frame's name.
+  globals = { "StaticPopupDialogs", "UISpecialFrames" } }
 
 -- Shipped class data (ADR-0011): data only, and held to Core's bar. A WoW API call here is as wrong
 -- as one in Core/ — these files are inside the core addon now, and hard rule 3 does not soften

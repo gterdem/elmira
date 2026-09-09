@@ -412,6 +412,10 @@ function Textures.StartPositioning()
   -- mode necessary in the first place.
   held[ALL] = true
   layout()
+  -- FX1-D5: the options window gets out of the way -- it is very often sitting exactly where the
+  -- row is being dragged to. From HERE rather than from the button, so that every way out of the
+  -- mode brings the window back (Textures.StopMoveMode below is the only one).
+  if ns.Options and ns.Options.BeginMove then ns.Options.BeginMove("indicators") end
   return true
 end
 
@@ -426,6 +430,8 @@ function Textures.StartMove(key)
   layout()
   local f = frames[key]
   if f then f:EnableMouse(true) end
+  -- FX1-D5, and this is the mode the owner was actually trying to use when he found the problem.
+  if ns.Options and ns.Options.BeginMove then ns.Options.BeginMove("texture", key) end
   return true
 end
 
@@ -452,6 +458,8 @@ function Textures.StopMoveMode()
   -- Whatever was genuinely holding a texture puts it back on the next Sync; what this clears is the
   -- sample the mode itself put there.
   layout()
+  -- FX1-D5: both modes end here, so the options window comes back here.
+  if ns.Options and ns.Options.EndMove then ns.Options.EndMove() end
   return true
 end
 

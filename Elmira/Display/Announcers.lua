@@ -177,6 +177,15 @@ end
 -- mode instead (Queue.SetLocked calls StopMoving), and wins.
 function Announcers.SetMoving(on)
   moving = on and true or false
+  -- FX1-D5: the options window steps aside while this frame is being dragged, and comes back where
+  -- it was afterwards. Here rather than at the panel's button, because entering combat and locking
+  -- positions both end this mode without going anywhere near the panel -- and a bar left on screen
+  -- after the mode behind it stopped is the same stranded frame from the other side. Before the
+  -- early return below: the mode is on whether or not the sample frame has been created yet.
+  if ns.Options then
+    if moving and ns.Options.BeginMove then ns.Options.BeginMove("messages")
+    elseif ns.Options.EndMove then ns.Options.EndMove() end
+  end
   if not frame then return moving end
   frame:EnableMouse(moving)
   if moving then

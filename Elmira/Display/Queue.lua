@@ -717,6 +717,11 @@ function Queue.StartPositioning()
   -- Never the out-of-combat fade: you cannot place what you can barely see.
   container:SetAlpha(1)
   container:Show()
+  -- FX1-D5: the options window gets out of the way, because it is very often sitting exactly where
+  -- the strip is being dragged to. Told from HERE rather than from the button that started the
+  -- mode, so that the modes and the little bar that stands in for the window cannot disagree:
+  -- /elm lock and "Lock all positions" end this mode too, and neither goes near the panel.
+  if ns.Options and ns.Options.BeginMove then ns.Options.BeginMove("strip") end
   return true
 end
 
@@ -735,6 +740,9 @@ function Queue.StopPositioning()
   if container then container:Hide() end
   rendered, pendingCast, pendingCastAt, placeholderShown = nil, nil, nil, false
   forgetWaits()
+  -- FX1-D5: and the options window comes back where it was. Every way out of this mode passes
+  -- through here, which is the point of putting the call here.
+  if ns.Options and ns.Options.EndMove then ns.Options.EndMove() end
   -- Repaint from scratch: the buttons are carrying sample art, and the next ordinary render must
   -- not animate out of a state the rotation was never in.
   if ns.Display and ns.Display.refresh then ns.Display.refresh() end

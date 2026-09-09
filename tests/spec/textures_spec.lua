@@ -663,6 +663,51 @@ describe("Display.Textures", function()
     end)
   end)
 
+  -- FX1-D5, and this is the mode the owner was using when he found the problem: "I can not move it
+  -- around since the Configuration page is too big and I can not move the configuration page out of
+  -- the screen." Both modes ask the options window to step aside, and both give it back.
+  describe("the Move modes and the options window (FX1-D5)", function()
+    local moves
+
+    before_each(function()
+      moves = {}
+      ns.Options = {
+        BeginMove = function(what, key) moves[#moves + 1] = { "begin", what, key } end,
+        EndMove = function() moves[#moves + 1] = { "end" } end,
+      }
+    end)
+
+    it("asks the window to step aside for the Indicators row, and gives it back", function()
+      Textures.StartPositioning()
+      assert.same({ "begin", "indicators" }, moves[1])
+      Textures.StopMoveMode()
+      assert.same({ "end" }, moves[2])
+      assert.equal(2, #moves)
+    end)
+
+    -- Named, because the bar that replaces the window has to say WHICH texture is being placed.
+    it("names the ability whose texture is being moved", function()
+      Textures.StartMove("EXORCISM")
+      assert.same({ "begin", "texture", "EXORCISM" }, moves[1])
+      Textures.StopMoveMode()
+      assert.same({ "end" }, moves[2])
+    end)
+
+    it("says nothing when there was no mode to start or to end", function()
+      assert.is_false(Textures.StopMoveMode())
+      assert.is_false(Textures.StartMove(nil))
+      assert.equal(0, #moves)
+    end)
+
+    it("does not need an options window to move anything", function()
+      ns.Options = nil
+      assert.is_true(Textures.StartPositioning())
+      assert.is_true(Textures.StopMoveMode())
+      assert.is_true(Textures.StartMove("EXORCISM"))
+      assert.is_true(Textures.StopMoveMode())
+    end)
+  end)
+
   -- ------------------------------------------------------------------ against the REAL Display
 
   -- The tab's DEFAULT source is "this ability's icon", and it resolves through the real

@@ -502,6 +502,54 @@ describe("Display.Announcers", function()
       assert.equal(0, #Announcers.frame().messages)
     end)
 
+    -- FX1-D5: the options window steps aside while this frame is being dragged -- it sits across
+    -- the middle of the screen, which is exactly where the samples appear -- and comes back
+    -- afterwards. Asked for from here rather than from the panel's button, because entering combat
+    -- and locking positions both end this mode without going near the panel.
+    describe("and the options window", function()
+      local moves
+
+      before_each(function()
+        moves = {}
+        ns.Options = {
+          BeginMove = function(what) moves[#moves + 1] = { "begin", what } end,
+          EndMove = function() moves[#moves + 1] = { "end" } end,
+        }
+      end)
+
+      it("asks the window to step aside, and gives it back", function()
+        Announcers.Create()
+        Announcers.SetMoving(true)
+        assert.same({ "begin", "messages" }, moves[1])
+        Announcers.StopMoving()
+        assert.same({ "end" }, moves[2])
+        assert.equal(2, #moves)
+      end)
+
+      -- The exit nobody remembers to use, and the one that matters most: a mouse-eating frame
+      -- across the middle of the screen during a fight.
+      it("gives the window back when combat ends the mode", function()
+        Announcers.Create()
+        Announcers.SetMoving(true)
+        Announcers.SetMoving(false)
+        assert.same({ "end" }, moves[2])
+      end)
+
+      -- The mode is on whether or not the sample frame has been built yet, so the window has to
+      -- step aside either way.
+      it("asks even before the frame exists", function()
+        Announcers.SetMoving(true)
+        assert.same({ "begin", "messages" }, moves[1])
+      end)
+
+      it("does not need an options window to move the frame", function()
+        ns.Options = nil
+        Announcers.Create()
+        assert.is_true(Announcers.SetMoving(true))
+        assert.is_true(Announcers.StopMoving())
+      end)
+    end)
+
     -- Every MessageFrame method below is a first use at interface 11509 -- Clear is not even on the
     -- M5g checklist's list of unverified ones. Some are reached from the options panel closing, so
     -- a method that turns out not to exist would throw from inside a frame's OnHide. Each has to

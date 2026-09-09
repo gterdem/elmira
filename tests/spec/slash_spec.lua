@@ -608,6 +608,32 @@ describe("Core.Slash", function()
     assert.is_false(hasLineMatching(lines, "Elmira_ElvUI"))
   end)
 
+  -- FX1-D5. Every Move mode hides the options window for as long as it runs, so "my configuration
+  -- window vanished" is a real question a player can arrive with -- and the little bar that says
+  -- what is being moved is exactly the thing they will have missed. `/elm debug state` answers it.
+  describe("'debug state' and the Move modes", function()
+    before_each(function()
+      _G.__ELM_NS.Adapter = { describe = function()
+        return { project = 2, version = "1.15.7", interface = 11509,
+                 caps = { glow = true }, state = "ready" }
+      end }
+    end)
+
+    it("says nothing is being moved when no Move mode is running", function()
+      assert.is_true(hasLineMatching(Slash.run("debug state"), "^moving: nothing$"))
+      -- ...and with Options loaded but idle, which is the ordinary case.
+      _G.__ELM_NS.Options = { moveSubject = function() return nil end }
+      assert.is_true(hasLineMatching(Slash.run("debug state"), "^moving: nothing$"))
+    end)
+
+    it("names what is being moved while a Move mode has the window off the screen", function()
+      _G.__ELM_NS.Options = { moveSubject = function() return "the indicator row" end }
+      local lines = Slash.run("debug state")
+      assert.is_true(hasLineMatching(lines, "^moving: the indicator row$"))
+      assert.is_false(hasLineMatching(lines, "^moving: nothing$"))
+    end)
+  end)
+
   it("verb matching is case-insensitive", function()
     local lower = table.concat(Slash.run("debug state"), "\n")
     local upper = table.concat(Slash.run("DEBUG state"), "\n")

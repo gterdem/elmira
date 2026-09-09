@@ -18,10 +18,19 @@ ns = ns or _G.__ELM_NS or {}
 local BarGlow = {}
 local blizzMap = nil        -- spellID -> { buttons }, lazily built, invalidated by bar events
 local blizzByName = nil     -- spell NAME -> { buttons }; Classic has ranks, see nameOf()
--- Spells we have already said we could not find a button for. Declared HERE, above every use:
--- `BarGlow.Invalidate` clears it and sits further up the file, and a `local` at the definition site
--- would leave that reference resolving to a nil global — the exact shape that made Schema's
+-- Spells we have already said we could not find a button for. Declared HERE, above every use: the
+-- functions that read and clear it sit further up the file, and a `local` at the definition site
+-- would leave those references resolving to a nil global — the exact shape that made Schema's
 -- condition labels come back empty an hour ago.
+--
+-- FX1-D1: cleared by a button being FOUND (see `found` below), never by a bar event. It used to be
+-- wiped by `BarGlow.Invalidate`, on the reasoning that changed bars may have placed the spell — but
+-- Invalidate runs on ACTIONBAR_SLOT_CHANGED, UPDATE_SHAPESHIFT_FORM and five more
+-- (Core/Init.lua), and on a paladin every aura swap fires one. The owner's log held FIVE copies of
+-- the same "no button holds Divine Storm" line from one session, because the bars "changed" many
+-- times per fight while nothing about them actually changed. The regression this latch must still
+-- report -- a spell that HAD a button and lost it -- is now detected from the button, which is the
+-- fact itself rather than a proxy for it.
 local announced = {}
 
 -- PREFIXES, to which 1..12 is appended below. This shipped without MultiBar5/6/7, which DO exist on
@@ -141,9 +150,6 @@ end
 -- set. A stale map glows a button that no longer holds the spell, which is worse than not glowing.
 function BarGlow.Invalidate()
   blizzMap, blizzByName = nil, nil
-  -- Bars changed, so a spell we complained about may now be placed. Complaining again after that is
-  -- correct; staying silent about a real regression is not.
-  announced = {}
 end
 
 function BarGlow.Rebuild()
@@ -155,6 +161,15 @@ local function providers()
   if not ns.API then return {} end
   local list = ns.API.GetProviders("barProviders") or {}
   return list
+end
+
+-- FX1-D1. A button was found for this spell, so the next time it has none is NEWS again. Every
+-- success path of `buttonsFor` goes through here rather than the callers being asked to remember:
+-- the renderer, the diagnostic and the strip's size probe all ask the same question, and a latch
+-- cleared at one call site and not the others is the silent half of this bug back again.
+local function found(spellKey, buttons)
+  announced[spellKey] = nil
+  return buttons
 end
 
 -- Returns the buttons, and (second) where they came from — "ElvUI", "blizzard", or nil. The source
@@ -171,13 +186,13 @@ function BarGlow.buttonsFor(spellKey)
       local ok, buttons = pcall(p.buttonsForSpell, id)
       if ok and type(buttons) == "table" then
         local visible = onlyOnScreen(buttons)
-        if #visible > 0 then return visible, p.name or "provider" end
+        if #visible > 0 then return found(spellKey, visible), p.name or "provider" end
       end
     end
   end
 
   local fallback = onlyOnScreen(blizzButtons(id))
-  if #fallback > 0 then return fallback, "blizzard" end
+  if #fallback > 0 then return found(spellKey, fallback), "blizzard" end
   return {}, nil
 end
 
@@ -268,7 +283,8 @@ function BarGlow.describe(keys)
   return out
 end
 
--- Says, once per spell per session, that we could not find a button for the suggestion.
+-- Says, once per spell, that we could not find a button for the suggestion — and not again until a
+-- render finds one (FX1-D1).
 --
 -- The bar glow is the channel that matters most — the queue tells you WHAT and the bar tells you
 -- WHERE, and hunting your own bars is the work the addon is supposed to remove. Until now, failing
@@ -282,21 +298,24 @@ function BarGlow.noteMissing(spellKey)
   local profileGlow = ns.db and ns.db.profile and ns.db.profile.glow
   if not (profileGlow and profileGlow.barGlow) then return false end
   -- Routed as a warning (F37) rather than printed: the player decides whether this reaches chat,
-  -- the screen or only the Log. The latch above stays -- it is per SPELL and clears when the bars
-  -- change, which is finer than Announce's per-sentence one.
+  -- the screen or only the Log. The latch above stays -- it is per SPELL, which is finer than
+  -- Announce's per-sentence one.
+  --
+  -- FX1-D2: the spell as the player knows it ("Divine Storm"), through the merged lookup every
+  -- other sentence about an ability already uses. A log line reading DIVINE_STORM names an internal
+  -- key nothing in the game is called, in the one message whose whole job is to send somebody to
+  -- look at their action bars. The key remains the fallback, for a spell the client cannot name.
+  local name = (ns.Display and ns.Display.spellName and ns.Display.spellName(spellKey))
+    or tostring(spellKey)
   local text = string.format(
     "No visible action-bar button holds %s, so nothing can glow for it. /elm debug bars explains why.",
-    tostring(spellKey))
+    name)
   if ns.Announce then
     ns.Announce.emit("warning", text)
   elseif ns.log then
     ns.log("%s", text)
   end
   return true
-end
-
-function BarGlow.resetAnnouncements()
-  announced = {}
 end
 
 -- What `/elm debug perf` reports about the bar map.
