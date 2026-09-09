@@ -65,6 +65,9 @@ Display\BarGlow.lua
 Display\BarProviders.lua
 Display\Queue.lua
 Display\Overlay.lua
+# AB3-D1: the per-ability indicator textures. After Queue.lua, whose frame the Indicators anchor
+# hangs above until the player drags it somewhere else.
+Display\Textures.lua
 # AB1-D8: the one LibSharedMedia fetch + PlaySoundFile path, shared by the announcement sink below
 # and by the Abilities page's per-event sounds. Before Announcers.lua, which now delegates to it.
 Display\Sounds.lua

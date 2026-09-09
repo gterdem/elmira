@@ -136,6 +136,7 @@ describe("Core.Init", function()
     ns.Display = fakeDisplay()
     ns.Queue = fakeQueue()
     ns.Overlay = fakeOverlay()
+    ns.Textures = { Create = function() order[#order + 1] = "Textures.Create" end }
     ns.BarGlow = { Invalidate = function() order[#order + 1] = "BarGlow.Invalidate" end }
     ns.BarProviders = {
       Invalidate = function() order[#order + 1] = "BarProviders.Invalidate" end,
@@ -799,6 +800,30 @@ describe("Core.Init", function()
       -- Registered by REFERENCE, not by a name looked up later: the function the driver holds has
       -- to be the one that actually refreshes the panel.
       assert.equal(1, called)
+    end)
+
+    -- AB3-D1/D2: the indicator frames are built up front like the overlay's, and AFTER the queue --
+    -- the Indicators anchor hangs above the strip's frame by default, so a row built first would
+    -- silently fall back to the middle of the screen.
+    it("builds the indicator textures after the queue, without registering them as a renderer",
+      function()
+        NA:OnInitialize()
+        NA:StartDisplay()
+        local queueAt, texturesAt
+        for i, e in ipairs(order) do
+          if e == "Queue.Create" then queueAt = i end
+          if e == "Textures.Create" then texturesAt = i end
+          assert.are_not.equal("register:textures", e)
+        end
+        assert.is_not_nil(texturesAt, "the indicator frames were never built")
+        assert.is_true(texturesAt > queueAt, "the anchor had no strip to hang from")
+      end)
+
+    it("starts the display with no Textures module present", function()
+      ns.Textures = nil
+      NA:OnInitialize()
+      assert.is_true(pcall(function() NA:StartDisplay() end))
+      for _, e in ipairs(order) do assert.are_not.equal("Textures.Create", e) end
     end)
 
     it("wires nothing overlay-shaped when no Overlay module is present", function()

@@ -362,7 +362,7 @@ local function knownLines(lines)
 end
 
 Slash.register{
-  key = "debug", args = "state|bars|swing|cues|perf|libs|memory|alloc|dump|queue|gates",
+  key = "debug", args = "state|bars|swing|cues|textures|perf|libs|memory|alloc|dump|queue|gates",
   desc = ns.L["Diagnostics"], order = 10,
   run = function(rest)
     local sub = rest and rest:match("^(%S+)")
@@ -526,6 +526,46 @@ Slash.register{
           a.firedAt and string.format("%.1fs ago", math.max(0, ns.now() - a.firedAt)) or "never")
       end
       lines[#lines + 1] = "/elm debug cues <ABILITY_KEY> test-fires one"
+      return lines
+    elseif sub == "textures" then
+      -- The screen edge's twin (AB3-D1). Same four indistinguishable silences -- the tab is off,
+      -- no event is ticked, the moment never happened, or it appeared while you were looking
+      -- elsewhere -- plus the one a texture adds: a source that resolves to no file, which draws
+      -- the fallback ring and looks exactly like a working setting.
+      if not ns.Textures then return { "textures: not loaded" } end
+      local which = rest and rest:match("^%S+%s+(%S+)")
+      if which then
+        local ok, what = ns.Textures.TestFire(which)
+        return { ok and ("test-fired: " .. tostring(what)) or ("cannot test-fire: " .. tostring(what)) }
+      end
+
+      local d = ns.Textures.describe()
+      local lines = {}
+      local a = d.anchor
+      lines[#lines + 1] = a
+        and string.format("indicators anchor: %s %s %+.0f,%+.0f", tostring(a.point),
+              tostring(a.relPoint), a.x or 0, a.y or 0)
+        or "indicators anchor: never placed — the row floats above the queue strip"
+      if #d.textures == 0 then
+        lines[#lines + 1] = "no ability has a texture switched on"
+      end
+      for _, t in ipairs(d.textures) do
+        lines[#lines + 1] = string.format("%s  source=%s size=%d position=%s", t.key,
+          tostring(t.source), t.size, tostring(t.place))
+        if not t.enabled then
+          lines[#lines + 1] = "   off — switch it on in /elm config → Abilities → Texture"
+        elseif #t.events == 0 then
+          lines[#lines + 1] = "   on, but no moment is ticked — it can never appear"
+        else
+          lines[#lines + 1] = string.format("   on  shows on: %s", table.concat(t.events, ", "))
+        end
+        if not t.path then
+          lines[#lines + 1] = "   no file — the ring is drawn instead; check the source and path"
+        end
+        lines[#lines + 1] = string.format("   on screen=%s  last shown=%s", tostring(t.visible),
+          t.shownAt and string.format("%.1fs ago", math.max(0, ns.now() - t.shownAt)) or "never")
+      end
+      lines[#lines + 1] = "/elm debug textures <ABILITY_KEY> test-fires one"
       return lines
     elseif sub == "perf" then
       -- This command exists to answer "is Elmira expensive". It used to open with
@@ -782,7 +822,7 @@ Slash.register{
       end
       return lines
     end
-    return { "Usage: /elm debug state|bars|swing|cues|perf|libs|memory|alloc|dump|queue [build] [depth]" }
+    return { "Usage: /elm debug state|bars|swing|cues|textures|perf|libs|memory|alloc|dump|queue [build] [depth]" }
   end,
 }
 

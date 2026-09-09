@@ -1,5 +1,26 @@
 # Changelog
 ## Unreleased
+- **New: the Texture tab works.** Any ability can put a texture on screen: its own spell icon, one
+  of eight shapes that ship with Elmira (ring, disc, square, diamond, arrow, star, bar, chevron) or
+  any texture file you name. Pick its size, colour and opacity, and which of five moments it appears
+  at — it stays on screen while Elmira is suggesting the ability or while its buff is up, and
+  flashes for a second and a half when the ability comes off cooldown, when you use it, or when its
+  buff is about to run out. Off for every ability until you switch it on, with a Preview button and
+  a line on the tab if you leave it on with no moment ticked.
+- **New: an Indicators row above the queue strip.** Textures set to "with the other indicators" flow
+  into a row centred on it, so several never sit on top of each other. "Position the Indicators" on
+  All abilities › Texture puts a sample on screen and lets you drag the row anywhere; until you do,
+  it floats above the queue strip and follows it. A single texture can instead be pinned to the
+  centre of the screen, or dragged to a spot of its own with "Move This Texture". Both move modes
+  work in combat, and closing the options window ends them.
+- **New: `/elm debug textures`** — per ability, what it draws, how big, where it sits, which moments
+  it appears at and when it last appeared, plus whether the file it names resolves at all.
+  `/elm debug textures <ABILITY_KEY>` shows that one for a second and a half.
+- **Changed: Remove sits at the top of an ability's General tab**, on the identity line and
+  right-aligned, instead of below the last slider.
+- **Fixed: on a class Elmira ships no data for, an ability you registered yourself now shows its
+  own icon and its own name** — on the queue strip, in the Abilities list, in announcements and as
+  the "this ability's icon" texture. The lookup used to stop as soon as it found no class data.
 - **New: the Screen-edge tab works.** Any ability can flash a screen edge — left, right, top or
   bottom — in a colour and at a brightness you choose, when Elmira suggests it and/or when it comes
   off cooldown. Off for every ability until you switch it on, with a Preview button that fires the

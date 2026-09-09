@@ -31,6 +31,19 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     }
     ns.selected = nil
     ns.Options = { dialog = { SelectGroup = function(_, ...) ns.selected = { ... } end } }
+    -- The REAL Display/Textures.lua, not a fake: the Texture tab reads its SOURCES/SHAPES/
+    -- PLACEMENTS/EVENTS lists to build its dropdowns and its checkboxes, and a fake copy of those
+    -- lists here would let the tab and the renderer drift apart without a test noticing. Its frames
+    -- need a client, so CreateFrame answers with a no-op object -- nothing in THIS file asserts on
+    -- a frame (tests/spec/textures_spec.lua does).
+    _G.UIParent = setmetatable({}, { __index = function() return function() end end })
+    _G.CreateFrame = function()
+      local f = { textures = {} }
+      return setmetatable(f, { __index = function()
+        return function() return setmetatable({}, { __index = function() return function() end end }) end
+      end })
+    end
+    helper.load("Elmira/Display/Textures.lua")
     SpellsPage = helper.load("Elmira/Options/Spells.lua")
     -- Every page build starts from an unfiltered tree; the filter is module state.
     SpellsPage.setFilter("", "all")
@@ -39,6 +52,10 @@ describe("Options/Spells (the Abilities page, AB1)", function()
   before_each(function()
     ns = helper.reset()
     installMinimal()
+  end)
+
+  after_each(function()
+    _G.CreateFrame, _G.UIParent = nil, nil
   end)
 
   -- The two hops the whole page hangs off: `spells > list` for the panels and the tree, and
@@ -672,6 +689,52 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.same({ "Elmira", "spells", "list", "*" }, ns.selected)
     end)
 
+    -- ---------------------------------------------------------------- AB3-D3: it moved up
+
+    -- Owner, 2026-09-09: "the one control that deletes things should not be the last item after a
+    -- slider". It sits on the identity row now, above every setting on the tab.
+    it("puts Remove above every settings control instead of under the last slider", function()
+      Spells.add(ns.db.char.spells, { id = 900, name = "Slice and Dice", source = "spellbook" })
+      local args = tab("SLICE_AND_DICE", "general")
+      assert.equal(1, args.head.order)
+      assert.equal(2, args.remove.order)
+      for _, name in ipairs({ "inherit", "onlyInCombat", "expiring" }) do
+        assert.is_true(args[name].order > args.remove.order, name .. " now sits above Remove")
+      end
+    end)
+
+    -- A Button is the only control that fills its cell, so a row that ends flush right has to end
+    -- with one; the two relWidths must sum to exactly 1.0 or AceGUI's Flow does not scale the row
+    -- (AceGUI-3.0.lua:709-711).
+    it("shares the identity row with the line beside it, ending flush right", function()
+      Spells.add(ns.db.char.spells, { id = 900, name = "Slice and Dice", source = "spellbook" })
+      local args = tab("SLICE_AND_DICE", "general")
+      assert.equal("relative", args.head.width)
+      assert.equal("relative", args.remove.width)
+      assert.equal("execute", args.remove.type)
+      assert.equal(1.0, args.head.relWidth + args.remove.relWidth)
+    end)
+
+    it("gives the row back to the identity line when there is nothing to remove", function()
+      Spells.registerPack(ns.db.char.spells, "EXORCISM", 415073, "Exorcism")
+      local args = tab("EXORCISM", "general")
+      assert.is_nil(args.remove)
+      assert.equal("full", args.head.width)
+      assert.is_nil(args.head.relWidth, "a three-quarter line with an empty quarter reads as a gap")
+    end)
+
+    it("keeps the refusal in the same cell as the button it replaces", function()
+      Spells.add(ns.db.char.spells, { id = 900, name = "Slice and Dice", source = "spellbook" })
+      ns.forkRows = { { build = "MINE", name = "My Rotation" } }
+      ns.builds.MINE = { entries = { { spell = "SLICE_AND_DICE" } } }
+      local args = tab("SLICE_AND_DICE", "general")
+      assert.equal("description", args.remove.type)
+      assert.equal("medium", args.remove.fontSize)
+      assert.equal("relative", args.remove.width)
+      assert.equal(1.0, args.head.relWidth + args.remove.relWidth)
+      assert.equal(2, args.remove.order)
+    end)
+
     -- The settings row must NOT go when the registry guard refused: that would throw away what the
     -- player configured and leave the ability sitting there.
     it("keeps the settings when the removal itself was refused", function()
@@ -986,17 +1049,312 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     end)
   end)
 
-  -- ------------------------------------------------------------------ AB1-D12: the last shell
+  -- ------------------------------------------------------------------ AB3-D1/D2: the Texture tab
 
-  describe("D12: Texture is still a one-line shell", function()
-    it("says the next pass fills it, and offers no controls", function()
+  describe("AB3-D1: the Texture tab", function()
+    before_each(function()
       Spells.registerPack(ns.db.char.spells, "EXORCISM", 415073, "Exorcism")
+    end)
+
+    -- Every APPEARANCE control on this tab is inherited until the ability is unlinked (AB1-D4) --
+    -- greyed in the panel, and a write that goes nowhere from a spec. The tests that drive a value
+    -- unlink first, exactly as a player has to.
+    local function unlink()
+      tab("EXORCISM", "texture").inherit.set(nil, false)
+    end
+
+    it("no longer says the next pass fills it", function()
+      assert.is_nil(tab("EXORCISM", "texture").soon)
+    end)
+
+    -- The on switch, like every other channel's: per ability and never inherited (AB1-D4).
+    it("switches the texture on per ability, and says it cannot be inherited", function()
+      local row = tab("EXORCISM", "texture").enabled
+      assert.equal("toggle", row.type)
+      assert.is_false(row.get())
+      row.set(nil, true)
+      assert.is_true(A.effective("EXORCISM", "texture").enabled)
+      assert.is_truthy(row.desc:find("Never inherited", 1, true))
+      assert.is_nil(tab("*", "texture").enabled, "All abilities must not be able to switch it on")
+    end)
+
+    it("offers the three sources, and stores the pick", function()
+      unlink()
+      local row = tab("EXORCISM", "texture").source
+      assert.equal("select", row.type)
+      assert.equal(3, row.order)
+      assert.equal("Show", row.name)
+      assert.is_false(row.disabled())
+      assert.same({ "icon", "shape", "custom" }, row.sorting)
+      assert.equal("This ability's icon", row.values.icon)
+      assert.equal("icon", row.get())
+      row.set(nil, "shape")
+      assert.equal("shape", A.effective("EXORCISM", "texture").source)
+    end)
+
+    -- Hidden rather than greyed: a shape picker is not "unavailable" while the source is the spell
+    -- icon, it is irrelevant, and a greyed control invites the player to hunt for what unlocks it.
+    it("shows the shape picker only for the shape source, and the path box only for a custom one",
+      function()
+        unlink()
+        local args = tab("EXORCISM", "texture")
+        assert.is_true(args.shape.hidden())
+        assert.is_true(args.path.hidden())
+        args.source.set(nil, "shape")
+        assert.is_false(tab("EXORCISM", "texture").shape.hidden())
+        assert.is_true(tab("EXORCISM", "texture").path.hidden())
+        args.source.set(nil, "custom")
+        assert.is_true(tab("EXORCISM", "texture").shape.hidden())
+        assert.is_false(tab("EXORCISM", "texture").path.hidden())
+      end)
+
+    it("lists the eight shipped shapes and stores the one picked", function()
+      unlink()
+      local row = tab("EXORCISM", "texture").shape
+      assert.equal("select", row.type)
+      assert.equal(4, row.order)
+      assert.equal("Shape", row.name)
+      assert.is_false(row.disabled())
+      assert.same({ "ring", "disc", "square", "diamond", "arrow", "star", "bar", "chevron" },
+        row.sorting)
+      assert.equal("Diamond", row.values.diamond)
+      assert.equal("ring", row.get())
+      row.set(nil, "star")
+      assert.equal("star", A.effective("EXORCISM", "texture").shape)
+    end)
+
+    it("stores a custom path", function()
+      unlink()
+      local row = tab("EXORCISM", "texture").path
+      assert.equal("input", row.type)
+      assert.equal(5, row.order)
+      assert.equal("Texture file", row.name)
+      assert.equal("full", row.width)
+      assert.is_false(row.disabled())
+      assert.equal("", row.get())
+      row.set(nil, "Interface\\Icons\\Ability_Rogue_Ambush")
+      assert.equal("Interface\\Icons\\Ability_Rogue_Ambush", A.effective("EXORCISM", "texture").path)
+    end)
+
+    -- The one silence a texture has that a screen edge does not, said where it happens: on screen a
+    -- source that resolves to no file is indistinguishable from a working setting.
+    it("warns when the source resolves to no file at all", function()
+      unlink()
       local args = tab("EXORCISM", "texture")
-      local keys = {}
-      for key in pairs(args) do keys[#keys + 1] = key end
-      assert.same({ "soon" }, keys, "texture has grown a control")
-      assert.equal("description", args.soon.type)
-      assert.is_truthy(args.soon.name:find("Arrives in the next pass.", 1, true))
+      -- the pack fake resolves no icon for any key, so the default source has nothing to draw
+      assert.equal("description", args.missing.type)
+      assert.equal(6, args.missing.order)
+      assert.equal("medium", args.missing.fontSize)
+      assert.equal("full", args.missing.width)
+      assert.is_false(args.missing.hidden())
+      assert.is_truthy(args.missing.name:find("falls back to the ring", 1, true))
+      args.source.set(nil, "shape")
+      assert.is_true(tab("EXORCISM", "texture").missing.hidden())
+    end)
+
+    -- The page is built by Options.lua whatever else loaded; with no renderer there is nothing that
+    -- could resolve a file, and claiming one is missing would be a guess.
+    it("says nothing about a missing file with no renderer loaded", function()
+      ns.Textures = nil
+      assert.is_true(tab("EXORCISM", "texture").missing.hidden())
+    end)
+
+    it("sizes between 16 and 256 in steps of 8, starting at 48", function()
+      unlink()
+      local row = tab("EXORCISM", "texture").size
+      assert.equal("range", row.type)
+      assert.equal(7, row.order)
+      assert.equal("Size", row.name)
+      assert.is_truthy(row.desc:find("in pixels", 1, true))
+      assert.same({ 16, 256, 8 }, { row.min, row.max, row.step })
+      assert.equal(48, row.get())
+      row.set(nil, 120)
+      assert.equal(120, row.get())
+    end)
+
+    it("stores a colour and an opacity", function()
+      unlink()
+      local args = tab("EXORCISM", "texture")
+      assert.equal("color", args.color.type)
+      assert.equal(8, args.color.order)
+      assert.equal("Colour", args.color.name)
+      assert.is_false(args.color.hasAlpha, "a colour picker with its own alpha beside an Opacity "
+        .. "slider is two controls for one number")
+      assert.is_false(args.color.disabled())
+      args.color.set(nil, 0.1, 0.2, 0.3)
+      assert.same({ r = 0.1, g = 0.2, b = 0.3 }, A.effective("EXORCISM", "texture").color)
+      assert.same({ 0.1, 0.2, 0.3 }, { args.color.get() })
+
+      assert.equal("range", args.alpha.type)
+      assert.equal(9, args.alpha.order)
+      assert.equal("Opacity", args.alpha.name)
+      assert.same({ 0.05, 1.0, 0.05 }, { args.alpha.min, args.alpha.max, args.alpha.step })
+      assert.is_true(args.alpha.isPercent, "a raw 0.45 means nothing to anyone")
+      assert.is_false(args.alpha.disabled())
+      assert.equal(1, args.alpha.get())
+      args.alpha.set(nil, 0.4)
+      assert.equal(0.4, tab("EXORCISM", "texture").alpha.get())
+    end)
+
+    -- AB3-D1: all five, with `suggested` and `active` on by default -- a channel that is "on" and
+    -- appears at no moment is the silent failure this project keeps shipping.
+    it("offers all five moments, with suggested and active ticked", function()
+      unlink()
+      local args = tab("EXORCISM", "texture")
+      assert.equal("toggle", args.suggested.type)
+      assert.equal("full", args.suggested.width)
+      assert.equal("When it is suggested", args.suggested.name)
+      assert.equal("When you use it", args.used.name)
+      -- ordered as Core/Track lists them, under the appearance controls above
+      assert.same({ 10, 11, 12, 13, 14 },
+        { args.suggested.order, args.ready.order, args.used.order, args.active.order,
+          args.expiring.order })
+      assert.is_true(args.suggested.get())
+      assert.is_true(args.active.get())
+      assert.is_false(args.ready.get())
+      assert.is_false(args.used.get())
+      assert.is_false(args.expiring.get())
+      -- and the two kinds say which they are
+      assert.is_truthy(args.suggested.desc:find("Stays on screen", 1, true))
+      assert.is_truthy(args.used.desc:find("second and a half", 1, true))
+      args.ready.set(nil, true)
+      assert.is_true(A.effective("EXORCISM", "texture").ready)
+    end)
+
+    it("greys the appearance while the ability is linked, but never the on switch", function()
+      local args = tab("EXORCISM", "texture")
+      assert.is_true(args.size.disabled())
+      assert.is_true(args.source.disabled())
+      assert.is_true(args.suggested.disabled())
+      assert.is_falsy(args.enabled.disabled)
+      args.inherit.set(nil, false)
+      assert.is_false(tab("EXORCISM", "texture").size.disabled())
+    end)
+
+    it("says so when it is switched on and appears at no moment", function()
+      local args = tab("EXORCISM", "texture")
+      assert.equal("description", args.silent.type)
+      assert.equal(23, args.silent.order)
+      assert.equal("medium", args.silent.fontSize)
+      assert.equal("full", args.silent.width)
+      assert.is_true(args.silent.hidden(), "nothing to warn about while it is off")
+      args.enabled.set(nil, true)
+      assert.is_true(tab("EXORCISM", "texture").silent.hidden())
+      args.inherit.set(nil, false)
+      tab("EXORCISM", "texture").suggested.set(nil, false)
+      tab("EXORCISM", "texture").active.set(nil, false)
+      assert.is_false(tab("EXORCISM", "texture").silent.hidden())
+      -- ...and an ability that is OFF with no moment ticked is not a problem to shout about: it is
+      -- simply off, which is what thirty-eight of a paladin's forty abilities are.
+      tab("EXORCISM", "texture").enabled.set(nil, false)
+      assert.is_true(tab("EXORCISM", "texture").silent.hidden())
+    end)
+
+    it("previews through the same path the diagnostic uses", function()
+      local fired = {}
+      ns.Textures.TestFire = function(key) fired[#fired + 1] = key; return true, key end
+      local row = tab("EXORCISM", "texture").preview
+      assert.equal("execute", row.type)
+      assert.equal(22, row.order)
+      assert.equal("Preview Texture", row.name)
+      assert.is_truthy(row.desc:find("whether or not it is switched on", 1, true))
+      row.func()
+      assert.same({ "EXORCISM" }, fired)
+    end)
+
+    it("previews nothing, without erroring, when no renderer is loaded", function()
+      ns.Textures = nil
+      assert.is_true(pcall(function() tab("EXORCISM", "texture").preview.func() end))
+    end)
+  end)
+
+  describe("AB3-D2: where a texture sits", function()
+    before_each(function()
+      Spells.registerPack(ns.db.char.spells, "EXORCISM", 415073, "Exorcism")
+    end)
+
+    it("offers the three placements per ability, and none on All abilities", function()
+      local row = tab("EXORCISM", "texture").place
+      assert.equal("select", row.type)
+      assert.equal(20, row.order)
+      assert.equal("Position", row.name)
+      assert.is_truthy(row.desc:find("never overlap", 1, true))
+      assert.same({ "row", "centre", "custom" }, row.sorting)
+      assert.equal("With the other indicators", row.values.row)
+      assert.equal("row", row.get())
+      row.set(nil, "centre")
+      assert.equal("centre", A.effective("EXORCISM", "texture").place)
+      assert.is_nil(tab("*", "texture").place)
+      assert.is_nil(tab("*", "texture").move)
+    end)
+
+    it("offers Move This Texture only once the placement is custom, and drives the mode", function()
+      local args = tab("EXORCISM", "texture")
+      assert.is_true(args.move.hidden())
+      args.place.set(nil, "custom")
+      assert.is_false(tab("EXORCISM", "texture").move.hidden())
+
+      local calls, key = {}, nil
+      ns.Textures.movingKey = function() return key end
+      ns.Textures.StartMove = function(k) calls[#calls + 1] = "start"; key = k; return true end
+      ns.Textures.StopMoveMode = function() calls[#calls + 1] = "stop"; key = nil; return true end
+      assert.equal("Move This Texture", tab("EXORCISM", "texture").move.name())
+      tab("EXORCISM", "texture").move.func()
+      assert.same({ "start" }, calls)
+      assert.equal("Done Moving", tab("EXORCISM", "texture").move.name())
+      tab("EXORCISM", "texture").move.func()
+      assert.same({ "start", "stop" }, calls)
+    end)
+
+    it("moves nothing, without erroring, when no renderer is loaded", function()
+      tab("EXORCISM", "texture").place.set(nil, "custom")
+      ns.Textures = nil
+      assert.is_true(pcall(function() tab("EXORCISM", "texture").move.func() end))
+    end)
+
+    -- One anchor for every texture flowing with the others, so its Move mode belongs to All
+    -- abilities rather than being repeated on forty identical tabs.
+    it("puts Position the Indicators on All abilities, and relabels it while it runs", function()
+      local calls, on = {}, false
+      ns.Textures.isPositioning = function() return on end
+      ns.Textures.StartPositioning = function() calls[#calls + 1] = "start"; on = true; return true end
+      ns.Textures.StopMoveMode = function() calls[#calls + 1] = "stop"; on = false; return true end
+
+      local function row() return tab("*", "texture").anchor end
+      assert.equal("execute", row().type)
+      assert.equal(20, row().order)
+      assert.equal("Position the Indicators", row().name())
+      row().func()
+      assert.same({ "start" }, calls)
+      assert.equal("Done Positioning", row().name())
+      row().func()
+      assert.same({ "start", "stop" }, calls)
+    end)
+
+    it("promises the row follows the strip until it is placed", function()
+      local desc = tab("*", "texture").anchor.desc
+      assert.is_truthy(desc:find("follows it", 1, true))
+      assert.is_truthy(desc:find("Press it again when it is in place", 1, true))
+    end)
+
+    it("places nothing, without erroring, when no renderer is loaded", function()
+      ns.Textures = nil
+      assert.is_true(pcall(function() tab("*", "texture").anchor.func() end))
+    end)
+  end)
+
+  -- AB3-D1: a texture already on screen has to pick a change up NOW -- the only moments one is
+  -- showing are a live suggestion and a Move mode, and the second is exactly when someone is
+  -- dragging the size slider.
+  describe("AB3-D1: settings reach the frames", function()
+    it("repaints the textures on every setter", function()
+      Spells.registerPack(ns.db.char.spells, "EXORCISM", 415073, "Exorcism")
+      local repainted = 0
+      ns.Textures.Refresh = function() repainted = repainted + 1; return true end
+      tab("EXORCISM", "texture").size.set(nil, 64)
+      assert.equal(1, repainted)
+      tab("EXORCISM", "glow").enabled.set(nil, true)
+      assert.equal(2, repainted, "every channel's setter goes through the same repaint")
     end)
   end)
 

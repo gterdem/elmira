@@ -180,9 +180,11 @@ describe("Core.Slash", function()
     assert.equal(a, b)
   end)
 
-  it("'debug' with no subcommand returns the usage line", function()
+  it("'debug' with no subcommand returns the usage line, naming every sub-report", function()
     local lines = Slash.run("debug")
     assert.is_true(hasLineMatching(lines, "^Usage: /elm debug"))
+    -- A diagnostic nothing points at is a diagnostic nobody runs.
+    assert.is_true(hasLineMatching(lines, "cues|textures"))
   end)
 
   it("'debug perf' returns at least one line and does not error", function()
@@ -1161,6 +1163,105 @@ describe("Core.Slash", function()
     it("tells the user how to test-fire one", function()
       local lines = Slash.run("debug cues")
       assert.is_true(hasLineMatching(lines, "test%-fires"))
+    end)
+  end)
+
+  it("'debug textures' degrades with a designed line when the module is not loaded", function()
+    local ns = helper.ns()
+    assert.is_nil(ns.Textures)
+    assert.same({ "textures: not loaded" }, Slash.run("debug textures"))
+  end)
+
+  -- The screen edge's twin (AB3-D1). Drives Display/Textures.lua for real, like the cues block
+  -- above and for the same reason: the value of the command is that it reports what the RENDERER
+  -- will do, and a fake would report what the spec believes instead.
+  describe("debug textures", function()
+    local ns, A
+
+    before_each(function()
+      ns = helper.ns()
+      -- Frames, reduced to "answer every call": nothing here asserts on one
+      -- (tests/spec/textures_spec.lua does), it only has to be creatable.
+      _G.UIParent = setmetatable({}, { __index = function() return function() end end })
+      _G.CreateFrame = function()
+        return setmetatable({}, { __index = function()
+          return function() return setmetatable({}, { __index = function() return function() end end }) end
+        end })
+      end
+      helper.load("Elmira/Core/Colors.lua")
+      helper.load("Elmira/Core/Spells.lua")
+      A = helper.load("Elmira/Core/AbilitySettings.lua")
+      helper.load("Elmira/Display/Textures.lua")
+      ns.db = { char = { spells = {}, abilities = {}, textures = { anchor = false } } }
+      ns.Display = { currentPack = function() return { class = "PALADIN",
+                       spells = { EXORCISM = { id = 415073 }, JUDGEMENT = { id = 20271 } } } end,
+                     spellName = function(key) return key end }
+    end)
+
+    after_each(function()
+      _G.CreateFrame, _G.UIParent = nil, nil
+    end)
+
+    it("says the row has never been placed, and that nothing is switched on", function()
+      local lines = Slash.run("debug textures")
+      assert.is_true(hasLineMatching(lines, "never placed"))
+      assert.is_true(hasLineMatching(lines, "no ability has a texture switched on"))
+    end)
+
+    it("reports the anchor once the row has been placed", function()
+      ns.db.char.textures.anchor = { point = "TOP", relPoint = "TOP", x = 10, y = -220 }
+      local lines = Slash.run("debug textures")
+      assert.is_true(hasLineMatching(lines, "indicators anchor: TOP TOP %+10,%-220"))
+    end)
+
+    it("names the ability, its source, size, placement and the moments it appears at", function()
+      A.set("EXORCISM", "texture", "enabled", true)
+      local lines = Slash.run("debug textures")
+      assert.is_true(hasLineMatching(lines, "EXORCISM  source=icon size=48 position=row"))
+      assert.is_true(hasLineMatching(lines, "shows on: suggested, active"))
+      assert.is_true(hasLineMatching(lines, "last shown=never"))
+    end)
+
+    it("says when an ability is on but appears at no moment", function()
+      A.set("EXORCISM", "texture", "enabled", true)
+      A.set(A.ALL, "texture", "suggested", false)
+      A.set(A.ALL, "texture", "active", false)
+      assert.is_true(hasLineMatching(Slash.run("debug textures"), "no moment is ticked"))
+    end)
+
+    -- The silence a texture has that a screen edge does not: a source that resolves to no file
+    -- draws the fallback ring and looks exactly like a working setting.
+    it("says when the source resolves to no file at all", function()
+      A.set("EXORCISM", "texture", "enabled", true)
+      assert.is_true(hasLineMatching(Slash.run("debug textures"), "no file"))
+      A.set(A.ALL, "texture", "source", "shape")
+      assert.is_false(hasLineMatching(Slash.run("debug textures"), "no file"))
+    end)
+
+    it("says a switched-off ability is off, and how to switch it on", function()
+      ns.Textures.TestFire("EXORCISM")
+      assert.is_true(hasLineMatching(Slash.run("debug textures"), "off — switch it on"))
+    end)
+
+    it("reports a real elapsed time once a texture has appeared", function()
+      local clock = { _now = 50 }
+      function clock:now() return self._now end
+      ns.API = { GetState = function() return clock end }
+      A.set("EXORCISM", "texture", "enabled", true)
+      ns.Textures.Fire("EXORCISM", "suggested")
+      clock._now = 54
+      local lines = Slash.run("debug textures")
+      assert.is_true(hasLineMatching(lines, "on screen=true"))
+      assert.is_true(hasLineMatching(lines, "last shown=4%.0s ago"))
+    end)
+
+    it("'debug textures <KEY>' test-fires that ability, and refuses a word that is not one", function()
+      assert.is_true(hasLineMatching(Slash.run("debug textures EXORCISM"), "test%-fired: EXORCISM"))
+      assert.is_true(hasLineMatching(Slash.run("debug textures zzz"), "cannot test%-fire"))
+    end)
+
+    it("tells the user how to test-fire one", function()
+      assert.is_true(hasLineMatching(Slash.run("debug textures"), "test%-fires"))
     end)
   end)
 end)

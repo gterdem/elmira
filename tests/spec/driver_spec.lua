@@ -395,6 +395,18 @@ describe("Display.Driver", function()
         "the pack's own spells must still resolve")
     end)
 
+    -- Rule review, AB3: the same lookup guarded on the PACK before consulting the merged registry,
+    -- so with no shipped data for this class -- every class but paladin -- it answered nil for an
+    -- ability with a perfectly good id, and the test above never noticed because it always ran with
+    -- a pack. `Spells.merged` takes a nil pack and answers with the registry alone.
+    it("resolves a registry-only spell's icon with NO class pack at all", function()
+      helper.load("Elmira/Core/Spells.lua")
+      ns.db = { char = { spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice" } } } }
+      ns.Display.currentPack = function() return nil end
+      assert.equal("Interface\\Icons\\Ability_Warrior_Cleave", Display.spellIcon("SLICE"))
+      assert.is_nil(Display.spellIcon("DIVINE_STORM"), "the pack's own keys are gone with the pack")
+    end)
+
     -- I1c: the spellbook picker (Options/Spells.lua) has no registry key for an entry that has not
     -- been added yet, only the raw spell id `spellbookEntries()` carries -- this is that lookup.
     it("resolves an icon by raw spell id, for a spell not yet in any registry", function()
@@ -1199,6 +1211,20 @@ describe("Display.Driver", function()
         assert.same({ "EXORCISM:suggested", "EXORCISM:ready" }, fired)
       end)
 
+      -- AB3-D1: the indicator texture, wired the same way and for the same reason -- until the
+      -- driver reached it, every Texture tab in the options was a page of controls that did
+      -- nothing. All five events, not the edge's two.
+      it("shows the texture, and passes every one of the five events through", function()
+        local fired = {}
+        ns.Textures = { Fire = function(key, event)
+          fired[#fired + 1] = key .. ":" .. event
+          return event == "active"
+        end, Sync = function() end }
+        assert.is_true(Display.abilityEvent("EXORCISM", "active"))
+        assert.is_false(Display.abilityEvent("EXORCISM", "expiring"))
+        assert.same({ "EXORCISM:active", "EXORCISM:expiring" }, fired)
+      end)
+
       it("does not reach the overlay at all while Only in combat holds it back", function()
         local fired = 0
         ns.Overlay = { Fire = function() fired = fired + 1; return true end }
@@ -1265,6 +1291,55 @@ describe("Display.Driver", function()
         tick()
         assert.same({}, played)
       end)
+
+      -- AB3-D1: the other half of a texture shown "while the state holds". Fire puts it up; this is
+      -- the only thing that ever notices the state ENDED, and it needs the two things only the
+      -- driver has -- what the queue is suggesting, and Core/Track's own memory.
+      describe("syncing the textures (AB3-D1)", function()
+        local synced
+
+        before_each(function()
+          synced = {}
+          ns.Textures = { Fire = function() return false end,
+                          Sync = function(nowKey, memory, now)
+                            synced[#synced + 1] = { nowKey = nowKey, memory = memory, now = now }
+                          end }
+        end)
+
+        it("hands it the suggestion, Track's memory and the tick's own clock", function()
+          A.set("EXORCISM", "texture", "enabled", true)
+          stubQueue({ { spell = "EXORCISM" } }, "BUILD")
+          Display.tick(500)
+          -- The FIRST tick syncs against what was suggested before it: the now-slot for this tick is
+          -- computed further down, and Fire has already put the texture up without waiting.
+          assert.is_nil(synced[1].nowKey)
+          assert.equal(500, synced[1].now)
+          assert.is_table(synced[1].memory)
+          assert.is_not_nil(synced[1].memory.EXORCISM, "Track's memory never reached the textures")
+          Display.tick(501)
+          assert.equal("EXORCISM", synced[2].nowKey)
+        end)
+
+        it("is told the suggestion is gone when the display goes hidden", function()
+          stubQueue({ { spell = "EXORCISM" } }, "BUILD")
+          Display.tick(500)
+          Display.tick(501)
+          assert.equal("EXORCISM", synced[#synced].nowKey)
+          ns.db.profile.visibility = "combat"
+          stubState(false, false)
+          assert.equal("hidden", Display.tick(502))
+          Display.tick(503)
+          assert.is_nil(synced[#synced].nowKey,
+            "a texture shown for the suggestion would sit there for the whole time it is hidden")
+        end)
+
+        it("is not synced on a throttled tick", function()
+          Display.tick(500)
+          assert.equal(1, #synced)
+          assert.equal("skipped", Display.tick(500.01))
+          assert.equal(1, #synced)
+        end)
+      end)
     end)
 
     -- Display.spellName: the client's name for the id the merged registry holds, falling back to
@@ -1280,10 +1355,18 @@ describe("Display.Driver", function()
         assert.equal("EXORCISM", Display.spellName("EXORCISM"))
       end)
 
-      it("names a key from no pack at all", function()
-        ns.Display.currentPack = function() return nil end
-        assert.equal("EXORCISM", Display.spellName("EXORCISM"))
-      end)
+      -- Rule review, AB3: with no pack this used to skip the merged registry entirely, so an
+      -- ability the player added themselves was named by its raw key in every sentence that names
+      -- one -- the announcement, the diagnostics, the Abilities page.
+      it("names a registry-only ability with no pack at all, and falls back only for a bare key",
+        function()
+          ns.Display.currentPack = function() return nil end
+          ns.Spells = { merged = function() return ns.db.char.spells end }
+          ns.db.char.spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice" } }
+          ns.BarGlow = { spellName = function(id) return id == 900 and "Slice and Dice" or nil end }
+          assert.equal("Slice and Dice", Display.spellName("SLICE"))
+          assert.equal("EXORCISM", Display.spellName("EXORCISM"))
+        end)
     end)
   end)
 

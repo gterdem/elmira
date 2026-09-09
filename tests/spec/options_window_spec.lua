@@ -698,6 +698,32 @@ describe("Options window", function()
         w.titlebg.points)
     end)
 
+    -- PE11-D5's guard, and AB3-D2's twin of it: a mode that puts a sample on screen and tells the
+    -- render loop to leave it alone is stranded by a panel closed mid-drag -- visible in town, with
+    -- the button that ends it now behind a shut window.
+    it("leaves both texture Move modes when the panel closes", function()
+      local stopped = 0
+      ns.Textures = { StopMoveMode = function() stopped = stopped + 1; return true end }
+      local w = open()
+      w.events.OnClose(w, "OnClose")
+      assert.equal(1, stopped)
+      assert.is_true(w.released)
+    end)
+
+    it("still releases the frame when leaving the texture Move mode fails, and says so", function()
+      ns.Textures = { StopMoveMode = function() error("the anchor is gone") end }
+      local w = open()
+      local logged = {}
+      ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+      w.events.OnClose(w, "OnClose")
+      assert.is_true(w.released, "an error leaving the mode skipped the dialog's cleanup")
+      local found = false
+      for _, msg in ipairs(logged) do
+        if msg:find("texture move mode", 1, true) then found = true end
+      end
+      assert.is_true(found, "no log line mentioned the mode it could not leave")
+    end)
+
     it("still releases cleanly when there was nothing to undecorate", function()
       assert.is_false(Options.Undecorate(nil))
       assert.is_false(Options.Undecorate({}))

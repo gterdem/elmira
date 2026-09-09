@@ -50,6 +50,26 @@ describe("Core.AbilitySettings", function()
       assert.is_false(A.effective("X", "announce").enabled)
     end)
 
+    -- AB3-D1. The size range is the Texture tab's slider; `suggested` and `active` ship ticked so
+    -- that switching the tab on does something the first time, and the other three ship off.
+    it("ships the texture at 48px, the spell's own icon, and two of the five moments", function()
+      local t = A.effective("X", "texture")
+      assert.equal("icon", t.source)
+      assert.equal("ring", t.shape)
+      assert.equal("", t.path)
+      assert.equal(48, t.size)
+      assert.is_false(t.color)
+      assert.equal(1, t.alpha)
+      assert.is_true(t.suggested)
+      assert.is_true(t.active)
+      assert.is_false(t.ready)
+      assert.is_false(t.used)
+      assert.is_false(t.expiring)
+      assert.equal("row", t.place)
+      assert.equal(0, t.x)
+      assert.equal(0, t.y)
+    end)
+
     it("leaves every glow number to the library, and colours to the brand", function()
       local g = A.effective("X", "glow")
       assert.equal("PIXEL", g.style)
@@ -143,6 +163,28 @@ describe("Core.AbilitySettings", function()
         A.set(A.ALL, channel, "enabled", true)
         assert.is_false(A.effective("EXORCISM", channel).enabled, channel .. " was inherited ON")
       end
+    end)
+
+    -- AB3-D2: WHERE one texture sits is a fact about that texture. An inherited offset would move
+    -- every linked ability's texture at once, or write to a row nothing reads and move nothing --
+    -- and "the custom Move mode drags that texture alone" is the decision's own wording.
+    it("never inherits a texture's placement or its offset", function()
+      A.set(A.ALL, "texture", "place", "custom")
+      A.set(A.ALL, "texture", "x", 300)
+      A.set(A.ALL, "texture", "y", -200)
+      local t = A.effective("EXORCISM", "texture")
+      assert.equal("row", t.place)
+      assert.equal(0, t.x)
+      assert.equal(0, t.y)
+      -- ...and an ability's own placement holds while it is still linked for everything else
+      A.set("EXORCISM", "texture", "place", "centre")
+      A.set("EXORCISM", "texture", "x", 40)
+      assert.is_true(A.inherits("EXORCISM", "texture"))
+      assert.equal("centre", A.effective("EXORCISM", "texture").place)
+      assert.equal(40, A.effective("EXORCISM", "texture").x)
+      -- while the APPEARANCE beside it still comes from All abilities
+      A.set(A.ALL, "texture", "size", 96)
+      assert.equal(96, A.effective("EXORCISM", "texture").size)
     end)
 
     it("keeps an ability's own on/off for those four even while it is linked", function()

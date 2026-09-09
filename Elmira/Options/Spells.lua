@@ -46,6 +46,11 @@ local ALL = "*"
 -- rebuild with the new settings. Without it the panel changes and the button does not.
 local function restyle()
   if ns.Glow then ns.Glow.StopAll() end
+  -- AB3-D1: a texture already on screen has to pick the change up now. It is only ever on screen
+  -- while the ability is being suggested or a Move mode is running, and the second of those is
+  -- exactly when someone is dragging the size slider -- a slider whose effect appears three fights
+  -- later is a slider that looks broken.
+  if ns.Textures then ns.Textures.Refresh() end
   if ns.Display then ns.Display.refresh() end
 end
 
@@ -480,10 +485,190 @@ local function announceArgs(key, entry)
   return args
 end
 
--- AB1-D12: the Texture tab is still a shell. One line, no controls -- AB3 fills it.
-local function shellArgs(order)
-  return { soon = { type = "description", order = order, width = "full", fontSize = "medium",
-                    name = ns.Colors.wrap(ns.Colors.MUTED, L["Arrives in the next pass."]) } }
+-- ---------------------------------------------------------------- AB3-D1/D2: the Texture tab
+
+-- Named for humans. `Textures` is the authority on which sources, shapes and placements exist -- it
+-- is what can actually draw them -- so adding one there cannot leave an unnamed entry here.
+local SOURCE_LABELS = { icon = "This ability's icon", shape = "A shape", custom = "A file of my own" }
+local SHAPE_LABELS = { ring = "Ring", disc = "Disc", square = "Square", diamond = "Diamond",
+                       arrow = "Arrow", star = "Star", bar = "Bar", chevron = "Chevron" }
+local PLACE_LABELS = { row = "With the other indicators", centre = "Centre of the screen",
+                       custom = "Somewhere I choose" }
+
+local function labelled(list, labels)
+  local out = {}
+  for _, v in ipairs(list or {}) do out[v] = L[labels[v] or v] end
+  return out
+end
+
+local function textureList(name)
+  return (ns.Textures and ns.Textures[name]) or {}
+end
+
+local function sourceOf(key)
+  return effective(key, "texture").source or "icon"
+end
+
+-- Is one of the two Move modes running, and is it THIS one. Read through Textures rather than kept
+-- here, exactly as the strip's own button reads `Queue.isPositioning`: the mode lives with the
+-- frames it moves, and the options window is not the only thing that can end it (the panel closing
+-- does, through the chained OnClose).
+local function positioningIndicators()
+  return (ns.Textures and ns.Textures.isPositioning and ns.Textures.isPositioning()) == true
+end
+
+local function movingTexture(key)
+  return (ns.Textures and ns.Textures.movingKey and ns.Textures.movingKey()) == key
+end
+
+local function textureArgs(key)
+  local A = AS()
+  local args = {}
+  args.inherit = inheritToggle(key, "texture", 1)
+  if key ~= ALL then
+    args.enabled = {
+      type = "toggle", order = 2, width = "full", name = L["Show a texture for this ability"],
+      -- ADR-0009 as amended by AB1-D4: the ON switch is per ability and is never inherited.
+      desc = L["Never inherited: All abilities cannot switch textures on for you."],
+      get = function() return effective(key, "texture").enabled == true end,
+      set = function(_, v) put(key, "texture", "enabled", v) end,
+    }
+  end
+  args.source = {
+    type = "select", order = 3, name = L["Show"], disabled = linked(key, "texture"),
+    values = labelled(textureList("SOURCES"), SOURCE_LABELS),
+    sorting = textureList("SOURCES"),
+    desc = L["The ability's own spell icon, one of the shapes that ship with Elmira, or any "
+          .. "texture file you have."],
+    get = function() return sourceOf(key) end,
+    set = function(_, v) put(key, "texture", "source", v) end,
+  }
+  args.shape = {
+    type = "select", order = 4, name = L["Shape"], disabled = linked(key, "texture"),
+    values = labelled(textureList("SHAPES"), SHAPE_LABELS),
+    sorting = textureList("SHAPES"),
+    -- Hidden rather than greyed: a shape picker is not "unavailable" while the source is the spell
+    -- icon, it is irrelevant, and a greyed control invites the player to look for what unlocks it.
+    hidden = function() return sourceOf(key) ~= "shape" end,
+    get = function() return effective(key, "texture").shape or "ring" end,
+    set = function(_, v) put(key, "texture", "shape", v) end,
+  }
+  args.path = {
+    type = "input", order = 5, width = "full", name = L["Texture file"],
+    desc = L["A path the client can load, e.g. Interface\\Icons\\Spell_Holy_Excorcism. Elmira "
+          .. "cannot check it -- if nothing appears, the ring is drawn instead."],
+    hidden = function() return sourceOf(key) ~= "custom" end,
+    disabled = linked(key, "texture"),
+    get = function() return effective(key, "texture").path or "" end,
+    set = function(_, v) put(key, "texture", "path", v or "") end,
+  }
+  -- The one failure a texture has that a screen edge does not: a source that resolves to no file.
+  -- Said here, where it happens, because on screen it is indistinguishable from a working setting.
+  args.missing = {
+    type = "description", order = 6, width = "full", fontSize = "medium",
+    hidden = function()
+      if not ns.Textures then return true end
+      return ns.Textures.texturePath(effective(key, "texture"), key) ~= nil
+    end,
+    name = ns.Colors.wrap(ns.Colors.WARN,
+      L["Nothing to draw -- Elmira falls back to the ring. Check the file, or pick a shape."]),
+  }
+  args.size = {
+    type = "range", order = 7, name = L["Size"], min = 16, max = 256, step = 8,
+    disabled = linked(key, "texture"),
+    desc = L["How big the texture is, in pixels."],
+    get = function() return (ns.Textures and ns.Textures.sizeOf(effective(key, "texture"))) or 48 end,
+    set = function(_, v) put(key, "texture", "size", v) end,
+  }
+  args.color = {
+    type = "color", order = 8, name = L["Colour"], hasAlpha = false, disabled = linked(key, "texture"),
+    desc = L["The shipped shapes are white, so this tints them. A spell icon keeps its own art "
+          .. "unless you tint it."],
+    get = function()
+      local c = effective(key, "texture").color or ns.Colors.HIGHLIGHT
+      return c.r, c.g, c.b
+    end,
+    set = function(_, r, g, b) put(key, "texture", "color", { r = r, g = g, b = b }) end,
+  }
+  args.alpha = {
+    type = "range", order = 9, name = L["Opacity"], min = 0.05, max = 1.0, step = 0.05,
+    isPercent = true, disabled = linked(key, "texture"),
+    get = function() return effective(key, "texture").alpha or 1 end,
+    set = function(_, v) put(key, "texture", "alpha", v) end,
+  }
+  -- All five of Core/Track's events, unlike the screen edge's two (AB3-D1). `suggested` and
+  -- `active` SHOW the texture while the state holds; the other three flash it for a second and a
+  -- half, which is why the three ADR-0009 keeps off a full-screen flash are fine here.
+  for i, event in ipairs(textureList("EVENTS")) do
+    args[event] = {
+      type = "toggle", order = 9 + i, width = "full", name = L[EVENT_LABELS[event] or event],
+      disabled = linked(key, "texture"),
+      desc = (ns.Textures and ns.Textures.HELD[event])
+        and L["Stays on screen for as long as this is true."]
+        or L["Appears for a second and a half."],
+      get = function() return effective(key, "texture")[event] == true end,
+      set = function(_, v) put(key, "texture", event, v) end,
+    }
+  end
+  if key == ALL then
+    -- The Indicators row is one anchor for every texture flowing with the others, so its Move mode
+    -- belongs to All abilities rather than being repeated on forty identical tabs.
+    args.anchor = {
+      type = "execute", order = 20, name = function()
+        return positioningIndicators() and L["Done Positioning"] or L["Position the Indicators"]
+      end,
+      desc = L["Puts a sample texture on screen and lets you drag the row wherever you want it. "
+            .. "Press it again when it is in place. Until you do this the row floats above the "
+            .. "queue strip and follows it."],
+      func = function()
+        if not ns.Textures then return end
+        if positioningIndicators() then ns.Textures.StopMoveMode() else ns.Textures.StartPositioning() end
+      end,
+    }
+  else
+    -- AB3-D2, and never inherited: dragging one ability's texture must move that one alone.
+    args.place = {
+      type = "select", order = 20, name = L["Position"],
+      values = labelled(textureList("PLACEMENTS"), PLACE_LABELS),
+      sorting = textureList("PLACEMENTS"),
+      desc = L["\"With the other indicators\" flows it into the row, so several never overlap."],
+      get = function() return effective(key, "texture").place or "row" end,
+      set = function(_, v) put(key, "texture", "place", v) end,
+    }
+    args.move = {
+      type = "execute", order = 21, name = function()
+        return movingTexture(key) and L["Done Moving"] or L["Move This Texture"]
+      end,
+      desc = L["Puts this texture on screen on its own and lets you drag it. Where you drop it is "
+            .. "remembered as an offset from the centre of the screen."],
+      hidden = function() return (effective(key, "texture").place or "row") ~= "custom" end,
+      func = function()
+        if not ns.Textures then return end
+        if movingTexture(key) then ns.Textures.StopMoveMode() else ns.Textures.StartMove(key) end
+      end,
+    }
+  end
+  args.preview = {
+    type = "execute", order = 22, name = L["Preview Texture"],
+    desc = L["Shows it for a second and a half with these settings, whether or not it is switched on."],
+    -- The SAME path `/elm debug textures <KEY>` uses: a preview drawn by a second code path can
+    -- look right while the one that fires in play is broken.
+    func = function() if ns.Textures then ns.Textures.TestFire(key) end end,
+  }
+  args.silent = {
+    type = "description", order = 23, width = "full", fontSize = "medium",
+    hidden = function()
+      local e = effective(key, "texture")
+      if not (A and A.channelOn(key, "texture")) then return true end
+      for _, event in ipairs(textureList("EVENTS")) do
+        if e[event] then return true end
+      end
+      return false
+    end,
+    name = ns.Colors.wrap(ns.Colors.WARN,
+      L["This is switched on but appears at no moment -- tick one of the moments above."]),
+  }
+  return args
 end
 
 -- ---------------------------------------------------------------- AB2-D1: the Screen-edge tab
@@ -642,21 +827,31 @@ local function packSummaryArgs(key, p)
                          name = "   " .. iconPrefix(need) .. readable(need) }
     end
   end
-  return { type = "group", inline = true, order = 2, name = L["What the class pack says"], args = args }
+  return { type = "group", inline = true, order = 3, name = L["What the class pack says"], args = args }
 end
 
 -- D56: a remove control exists only for a MANUALLY added entry (an automatic one is derived, never
 -- owned); even then, one still referenced says so instead of a button, so the row always explains
 -- itself rather than failing silently on click.
+--
+-- AB3-D3: it sits on the IDENTITY ROW at the top now, not under the last slider (owner,
+-- 2026-09-09: "the one control that deletes things should not be the last item after a slider").
+-- `width = "relative"` with the head's 0.72 summing to 1.0 is the only shape AceGUI's Flow scales
+-- (AceGUI-3.0.lua:709-711), and the row ENDS with this control because a Button is the only widget
+-- that fills its cell -- a toggle would hug the left of a cell three quarters of the way across.
+local REMOVE_WIDTH = 0.28
+
 local function removeArgs(entry, rotations, order)
   if entry.source == "pack" then return nil end
   local suffix = usedByText(rotations, entry.key)
   if suffix then
-    return { type = "description", order = order, width = "full", fontSize = "medium",
+    return { type = "description", order = order, width = "relative", relWidth = REMOVE_WIDTH,
+      fontSize = "medium",
       name = ns.Colors.wrap(ns.Colors.WARN, string.format(L["Still %s -- remove it there first."], suffix)) }
   end
   return {
-    type = "execute", order = order, name = L["Remove"], confirm = true,
+    type = "execute", order = order, width = "relative", relWidth = REMOVE_WIDTH,
+    name = L["Remove"], confirm = true,
     confirmText = string.format(
       L["Remove %s and its glow, texture, screen-edge, sound and announcement settings?"], entry.name),
     func = function()
@@ -677,6 +872,10 @@ end
 
 local function generalArgs(key, entry, rotations, p)
   local args = {}
+  -- AB3-D3: built FIRST, because whether it exists is what decides how wide the identity line
+  -- beside it is. A three-quarter-width line with nothing in the last quarter is a gap the player
+  -- reads as a missing control.
+  local remove = entry and removeArgs(entry, rotations, 2) or nil
   if entry then
     local sourceText -- mutants: equivalent deleting the declaration only makes it a global; luacheck catches it
     if entry.source == "pack" then
@@ -689,19 +888,21 @@ local function generalArgs(key, entry, rotations, p)
     elseif entry.source == "unresolved" then
       sourceText = L["not on this character -- these settings arrived in an import"]
     else sourceText = L["added by ID"] end
-    args.head = { type = "description", order = 1, width = "full", fontSize = "medium",
+    args.head = { type = "description", order = 1, fontSize = "medium",
+      width = remove and "relative" or "full", relWidth = remove and (1 - REMOVE_WIDTH) or nil,
       name = string.format("%s%s  ·  #%s  ·  %s  ·  %s", iconPrefix(entry.key), entry.name,
         tostring(entry.id), sourceText,
         usedByText(rotations, entry.key) or L["not used by any rotation yet"]) }
+    args.remove = remove
     args.pack = packSummaryArgs(entry.key, p)
   else
     args.head = { type = "description", order = 1, width = "full", fontSize = "medium",
       name = L["What every ability falls back to. Change something here and every ability still set"
             .. " to \"Same as All abilities\" follows."] }
   end
-  args.inherit = inheritToggle(key, "general", 3)
+  args.inherit = inheritToggle(key, "general", 4)
   args.onlyInCombat = {
-    type = "toggle", order = 4, width = "full", name = L["Only in combat"],
+    type = "toggle", order = 5, width = "full", name = L["Only in combat"],
     desc = L["Nothing this ability is set to do -- glow, sound, flash, announcement -- happens while "
           .. "you are out of combat."],
     disabled = linked(key, "general"),
@@ -709,13 +910,12 @@ local function generalArgs(key, entry, rotations, p)
     set = function(_, v) put(key, "general", "onlyInCombat", v) end,
   }
   args.expiring = {
-    type = "range", order = 5, name = L["\"About to run out\" means"], min = 1, max = 15, step = 1,
+    type = "range", order = 6, name = L["\"About to run out\" means"], min = 1, max = 15, step = 1,
     desc = L["How many seconds are left on this ability's buff when the \"about to run out\" cue fires."],
     disabled = linked(key, "general"),
     get = function() return effective(key, "general").expiringSeconds or 3 end,
     set = function(_, v) put(key, "general", "expiringSeconds", v) end,
   }
-  if entry then args.remove = removeArgs(entry, rotations, 9) end
   return args
 end
 
@@ -725,7 +925,7 @@ local function tabsFor(key, entry, rotations, p)
   return {
     general  = { type = "group", order = 1, name = L["General"], args = generalArgs(key, entry, rotations, p) },
     glow     = { type = "group", order = 2, name = L["Glow"], args = glowArgs(key) },
-    texture  = { type = "group", order = 3, name = L["Texture"], args = shellArgs(1) },
+    texture  = { type = "group", order = 3, name = L["Texture"], args = textureArgs(key) },
     edge     = { type = "group", order = 4, name = L["Screen-edge"], args = edgeArgs(key) },
     sound    = { type = "group", order = 5, name = L["Sound"], args = soundArgs(key) },
     announce = { type = "group", order = 6, name = L["Announcement"], args = announceArgs(key, entry) },

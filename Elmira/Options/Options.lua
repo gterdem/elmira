@@ -1147,6 +1147,15 @@ local function chainClose(dialog)
         ns.log("could not leave the strip's positioning mode when the panel closed: %s", tostring(err))
       end
     end
+    -- AB3-D2, the third of the same guard: placing the Indicators row or dragging one texture both
+    -- put a sample on screen that the render loop is told to leave alone, so a panel closed
+    -- mid-drag would strand it there with the button that ends it now behind a shut window.
+    if ns.Textures and ns.Textures.StopMoveMode then
+      local ok, err = pcall(ns.Textures.StopMoveMode)
+      if not ok then
+        ns.log("could not leave the texture move mode when the panel closed: %s", tostring(err))
+      end
+    end
     -- Where and how big it was left. Same pcall discipline, and for the same reason: the dialog's
     -- own cleanup below runs whatever happens here. AceGUI wipes the status table when the widget
     -- goes back to the pool, so this is the last moment the numbers exist.

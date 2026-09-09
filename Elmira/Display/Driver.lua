@@ -221,20 +221,31 @@ function Display.checkGates()
   return text
 end
 
+-- The per-character merged spell view: this character's registry UNDER the pack's own table, pack
+-- winning on a collision (Core/Spells.merged).
+--
+-- `Spells.merged` TAKES A NIL PACK and answers with the registry alone -- and that is exactly what
+-- the three readers below used to get wrong, by guarding on the PACK first. A class with no shipped
+-- data is a NORMAL state, not an error (the AB standing rule), and every one of those guards
+-- short-circuited to nothing for it: a mage who added Frostbolt from the spellbook had a perfectly
+-- good id in the registry and still got no icon on the queue strip, no icon in the Abilities tree,
+-- no client name in an announcement, and a Texture set to "this ability's icon" that silently drew
+-- the fallback ring. Third time this exact merge has been widened (D76, D81, this) -- so it is one
+-- helper now, and the three cannot drift apart again.
+local function mergedSpells(pack)
+  return (ns.Spells and ns.Spells.merged and ns.Spells.merged(pack)) or (pack and pack.spells) or {}
+end
+
 -- Presentation, so it lives here rather than on the State contract: nothing in the rotation depends
 -- on what a spell looks like. Display/Queue draws its icons through this too -- two copies of the
 -- same lookup is one that can go stale.
 --
 -- D81 (review finding on R2b): this used to read `pack.spells` alone, so a spell added by id,
 -- by name or from the spellbook -- resolvable everywhere else after D75/D79/D80 -- still had no
--- icon anywhere it was drawn, including U1's rows. `ns.Spells.merged` is the same per-character
--- merge every other consumer widened to; a spell that genuinely has none (an item line, or an
--- unresolved key) still falls through to the nil the caller already treats as "no icon".
+-- icon anywhere it was drawn, including U1's rows. A spell that genuinely has no id (an item line,
+-- or an unresolved key) still falls through to the nil the caller already treats as "no icon".
 function Display.spellIcon(spellKey)
-  local pack = Display.currentPack()
-  local spells = (pack and ns.Spells and ns.Spells.merged and ns.Spells.merged(pack))
-    or (pack and pack.spells)
-  local data = spells and spells[spellKey]
+  local data = mergedSpells(Display.currentPack())[spellKey]
   if not (data and data.id and GetSpellTexture) then return nil end
   return GetSpellTexture(data.id)
 end
@@ -276,10 +287,7 @@ end
 -- the key. Both halves already existed inside announceCooldown; they are named here because the
 -- announcement is no longer the only sentence an ability's key has to appear in.
 function Display.spellName(key)
-  local pack = Display.currentPack()
-  local spells = (pack and ns.Spells and ns.Spells.merged and ns.Spells.merged(pack))
-    or (pack and pack.spells)
-  local data = (spells and spells[key]) or {}
+  local data = mergedSpells(Display.currentPack())[key] or {}
   return (data.id and ns.BarGlow and ns.BarGlow.spellName and ns.BarGlow.spellName(data.id))
     or (ns.Detect and ns.Detect.readableName and ns.Detect.readableName(key, data))
     or key
@@ -324,8 +332,7 @@ function Display.watchedKeys()
   if watchedVersion == v and watchedPack == pack then return watched end
   watchedVersion, watchedPack = v, pack
   for i = #watched, 1, -1 do watched[i] = nil end
-  local spells = (ns.Spells and ns.Spells.merged and ns.Spells.merged(pack)) or (pack and pack.spells) or {}
-  for key in pairs(spells) do
+  for key in pairs(mergedSpells(pack)) do
     if A.tracked(key) then
       watched[#watched + 1] = { key = key, expiring = A.effective(key, "general").expiringSeconds }
     end
@@ -354,6 +361,9 @@ function Display.abilityEvent(key, event)
   -- edge cares about THIS event; the driver only has to reach it, which is the half that used to be
   -- a renderer with a now-slot diff of its own.
   if ns.Overlay and ns.Overlay.Fire(key, event) then acted = true end
+  -- AB3-D1: the indicator texture, same shape as the screen edge above it. It answers to all five
+  -- events rather than two -- a shape the size of a coin is not the strobe a full-screen flash is.
+  if ns.Textures and ns.Textures.Fire(key, event) then acted = true end
   if event == "used" and Display.announceCooldown(key) then acted = true end
   return acted
 end
@@ -453,6 +463,13 @@ function Display.tick(now)
     trackPrev = memory
     for _, e in ipairs(fired) do Display.abilityEvent(e.key, e.event) end
   end
+  -- AB3-D1: the other half of a texture shown "while the state holds". Display.abilityEvent above
+  -- put it on screen the instant the state began; this is the only thing that ever notices the
+  -- state ENDED -- a suggestion that moved on, a buff that fell off, a flash whose 1.5s is up.
+  -- Given `lastNowKey` (what the queue is suggesting) and Track's own memory, both of which are
+  -- already here. Before the visibility branch with the tracker, and for the tracker's reason: a
+  -- texture must still come DOWN for someone who has hidden the strip.
+  if ns.Textures then ns.Textures.Sync(lastNowKey, trackPrev, now) end
 
   -- Hidden costs one boolean read and no queue computation at all — which is the point, since for
   -- most of a session the answer is "hidden". The transition is painted once so the strip actually
@@ -465,6 +482,10 @@ function Display.tick(now)
     if lastVisible ~= false then
       lastVisible = false
       lastQueue, lastBuildKey = nil, nil
+      -- AB3-D1: and the now-slot is no longer anything. Without this a texture shown because its
+      -- ability was suggested would sit on screen for the whole time the display is hidden -- the
+      -- next Sync would still be told the same nowKey, because nothing else ever clears it.
+      lastNowKey = nil
       renderAll(nil, nil, false)
     end
     return "hidden"

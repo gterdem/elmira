@@ -37,7 +37,18 @@ local DEFAULTS = {
   general  = { onlyInCombat = false, expiringSeconds = 3 },
   glow     = { enabled = true, style = "PIXEL", color = false,
                particles = false, frequency = false, thickness = false, speed = false },
-  texture  = { enabled = false },
+  -- AB3-D1. `source` picks between the ability's own spell icon, one of the shipped shapes
+  -- (`Elmira/media/shape_*.tga`) and a path the player typed; `shape` and `path` are what those two
+  -- answers need and are stored whichever source is live, so switching back and forth does not
+  -- forget the other one. All five events are offered: `suggested` and `active` SHOW the texture
+  -- while the state holds, the other three FLASH it, which is why a texture can afford the three
+  -- events a screen edge cannot.
+  --
+  -- `place`/`x`/`y` are the per-texture placement (AB3-D2) and are OWN, not inherited (see below).
+  texture  = { enabled = false, source = "icon", shape = "ring", path = "",
+               size = 48, color = false, alpha = 1,
+               suggested = true, active = true, ready = false, used = false, expiring = false,
+               place = "row", x = 0, y = 0 },
   -- AB2-D1: `suggested` and `ready` are the two moments a screen edge can flash. `suggested` ships
   -- ON so that switching the tab on does something the first time (a channel that is "on" and fires
   -- on nothing is the silent failure this project keeps shipping); `ready` ships OFF, because a
@@ -56,7 +67,14 @@ AbilitySettings.DEFAULTS = DEFAULTS
 -- switch on the All abilities entry turns a flash on for every spell in the rotation at once, which
 -- is the exact failure ADR-0009 was written against. Glow is deliberately absent: its on/off DOES
 -- inherit, because glowing the button you are about to press is this addon's normal state.
-local OWN = { texture = { enabled = true }, edge = { enabled = true },
+--
+-- AB3-D2 adds three more to `texture`: WHERE one texture sits is a fact about that texture. The
+-- decision says the custom Move mode "drags that texture alone and stores an offset from screen
+-- centre", and an inherited offset cannot do that -- dragging a linked ability's texture would move
+-- every other linked one with it, or (worse) write to a row nothing reads and move nothing at all,
+-- which is this project's characteristic silent failure. Appearance still inherits; position does
+-- not.
+local OWN = { texture = { enabled = true, place = true, x = true, y = true }, edge = { enabled = true },
               sound = { enabled = true }, announce = { enabled = true } }
 
 AbilitySettings.CHANNELS = { "general", "glow", "texture", "edge", "sound", "announce" }
