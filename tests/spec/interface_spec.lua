@@ -105,6 +105,47 @@ describe("Adapters.Interface (State contract)", function()
     assert.is_nil(s:sealLinger())
   end)
 
+  -- AB4 review. Every AURA reading in Adapters/Vanilla.lua goes through one `findAura`, which
+  -- returns THREE values: stacks, seconds LEFT, and how long the aura lasts in total.
+  -- tests/fake_state.lua returned two for both `buff` and `debuff`, so anything reading the third
+  -- saw nil in every headless test and a real number in game -- Display's "Divine Protection used
+  -- -- 10s" and AB4-D1's buff-remaining texture fill are both that reading. An arity difference is
+  -- invisible to every other test in the suite, because Lua silently drops the extra value.
+  --
+  -- Walked against Interface.CONTRACT rather than a bare list, so a member that leaves the contract
+  -- makes this fail instead of quietly comparing nothing.
+  it("returns the same number of values from fake_state and the live adapter, per aura member", function()
+    local mock = require("tests.wow_mock")
+    mock.reset()
+    local Vanilla = helper.load("Elmira/Adapters/Vanilla.lua")
+    mock.auras.player = { { name = "Test Aura", spellID = 900, count = 2, duration = 20,
+                            expires = mock.time + 5 } }
+    mock.auras.target = mock.auras.player
+    local live = Vanilla.newState({ AURA = { id = 900 } }, {}, {})
+    local fake = FakeState.new{ buffs = { AURA = { stacks = 2, remaining = 5, duration = 20 } },
+                                debuffs = { AURA = { stacks = 2, remaining = 5, duration = 20 } } }
+
+    local onContract = {}
+    for _, name in ipairs(Interface.CONTRACT) do onContract[name] = true end
+    for _, member in ipairs({ "buff", "debuff" }) do
+      assert.is_true(onContract[member], member .. " is not on the State contract any more")
+      local fromAdapter = select("#", live[member](live, "AURA"))
+      assert.equal(3, fromAdapter, member .. ": the adapter stopped answering with three values")
+      assert.equal(fromAdapter, select("#", fake[member](fake, "AURA")),
+        member .. ": tests/fake_state.lua and Adapters/Vanilla.lua disagree about how many values "
+        .. "an aura reading has, so the third one is untestable")
+    end
+
+    -- ...and the third value really is the DURATION, not a repeat of what is left: reading one for
+    -- the other is exactly the mistake the arity check cannot catch on its own.
+    local _, remaining, duration = fake:buff("AURA")
+    assert.equal(5, remaining)
+    assert.equal(20, duration)
+    local _, liveRemaining, liveDuration = live:buff("AURA")
+    assert.equal(5, liveRemaining)
+    assert.equal(20, liveDuration)
+  end)
+
   -- A capability the contract declares but no adapter answers reads as nil, which is
   -- indistinguishable from "not supported" — the guard silently disables a feature instead of
   -- erroring. Pin both directions so adding to one list and not the other fails here.

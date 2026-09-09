@@ -61,12 +61,14 @@ describe("Core.Announce", function()
 
     -- AB1-D10: the cooldown row is back on the Notifications page. WHETHER a cooldown is
     -- announced is the ability's own Announcement tab; WHERE the line goes is still routing, so
-    -- the row belongs here with the other three and `OFF_PAGE` is empty again.
+    -- the row belongs here with the other three. AB4-D2: with nothing left to hold back, the
+    -- `OFF_PAGE` filter itself is gone -- an empty filter still reads as "some kinds are hidden,
+    -- go and find out which", and that question no longer has an answer.
     it("lists every kind on the page, cooldowns included", function()
       local keys = {}
       for _, c in ipairs(A.listed()) do keys[#keys + 1] = c.key end
       assert.same({ "rotation", "warning", "status", "cooldown" }, keys)
-      assert.is_nil(A.OFF_PAGE.cooldown)
+      assert.is_nil(A.OFF_PAGE)
       assert.is_not_nil(A.category("cooldown"))
       assert.is_not_nil(A.DEFAULT_ROUTES.cooldown)
       local heard = 0

@@ -249,10 +249,12 @@ end
 -- Symbolic keys (`HAMMER_OF_WRATH`) are how the engine names spells and are not what the player
 -- calls them. Show the real name where the client can resolve one; fall back to the key rather than
 -- to nothing, because a blank row is worse than an ugly one.
+--
+-- AB4-D4: `Display.spellName`, not a fourth copy of the lookup. The copy that was here read
+-- `pack.spells` alone, so on a class with no shipped pack this list named every ability by its raw
+-- key -- and the fallback then made that look deliberate.
 local function spellLabel(key)
-  local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
-  local data = pack and pack.spells and pack.spells[key]
-  local name = data and data.id and ns.BarGlow and ns.BarGlow.spellName(data.id)
+  local name = ns.Display and ns.Display.spellName and ns.Display.spellName(key)
   return name or tostring(key)
 end
 
@@ -470,20 +472,10 @@ local function actionBarsGroup()
   }
 end
 
--- AB2-D1: the per-cue controls that were here are gone -- a screen flash belongs to an ABILITY now
--- (Abilities > the ability > Screen-edge), not to a list a build suggested. The node stays for this
--- pass as a signpost, the same way the Glow page's did in AB1, so nobody hunts for a page that
--- moved; AB4 removes both.
-local function overlayGroup()
-  return {
-    moved = {
-      type = "description", order = 1, width = "full", fontSize = "medium",
-      name = L["Screen-edge flashes are set per ability now: Abilities > the ability > Screen-edge "
-            .. "picks the edge, the colour and when it fires. Your class pack may switch one or two "
-            .. "on for you; nothing else can."],
-    },
-  }
-end
+-- AB4-D2: `overlayGroup()` -- the Peripheral cues page -- is gone with the node that showed it. It
+-- had been one line of signposting since AB2-D1 pointed the controls at Abilities > the ability >
+-- Screen-edge, and a signpost that outlives the people who knew the old page is just another page
+-- to read. Nothing has ever shipped, so there is nobody to lead there.
 
 -- ---------------------------------------------------------------------------------------------
 -- Import / Export (PRD F9). Chat truncates long messages, so this box is where a build string is
@@ -546,9 +538,9 @@ end
 
 -- ============================================================ Notifications (F37, D21-D29)
 -- One page, not a tab of its own (2026-09-07 Notifications pass): the whole of what used to be the
--- "Announcements" sub-page is now the content of Notifications itself. Peripheral cues and Cue
--- sounds stay exactly where they were (siblings under Notifications) until the Rotations overhaul
--- gives them a home of their own.
+-- "Announcements" sub-page is now the content of Notifications itself. AB4-D2: it has no sub-pages
+-- left either -- Peripheral cues went to the abilities that own them, and the one control the Cue
+-- sounds page still had (the mute over every ability sound) is a panel on this page.
 --
 -- PE13-D1: the Log is the LAST thing on the page, inside a panel of its own. It used to be the
 -- first, one row per message, which meant the settings below it started at a different height every
@@ -795,6 +787,23 @@ local function announceGroup()
     type = "execute", order = 67, name = L["Test Each Kind"],
     desc = L["Sends one message of every kind, through whatever you have switched on above."],
     func = function() if A then A.test() end end,
+  }
+  -- AB1-D8's master mute, AB4-D2's panel. It was a sub-PAGE of this one with a single toggle on it,
+  -- which is a click and a page-load to reach one checkbox; a page of its own is what a page with
+  -- controls on it earns. Per CHARACTER (`db.char.sounds`), like every other ability setting, and
+  -- deliberately separate from the per-category announcement sound above: this silences what the
+  -- Abilities page asks for and touches nothing on this page.
+  args.abilitySounds = {
+    type = "group", inline = true, order = 70, name = L["Ability sounds"],
+    args = {
+      enabled = {
+        type = "toggle", order = 1, width = "full", name = L["Play ability sounds"],
+        desc = L["Off silences every sound the Abilities page asks for, without changing "
+              .. "what any ability is set to."],
+        get = function() return ns.Sounds ~= nil and ns.Sounds.abilitySoundsOn() end,
+        set = function(_, v) ns.db.char.sounds.enabled = v end,
+      },
+    },
   }
   return args
 end
@@ -2143,52 +2152,21 @@ function Options.table()
       -- PE6-D3: "Action bars" was 5 of the owner's M1a 1-8 top-level order. It is now an inline
       -- panel on General; order 5 is left unused rather than renumbered, because these numbers only
       -- have to sort and shifting them would touch four unrelated pages.
-      -- M1a: 6 of 8. AB1: the controls that used to be here are per ability now -- Abilities >
-      -- All abilities > Glow sets what every ability falls back to, and any one of them can differ.
-      -- The node stays for this pass as a signpost so nobody hunts for a page that moved.
-      glow = {
-        type = "group", order = 6, name = L["Glow"],
-        args = {
-          moved = {
-            type = "description", order = 1, width = "full", fontSize = "medium",
-            name = L["Glow style, colour and the sliders live on each ability now: Abilities > "
-                  .. "All abilities > Glow sets what everything falls back to. Whether your bars "
-                  .. "glow at all is on General > Action Bars."],
-          },
-        },
-      },
+      --
+      -- AB4-D2: order 6 is unused for the same reason. That was the Glow page, which AB1 emptied
+      -- into Abilities > All abilities > Glow and left as one line of signposting; a top-level node
+      -- whose whole content is "this moved" is a page the player still has to open to learn nothing.
+      -- Whether the bars glow at all is on General > Action Bars.
+      --
       -- One heading for everything that TELLS you something, as against the sections above, which
       -- are about what the display shows. D28 (2026-09-07 Notifications pass): what used to be the
       -- "Announcements" tab is now this page's own content -- `childGroups` is gone, so there is no
-      -- longer a group control to pick it from -- while Peripheral cues and Cue sounds stay exactly
-      -- where they were (still reachable as their own nodes) until the Rotations overhaul gives
-      -- indicators a home of their own.
+      -- longer a group control to pick it from -- and since AB4-D2 there are no sub-pages under it
+      -- either.
       -- M1a: 7 of 8.
       notifications = {
         type = "group", order = 7, name = L["Notifications"],
-        args = (function()
-          local args = announceGroup()
-          args.overlay = {
-            type = "group", order = 2, name = L["Peripheral cues"],
-            args = overlayGroup(),
-          }
-          -- AB1-D8: renamed, and per CHARACTER (`db.char.sounds`) like every other ability
-          -- setting. One mute over everything the Abilities page's Sound tabs ask for; it does not
-          -- touch the per-category announcement sound above.
-          args.sounds = {
-            type = "group", order = 3, name = L["Ability sounds"],
-            args = {
-              enabled = {
-                type = "toggle", order = 1, name = L["Play ability sounds"],
-                desc = L["Off silences every sound the Abilities page asks for, without changing "
-                      .. "what any ability is set to."],
-                get = function() return ns.Sounds ~= nil and ns.Sounds.abilitySoundsOn() end,
-                set = function(_, v) ns.db.char.sounds.enabled = v end,
-              },
-            },
-          }
-          return args
-        end)(),
+        args = announceGroup(),
       },
       rotation = ns.Rotation and ns.Rotation.group() or nil,
       -- R2 (D52): directly after Rotations -- the Abilities registry (M1b: player-visible name;
@@ -2197,6 +2175,27 @@ function Options.table()
       spells = ns.SpellsPage and ns.SpellsPage.group() or nil,
     },
   }
+end
+
+-- AceDBOptions' own profile page, plus the one sentence it cannot know to say (AB4-D2).
+--
+-- Everything an ability does on screen -- its glow, its texture, its screen edge, its sounds, its
+-- announcement -- moved to `db.char` at AB1-D3, so this page's Copy From / Reset no longer reaches
+-- any of it. That is a deliberate scope change and an invisible one: a player who copies a profile
+-- to an alt and finds none of their cues followed has no way to tell that from a bug. Said here,
+-- where the copying is done, with the way to actually do it.
+--
+-- `order = -1` puts it above AceDBOptions' own rows (its lowest is the `desc` at 1), so it is read
+-- before the buttons rather than found after them.
+function Options.profilesTable(AceDBOptions)
+  local table_ = AceDBOptions:GetOptionsTable(ns.db)
+  table_.args = table_.args or {}
+  table_.args.elmiraAbilityScope = {
+    type = "description", order = -1, width = "full", fontSize = "medium",
+    name = L["Ability settings (glow, textures, screen edge, sounds, announcements) are per "
+          .. "character and do not switch with the profile -- use Abilities > Share to copy them."],
+  }
+  return table_
 end
 
 function Options.Register()
@@ -2211,7 +2210,7 @@ function Options.Register()
 
   local AceDBOptions = LibStub("AceDBOptions-3.0", true)
   if AceDBOptions and ns.db then
-    AceConfig:RegisterOptionsTable("Elmira-Profiles", AceDBOptions:GetOptionsTable(ns.db))
+    AceConfig:RegisterOptionsTable("Elmira-Profiles", Options.profilesTable(AceDBOptions))
     AceConfigDialog:AddToBlizOptions("Elmira-Profiles", L["Profiles"], "Elmira")
   end
   Options.dialog = AceConfigDialog

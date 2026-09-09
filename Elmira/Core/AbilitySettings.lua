@@ -45,8 +45,14 @@ local DEFAULTS = {
   -- events a screen edge cannot.
   --
   -- `place`/`x`/`y` are the per-texture placement (AB3-D2) and are OWN, not inherited (see below).
+  --
+  -- AB4-D1: `fill` is the progress swipe over the texture -- "none", "cooldown" (how much of the
+  -- ability's own cooldown is left) or "buff" (how much of its buff is left). It ships "none"
+  -- because a swipe over a texture that is only on screen for a second and a half is noise, and
+  -- because both of the other two are meaningless for an ability the tracker has no numbers for.
+  -- An appearance CHOICE, so it inherits like size and colour.
   texture  = { enabled = false, source = "icon", shape = "ring", path = "",
-               size = 48, color = false, alpha = 1,
+               size = 48, color = false, alpha = 1, fill = "none",
                suggested = true, active = true, ready = false, used = false, expiring = false,
                place = "row", x = 0, y = 0 },
   -- AB2-D1: `suggested` and `ready` are the two moments a screen edge can flash. `suggested` ships

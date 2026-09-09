@@ -236,6 +236,19 @@ local function mergedSpells(pack)
   return (ns.Spells and ns.Spells.merged and ns.Spells.merged(pack)) or (pack and pack.spells) or {}
 end
 
+-- Display.spellID(key) -> the client's spell id for an ability key, or nil
+--
+-- AB4-D4, and the fourth widening of this same merge. `Display/Queue` (the strip's tooltip) and
+-- `Display/BarGlow` (which bar button holds this spell) each kept their own `spellIDFor`, and both
+-- read `pack and pack.spells` alone -- so on a class with no shipped pack, a spell the player added
+-- from their own spellbook had a perfectly good id in the registry and still got no tooltip and no
+-- glow. That is the standing rule for this whole pass: no pack is a NORMAL state. One lookup now,
+-- beside `spellIcon` and `spellName`, so the three cannot drift again.
+function Display.spellID(key)
+  local data = mergedSpells(Display.currentPack())[key]
+  return data and data.id or nil
+end
+
 -- Presentation, so it lives here rather than on the State contract: nothing in the rotation depends
 -- on what a spell looks like. Display/Queue draws its icons through this too -- two copies of the
 -- same lookup is one that can go stale.

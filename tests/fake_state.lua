@@ -40,8 +40,24 @@ function FakeState:usable(key)
 end
 function FakeState:known(key) return self.knownSet == nil or self.knownSet[key] ~= false end
 function FakeState:castTime(key) return self.castTimes[key] or 0 end
-function FakeState:buff(key) local b = self.buffs[key]; if b then return b.stacks or 1, b.remaining or 10 end end
-function FakeState:debuff(key, mine) local d = self.debuffs[key]; if d and (not mine or d.mine) then return d.stacks or 1, d.remaining or 10 end end
+-- Three returns, like Adapters/Vanilla's own `findAura`: stacks, seconds LEFT, and how long the
+-- aura lasts in total. The third was missing here while the adapter has always returned it, so
+-- anything reading it (Display's "used -- 10s", AB4-D1's buff-remaining fill) saw nil in every
+-- headless test and a real number in game -- the shape of drift this file exists to prevent.
+-- `duration` defaults to whatever is left, so an unstated scenario reads as "it has just been cast".
+function FakeState:buff(key)
+  local b = self.buffs[key]
+  if not b then return nil end
+  local remaining = b.remaining or 10
+  return b.stacks or 1, remaining, b.duration or remaining
+end
+-- Three returns, matching `buff` above and Adapters/Vanilla's one `findAura` behind both.
+function FakeState:debuff(key, mine)
+  local d = self.debuffs[key]
+  if not (d and (not mine or d.mine)) then return nil end
+  local remaining = d.remaining or 10
+  return d.stacks or 1, remaining, d.duration or remaining
+end
 function FakeState:power(kind) local p = self.powers[kind] or {0,0}; return p[1], p[2] end
 function FakeState:targetType() return self._targetType end
 function FakeState:targetHPPct() return self._targetHp or 100 end  -- `targetHp = 15` puts the target in execute range

@@ -49,11 +49,13 @@ local BLIZZ_BARS = {
   "MultiBar5Button", "MultiBar6Button", "MultiBar7Button",
 }
 
+-- AB4-D4: through Display's one merged-registry lookup, not `pack.spells` alone. This used to read
+-- the class pack's table only, so a mage with no shipped pack could add Frostbolt from the
+-- spellbook, put it in a rotation, and have the bar glow silently match nothing -- the id was right
+-- there in the registry and this never looked at it.
 local function spellIDFor(key)
   if type(key) ~= "string" then return nil end
-  local pack = ns.Display and ns.Display.currentPack()
-  local data = pack and pack.spells and pack.spells[key]
-  return data and data.id or nil
+  return ns.Display and ns.Display.spellID and ns.Display.spellID(key) or nil
 end
 
 -- Resolves whatever sits in an action slot to a spell ID. Macros are the interesting case: a

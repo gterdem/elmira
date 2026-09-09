@@ -120,6 +120,43 @@ describe("Core.Track", function()
     end)
   end)
 
+  -- AB4-D1. The progress fill on an indicator texture is drawn from a START and a LENGTH, and every
+  -- number behind it was already being read here to decide `ready`, `active` and `expiring`. What
+  -- these prove is that the memory row REPORTS them -- a fill computed from a second pass over the
+  -- same abilities would be the same 10 Hz scan twice.
+  describe("the numbers behind the booleans", function()
+    it("reports how much cooldown is left and how long the whole cooldown is", function()
+      local st = state{ cooldowns = { EXORCISM = 4 }, baseCooldown = { EXORCISM = 6 } }
+      local _, memory = Track.tick(st, { { key = "EXORCISM" } })
+      assert.equal(4, memory.EXORCISM.cooldown)
+      assert.equal(6, memory.EXORCISM.cooldownFull)
+    end)
+
+    -- `baseCooldown` is observe-and-cache (docs/07 SS9.1: GetSpellBaseCooldown lies on this client),
+    -- so off cooldown it answers with whatever was last seen -- which is not a fact about now, and
+    -- would draw a full swipe over an ability that is ready to press.
+    it("reports no cooldown length at all while the ability is off cooldown", function()
+      local st = state{ cooldowns = { EXORCISM = 0 }, baseCooldown = { EXORCISM = 6 } }
+      local _, memory = Track.tick(st, { { key = "EXORCISM" } })
+      assert.equal(0, memory.EXORCISM.cooldown)
+      assert.is_nil(memory.EXORCISM.cooldownFull)
+    end)
+
+    it("reports how much of the buff is left and how long it lasts", function()
+      local st = state{ buffs = { WRATH = { remaining = 7, duration = 20 } }, usable = { WRATH = false } }
+      local _, memory = Track.tick(st, { { key = "WRATH" } })
+      assert.equal(7, memory.WRATH.remaining)
+      assert.equal(20, memory.WRATH.duration)
+    end)
+
+    it("reports no buff numbers for an ability whose buff is not up", function()
+      local _, memory = Track.tick(state{ usable = { WRATH = false } }, { { key = "WRATH" } })
+      assert.is_false(memory.WRATH.active)
+      assert.is_nil(memory.WRATH.remaining)
+      assert.is_nil(memory.WRATH.duration)
+    end)
+  end)
+
   describe("what it does not do", function()
     it("reports nothing at all for an ability nobody asked it to watch", function()
       local events, prev = Track.tick(state{ cooldowns = {} }, {})

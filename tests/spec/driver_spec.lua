@@ -407,6 +407,21 @@ describe("Display.Driver", function()
       assert.is_nil(Display.spellIcon("DIVINE_STORM"), "the pack's own keys are gone with the pack")
     end)
 
+    -- AB4-D4: the id itself, the third sibling of `spellIcon` and `spellName`. Display/Queue's
+    -- tooltip and Display/BarGlow's button match each kept their own copy of this lookup and both
+    -- read `pack.spells` alone, so on a class with no shipped data -- every class but paladin -- an
+    -- ability the player added from their spellbook had no tooltip and no glow.
+    it("resolves a spell id from the merged registry, with and without a pack", function()
+      helper.load("Elmira/Core/Spells.lua")
+      ns.db = { char = { spells = { SLICE = { key = "SLICE", id = 900, name = "Slice and Dice" } } } }
+      assert.equal(900, Display.spellID("SLICE"))
+      assert.is_not_nil(Display.spellID("DIVINE_STORM"), "the pack's own spells must still resolve")
+      ns.Display.currentPack = function() return nil end
+      assert.equal(900, Display.spellID("SLICE"))
+      assert.is_nil(Display.spellID("DIVINE_STORM"), "the pack's own keys are gone with the pack")
+      assert.is_nil(Display.spellID("NOT_A_SPELL"))
+    end)
+
     -- I1c: the spellbook picker (Options/Spells.lua) has no registry key for an entry that has not
     -- been added yet, only the raw spell id `spellbookEntries()` carries -- this is that lookup.
     it("resolves an icon by raw spell id, for a spell not yet in any registry", function()

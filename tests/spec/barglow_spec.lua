@@ -6,9 +6,13 @@ local mock = require("tests.wow_mock")
 --
 -- Uses tests/wow_mock.lua for the Blizzard-scan globals (GetActionInfo, GetMacroSpell,
 -- RANGE_INDICATOR) and the real Elmira/Core/API.lua for provider registration/priority ordering,
--- rather than reimplementing either. `ns.Display.currentPack()` is stubbed directly: BarGlow only
--- ever reads `pack.spells[key].id`, so nothing is gained by routing through the real Driver/compile
--- chain to get there.
+-- rather than reimplementing either.
+--
+-- AB4-D4: the REAL Display/Driver.lua and Core/Spells.lua sit underneath, with only
+-- `currentPack()` stubbed. BarGlow used to read `pack.spells[key].id` itself, and stubbing that one
+-- table was enough; it now asks `Display.spellID`, which merges this character's own registry under
+-- the pack -- and the whole point of the change is the case where there IS no pack, which a stub
+-- shaped like a pack could never show.
 
 describe("Display.BarGlow", function()
   local BarGlow, API, ns
@@ -19,14 +23,25 @@ describe("Display.BarGlow", function()
     blizzNames[#blizzNames + 1] = name
   end
 
+  -- The class pack, or nil for a class that ships none -- a normal state, not an error.
+  local currentPack
   local function setPack(spells)
-    ns.Display = { currentPack = function() return { spells = spells } end }
+    currentPack = spells and { spells = spells } or nil
+  end
+
+  -- What THIS character added from their own spellbook (Core/Spells' per-character registry).
+  local function register(key, id)
+    ns.db.char.spells[key] = { key = key, id = id, name = key, source = "spellbook" }
   end
 
   before_each(function()
     mock.reset()
     ns = helper.reset()
     API = helper.load("Elmira/Core/API.lua")
+    ns.db = { char = { spells = {} } }
+    helper.load("Elmira/Core/Spells.lua")
+    helper.load("Elmira/Display/Driver.lua")
+    ns.Display.currentPack = function() return currentPack end
     BarGlow = helper.load("Elmira/Display/BarGlow.lua")
     blizzNames = {}
     setPack{ EXORCISM = { id = 415073 } }
@@ -53,6 +68,21 @@ describe("Display.BarGlow", function()
       local ok, buttons = pcall(BarGlow.buttonsFor, nil)
       assert.is_true(ok)
       assert.same({}, buttons)
+    end)
+
+    -- AB4-D4, and the standing rule of the whole Abilities redesign: a class with no shipped pack
+    -- is a NORMAL state. This lookup read `pack.spells` alone, so a player on such a class could
+    -- register an ability from their own spellbook, put it in a rotation, and watch the bar glow
+    -- match nothing at all -- the id was in the registry the whole time.
+    it("glows a registry-only ability on a class with no pack at all", function()
+      setPack(nil)
+      register("REGISTERED_SPELL", 990001)
+      mock.actionInfo[3] = { "spell", 990001 }
+      setButton("ActionButton3", { action = 3 })
+      BarGlow.Invalidate()
+      local buttons = BarGlow.buttonsFor("REGISTERED_SPELL")
+      assert.equal(1, #buttons)
+      assert.equal(_G.ActionButton3, buttons[1])
     end)
   end)
 
@@ -448,8 +478,12 @@ describe("BarGlow Blizzard scan", function()
     helper2.reset()
     mock2.reset()
     local ns2 = _G.__ELM_NS
+    -- AB4-D4: the real merged lookup underneath, with only the pack stubbed.
+    ns2.db = { char = { spells = {} } }
+    helper2.load("Elmira/Core/Spells.lua")
+    helper2.load("Elmira/Display/Driver.lua")
     BarGlow2 = helper2.load("Elmira/Display/BarGlow.lua")
-    ns2.Display = { currentPack = function() return { spells = { EXORCISM = { id = 415073 } } } end }
+    ns2.Display.currentPack = function() return { spells = { EXORCISM = { id = 415073 } } } end
     return BarGlow2
   end
 
@@ -601,9 +635,16 @@ describe("BarGlow.check", function()
     mock3.reset()
     ns3 = _G.__ELM_NS
     helper3.load("Elmira/Core/API.lua")
+    ns3.db = { profile = { glow = { barGlow = opts.barGlow ~= false } }, char = { spells = {} } }
+    -- AB4-D4: the real merged lookup underneath, with only the pack stubbed.
+    helper3.load("Elmira/Core/Spells.lua")
+    helper3.load("Elmira/Display/Driver.lua")
     BarGlow3 = helper3.load("Elmira/Display/BarGlow.lua")
-    ns3.Display = { currentPack = function() return { spells = { EXORCISM = { id = 415073 } } } end }
-    ns3.db = { profile = { glow = { barGlow = opts.barGlow ~= false } } }
+    ns3.Display.currentPack = function() return { spells = { EXORCISM = { id = 415073 } } } end
+    -- The real one reads Core/Visibility and the live state, which is a different chain from the
+    -- one this block is about. Answering "showing" is the case that adds no row, so the stage list
+    -- reads exactly as it did before the Driver was loaded underneath.
+    ns3.Display.shouldShow = function() return true, "showing" end
     return BarGlow3
   end
 

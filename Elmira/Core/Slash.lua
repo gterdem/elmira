@@ -103,9 +103,18 @@ end
 -- every other part of the addon speaks keys (hard rule 4). Two keys can share one id (RUNE_* mirrors
 -- its ability), so collisions resolve deterministically: the non-RUNE_ name wins, then the
 -- lexicographically smaller one. Left to pairs() order this map would differ between reloads.
+--
+-- AB4 review: over the MERGED registry, not `pack.spells` alone -- the same widening AB4-D4 made to
+-- the three forward lookups, and this is the reverse one. A pack is optional here for the reason it
+-- is optional everywhere else in this redesign: a class Elmira ships no data for is a normal state,
+-- and casting an ability such a player registered from their own spellbook has to resolve to its
+-- key or "you pressed it" is simply lost -- the queue strip cannot tell the cast from the rotation
+-- changing its mind, and the recorder writes the row without a key.
 function ns.spellKeyByID(pack)
   local map = {}
-  for key, data in pairs(pack and pack.spells or {}) do
+  local spells = (ns.Spells and ns.Spells.merged and ns.Spells.merged(pack))
+    or (pack and pack.spells) or {}
+  for key, data in pairs(spells) do
     if type(data) == "table" and data.id then
       local held = map[data.id]
       if held == nil then
@@ -555,8 +564,14 @@ Slash.register{
         lines[#lines + 1] = "no ability has a texture switched on"
       end
       for _, t in ipairs(d.textures) do
-        lines[#lines + 1] = string.format("%s  source=%s size=%d position=%s", t.key,
-          tostring(t.source), t.size, tostring(t.place))
+        lines[#lines + 1] = string.format("%s  source=%s size=%d position=%s fill=%s", t.key,
+          tostring(t.source), t.size, tostring(t.place), tostring(t.fill))
+        -- AB4-D1. "Fill with: cooldown recovering" on an ability the client has never seen a
+        -- cooldown for draws nothing at all, and a texture with no swipe on it is indistinguishable
+        -- from one whose fill was never picked.
+        if t.fill ~= "none" and t.visible and not t.filling then
+          lines[#lines + 1] = "   fill set, but nothing to measure right now — no cooldown or buff running"
+        end
         if not t.enabled then
           lines[#lines + 1] = "   off — switch it on in /elm config → Abilities → Texture"
         elseif #t.events == 0 then
@@ -1033,13 +1048,22 @@ Slash.register{
     local str, name = (rest or ""):match("^%s*(ELM1:%S+)%s*(.-)%s*$")
     if not str then return { "Usage: /elm import <ELM1:...> [name]" } end
     if not ns.UserBuilds then return { "import: builds module is not loaded" } end
-    local key, err = ns.UserBuilds.importString(str, pack, {
+    -- The second return is the failure reason when the first is nil, and on success the number of
+    -- ability settings that travelled with the rotation (AB2-D5).
+    local key, extra = ns.UserBuilds.importString(str, pack, {
       name = (name ~= "" and name) or nil,
       today = ns.Adapter and ns.Adapter.today and ns.Adapter.today() or nil,
     })
-    if not key then return { "import: " .. tostring(err) } end
+    if not key then return { "import: " .. tostring(extra) } end
     if ns.Display then ns.Display.refresh() end
-    return { string.format("Imported as %s. /elm profile %s to use it.", key, key) }
+    local line = string.format("Imported as %s. /elm profile %s to use it.", key, key)
+    -- AB4-D5: said out loud here as well as in the window. Settings that arrived silently and
+    -- overwrote a glow colour are the worst possible surprise, and settings that did NOT arrive
+    -- look exactly the same from the chat frame.
+    if type(extra) == "number" and extra > 0 then
+      line = line .. string.format(" Also merged the settings of %d abilities.", extra)
+    end
+    return { line }
   end,
 }
 Slash.register{

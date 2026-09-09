@@ -99,18 +99,15 @@ describe("Display.Queue", function()
     end })
   end
 
+  -- The REAL Display/Driver.lua underneath (AB4-D4), with only `currentPack` and `activeBuild`
+  -- replaced. The strip draws its icons and its tooltip through the Driver's merged-registry
+  -- lookups, and those merge THIS CHARACTER'S own registry under the pack -- so a stub shaped like
+  -- a pack could never show the case the change is about: no pack at all.
   local pack
   local function stubBuild(entries)
     pack = { spells = { EXORCISM = { id = 415073 }, JUDGEMENT = { id = 20271 } } }
-    ns.Display = {
-      currentPack = function() return pack end,
-      activeBuild = function() return { entries = entries or {} }, "PALADIN_EXODIN", "pinned" end,
-      -- The strip draws its icons through the Driver's one lookup, so the stub has to answer it.
-      spellIcon = function(key)
-        local data = pack.spells[key]
-        return data and data.id and _G.GetSpellTexture and _G.GetSpellTexture(data.id) or nil
-      end,
-    }
+    ns.Display.currentPack = function() return pack end
+    ns.Display.activeBuild = function() return { entries = entries or {} }, "PALADIN_EXODIN", "pinned" end
   end
 
   before_each(function()
@@ -137,8 +134,10 @@ describe("Display.Queue", function()
     helper.load("Elmira/Core/DB.lua")
     helper.load("Elmira/Core/Transition.lua")
     helper.load("Elmira/Core/Slash.lua")
+    helper.load("Elmira/Core/Spells.lua")
+    helper.load("Elmira/Display/Driver.lua")
     Queue = helper.load("Elmira/Display/Queue.lua")
-    ns.db = { profile = {
+    ns.db = { char = { spells = {} }, profile = {
       enabled = true, depth = 3, scale = 1.0, locked = true, learning = false,
       showQueue = true, animate = true,
       -- Every test in this file is about a rotation that IS running; D38's placeholder (own
@@ -317,6 +316,29 @@ describe("Display.Queue", function()
         entry = { conditions = { { label = "seal: Seal of Martyrdom", test = function() return true end } } },
       }
       assert.truthy(text:find("seal: Seal of Martyrdom", 1, true))
+    end)
+
+    -- The spell's OWN tooltip is the first thing the hover shows, and it needs the id. Nothing
+    -- asserted it before AB4-D4, which is how the lookup behind it sat on `pack.spells` alone.
+    it("opens the client's own tooltip for the spell, by id", function()
+      hover{ spell = "EXORCISM", entry = { conditions = {} } }
+      assert.equal(415073, tooltip.subject)
+    end)
+
+    -- AB4-D4. With no shipped pack -- every class but paladin, the standing rule of this redesign
+    -- -- the strip used to fall back to printing the raw key at the top of the tooltip for an
+    -- ability the player had added from their own spellbook.
+    it("opens it for a registry-only ability on a class with no pack at all", function()
+      ns.db.char.spells.REGISTERED_SPELL =
+        { key = "REGISTERED_SPELL", id = 990001, name = "Registered Spell" }
+      ns.Display.currentPack = function() return nil end
+      hover{ spell = "REGISTERED_SPELL", entry = { conditions = {} } }
+      assert.equal(990001, tooltip.subject)
+    end)
+
+    it("falls back to the bare key for a slot with no id anywhere", function()
+      hover{ spell = "NOT_A_SPELL", entry = { conditions = {} } }
+      assert.equal("NOT_A_SPELL", tooltip.subject)
     end)
 
     it("does nothing at all for an empty slot", function()
@@ -1120,6 +1142,58 @@ describe("Display.Queue", function()
       Queue.Create()
       ns.Display.currentPack = function() return nil end
       assert.is_false(Queue.noteCast(415073))
+    end)
+
+    -- AB4 review: the fourth lookup of the shape AB4-D4 fixed. This gave up before doing anything
+    -- when there was no class pack, so on such a class a cast of an ability the player registered
+    -- from their own spellbook resolved to nothing -- the strip could not tell "you pressed it"
+    -- from "the rotation changed its mind", and Display.noteCast never fired its `used` cue.
+    it("recognises a cast of a registry-only ability with no pack at all", function()
+      Queue.Create()
+      ns.db.char.spells.REGISTERED_SPELL =
+        { key = "REGISTERED_SPELL", id = 990001, name = "Registered Spell" }
+      ns.Display.currentPack = function() return nil end
+      assert.equal("REGISTERED_SPELL", Queue.keyForSpellID(990001))
+      assert.is_true(Queue.noteCast(990001))
+    end)
+
+    -- ...and by NAME too, which is the whole reason this index exists: Classic gives every rank its
+    -- own id, so the id a cast reports is usually not the one the registry holds.
+    it("matches another rank of a registry-only ability by name", function()
+      Queue.Create()
+      ns.db.char.spells.REGISTERED_SPELL =
+        { key = "REGISTERED_SPELL", id = 990001, name = "Registered Spell" }
+      ns.Display.currentPack = function() return nil end
+      _G.GetSpellInfo = function(id)
+        if id == 990001 or id == 990002 then return "Registered Spell" end
+        return "Spell " .. tostring(id)
+      end
+      assert.equal("REGISTERED_SPELL", Queue.keyForSpellID(990002))
+    end)
+
+    -- No id, no work. Without this guard a nil id walks the whole registry asking the client for a
+    -- name for each entry -- a full map rebuild, on every call, to answer a question that has no
+    -- answer. It is cheap to get wrong because the RESULT is the same either way.
+    it("costs nothing at all when there is no id to look up", function()
+      Queue.Create()
+      ns.db.char.spells.REGISTERED_SPELL =
+        { key = "REGISTERED_SPELL", id = 990001, name = "Registered Spell" }
+      local lookups = 0
+      _G.GetSpellInfo = function(id) lookups = lookups + 1; return "Spell " .. tostring(id) end
+      assert.is_nil(Queue.keyForSpellID(nil))
+      assert.equal(0, lookups, "a nil id rebuilt the whole name index")
+      Queue.keyForSpellID(990001)
+      assert.is_true(lookups > 0, "...and a real id still builds it")
+    end)
+
+    -- A spell added mid-session must not wait for a reload to be recognised: the map is rebuilt
+    -- when the registry gains or loses an entry, not only when the class pack changes.
+    it("picks up an ability registered after the map was first built", function()
+      Queue.Create()
+      assert.is_false(Queue.noteCast(990001))
+      ns.db.char.spells.REGISTERED_SPELL =
+        { key = "REGISTERED_SPELL", id = 990001, name = "Registered Spell" }
+      assert.equal("REGISTERED_SPELL", Queue.keyForSpellID(990001))
     end)
 
     it("builds the name index once, not on every cast", function()

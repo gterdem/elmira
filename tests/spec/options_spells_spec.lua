@@ -476,6 +476,19 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(SpellsPage.matches({ key = "EXORCISM", name = "Exorcism" }))
     end)
 
+    -- AB4 review: both rows write through `SpellsPage.setFilter`, so there is ONE write path and the
+    -- predicate the specs drive is the one the panel produces. The trap in routing them through a
+    -- two-argument setter is forgetting to pass the other half -- which silently resets a dropdown
+    -- the player set two seconds ago.
+    it("changing one half of the filter leaves the other alone", function()
+      local args = listArgs().filter.args
+      args.show.set(nil, "edge")
+      args.name.set(nil, "exor")
+      assert.equal("edge", listArgs().filter.args.show.get(), "typing a name cleared the Show pick")
+      listArgs().filter.args.show.set(nil, "sound")
+      assert.equal("exor", listArgs().filter.args.name.get(), "picking a Show cleared the name")
+    end)
+
     it("shows everything when the settings store is not loaded", function()
       SpellsPage.setFilter("", "sound")
       ns.AbilitySettings = nil
@@ -1219,6 +1232,47 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_truthy(args.used.desc:find("second and a half", 1, true))
       args.ready.set(nil, true)
       assert.is_true(A.effective("EXORCISM", "texture").ready)
+    end)
+
+    -- AB4-D1, the owner's "growing textures".
+    it("offers the three fills between the appearance controls and the moments", function()
+      unlink()
+      local row = tab("EXORCISM", "texture").fill
+      assert.equal("select", row.type)
+      assert.equal(9.5, row.order, "the fill is how it is drawn, not another moment to appear at")
+      assert.equal("Fill with", row.name)
+      assert.same({ "none", "cooldown", "buff" }, row.sorting)
+      assert.equal("Nothing", row.values.none)
+      assert.equal("How much cooldown is left", row.values.cooldown)
+      assert.equal("How much of its buff is left", row.values.buff)
+      assert.equal("none", row.get())
+      row.set(nil, "cooldown")
+      assert.equal("cooldown", A.effective("EXORCISM", "texture").fill)
+      assert.equal("cooldown", tab("EXORCISM", "texture").fill.get())
+    end)
+
+    -- The threshold for "about to run out" is the General tab's, not a second one here (AB4-D1),
+    -- and the tooltip has to say so or the player goes looking for it on this tab.
+    it("sends the player to the General tab for the about-to-run-out moment", function()
+      local row = tab("EXORCISM", "texture").fill
+      assert.is_truthy(row.desc:find("General tab", 1, true))
+      assert.is_truthy(row.desc:find("no cooldown or buff running", 1, true))
+      -- ...and which way round each of the two goes, because the buff one is the surprising one:
+      -- what is LIT is what is left, so the shape shrinks as the buff runs out.
+      assert.is_truthy(row.desc:find("drains the other way", 1, true))
+    end)
+
+    it("greys the fill with the rest of the appearance while the ability is linked", function()
+      assert.is_true(tab("EXORCISM", "texture").fill.disabled())
+      tab("EXORCISM", "texture").inherit.set(nil, false)
+      assert.is_false(tab("EXORCISM", "texture").fill.disabled())
+    end)
+
+    -- The page has to build before Display/Textures exists (the panel can be opened at any time,
+    -- and the renderer is what owns the list of fills).
+    it("still answers a fill with no renderer loaded", function()
+      ns.Textures = nil
+      assert.equal("none", tab("EXORCISM", "texture").fill.get())
     end)
 
     it("greys the appearance while the ability is linked, but never the on switch", function()

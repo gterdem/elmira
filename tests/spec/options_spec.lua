@@ -540,13 +540,15 @@ describe("Options (the settings pages)", function()
     end)
 
     -- AB1-D8: renamed "Ability sounds", and stored per CHARACTER like everything else an ability
-    -- can be set to do.
+    -- can be set to do. AB4-D2: an inline panel on Notifications rather than a sub-page of it --
+    -- one checkbox does not earn a node in the tree.
     it("offers the ability-sound mute, reading and writing db.char", function()
       helper.load("Elmira/Display/Sounds.lua")
-      local sounds = Options.table().args.notifications.args.sounds
+      local sounds = Options.table().args.notifications.args.abilitySounds
       local row = sounds.args.enabled
       assert.equal("toggle", row.type)
       assert.equal(1, row.order)
+      assert.is_true(sounds.inline)
       assert.equal("Ability sounds", sounds.name)
       assert.equal("Play ability sounds", row.name)
       assert.is_truthy(row.desc)
@@ -1532,27 +1534,78 @@ describe("Options (the settings pages)", function()
     end)
   end)
 
-  -- AB2-D1: the Peripheral cues page is gone. A screen flash belongs to an ability now
-  -- (Abilities > the ability > Screen-edge), and the per-cue toggles/colour/edge/intensity controls
-  -- that used to live here -- with the whole `Overlay.SetEnabled`/`SetOption`/`GetOption` surface
-  -- they drove -- went with them. What is left is a signpost, so someone who knew the page finds
-  -- where it went instead of a page that is silently missing; AB4 removes the node itself.
-  describe("Peripheral cues (AB2-D1: moved to the ability)", function()
-    it("is one line saying where the controls went, with no cue rows of its own", function()
-      local args = Options.table().args.notifications.args.overlay.args
-      local keys = {}
-      for key in pairs(args) do keys[#keys + 1] = key end
-      assert.same({ "moved" }, keys)
-      assert.equal("description", args.moved.type)
-      assert.truthy(args.moved.name:find("Screen-edge", 1, true))
-      assert.truthy(args.moved.name:find("Abilities", 1, true))
-      -- ...and says what the page over there actually does, including the one thing a class pack is
-      -- allowed to do (AB2-D3), so the signpost answers the question rather than just pointing.
-      assert.truthy(args.moved.name:find("picks the edge, the colour and when it fires", 1, true))
-      assert.truthy(args.moved.name:find("class pack", 1, true))
+  -- AB4-D2. Everything an ability does on screen moved to `db.char` at AB1-D3, so this page's
+  -- Copy From and Reset no longer reach any of it. That is a deliberate scope change and an
+  -- invisible one: a player who copies a profile to an alt and finds none of their cues followed
+  -- has no way to tell that from a bug.
+  describe("the Profiles page says what a profile no longer carries", function()
+    local function profilesTable()
+      return Options.profilesTable({ GetOptionsTable = function()
+        return { type = "group", name = "Profiles", args = { desc = { type = "description", order = 1 } } }
+      end })
+    end
+
+    it("adds one line naming every per-character channel and where to copy them", function()
+      local row = profilesTable().args.elmiraAbilityScope
+      assert.equal("description", row.type)
+      assert.is_true(row.order < 1, "the note has to be read before the Copy From button, not after")
+      for _, word in ipairs({ "glow", "textures", "screen edge", "sounds", "announcements",
+                             "per character", "Abilities > Share" }) do
+        assert.truthy(row.name:find(word, 1, true), "the note never mentions " .. word)
+      end
     end)
 
-    -- The whole point of the rewrite: nothing on this page reads the profile-scoped cue store or
+    it("keeps AceDBOptions' own rows, rather than replacing the page", function()
+      local args = profilesTable().args
+      assert.is_not_nil(args.desc, "the library's own page was thrown away")
+      assert.equal("Profiles", profilesTable().name)
+    end)
+
+    it("adds the note to a library table that arrives with no args at all", function()
+      local bare = Options.profilesTable({ GetOptionsTable = function()
+        return { type = "group", name = "Profiles" }
+      end })
+      assert.is_not_nil(bare.args.elmiraAbilityScope)
+    end)
+
+    -- The call SITE, not just the function: this project's characteristic defect is a covered
+    -- function nothing reaches, and `Options.Register` had no test at all before this. LibStub is
+    -- faked rather than loaded, so what is asserted is the table AceConfig was actually handed.
+    it("registers the annotated table, not AceDBOptions' own, when the panel is built", function()
+      local registered = {}
+      local realLibStub = _G.LibStub
+      _G.LibStub = function(name)
+        if name == "AceConfig-3.0" then
+          return { RegisterOptionsTable = function(_, app, tbl) registered[app] = tbl end }
+        elseif name == "AceConfigDialog-3.0" then
+          return { AddToBlizOptions = function() return { frame = true } end }
+        elseif name == "AceDBOptions-3.0" then
+          return { GetOptionsTable = function() return { type = "group", args = {} } end }
+        end
+      end
+      ns.db.profile.announce = { routes = {}, screen = {}, sounds = {} }
+      local ok = Options.Register()
+      _G.LibStub = realLibStub
+      assert.is_true(ok)
+      assert.is_not_nil(registered["Elmira"], "the main options table was never registered")
+      assert.is_not_nil(registered["Elmira-Profiles"].args.elmiraAbilityScope,
+        "the Profiles page went in without the note")
+    end)
+  end)
+
+  -- AB2-D1 moved the screen flash onto the ability that owns it and left this page as a signpost.
+  -- AB4-D2 removes the node: nothing has ever shipped, so there is nobody who knew the old page to
+  -- lead anywhere, and the signpost was the last thing on the Notifications page that could send
+  -- someone looking for cue settings anywhere but Abilities.
+  describe("Peripheral cues (AB4-D2: the page is gone)", function()
+    it("has no node under Notifications and no group anywhere in the table", function()
+      assert.is_nil(Options.table().args.notifications.args.overlay)
+      for key, arg in pairs(Options.table().args) do
+        assert.is_nil(arg.args and arg.args.overlay, "a Peripheral cues node survives under " .. key)
+      end
+    end)
+
+    -- The whole point of the rewrite: nothing on these pages reads the profile-scoped cue store or
     -- calls into Overlay any more, so a build that suggests nothing and a build that suggests three
     -- render identically.
     it("does not touch ns.Overlay at all", function()

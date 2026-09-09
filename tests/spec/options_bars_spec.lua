@@ -20,8 +20,20 @@ describe("Options (action bars)", function()
     helper.load("Elmira/Core/Colors.lua")
     -- AB1-D3: the appearance half of `profile.glow` moved onto each ability; `barGlow` and the
     -- next-cast pair are what this panel still owns.
-    ns.db = { profile = { glow = { barGlow = true, secondary = false } }, char = { abilities = {} } }
-    ns.Display = { refresh = function() end, computeQueue = function() return { { spell = "EXORCISM" } } end }
+    ns.db = { profile = { glow = { barGlow = true, secondary = false } },
+              char = { abilities = {}, spells = {} } }
+    -- AB4-D4: the REAL Display/Driver.lua underneath, not a stub table. The per-spell check names
+    -- each ability through `Display.spellName`, which merges this character's own registry under
+    -- the class pack -- and a stub that answered that call itself would be testing the stub. Only
+    -- the two entry points these tests drive are replaced.
+    helper.load("Elmira/Core/Spells.lua")
+    helper.load("Elmira/Display/Driver.lua")
+    ns.Display.refresh = function() end
+    ns.Display.computeQueue = function() return { { spell = "EXORCISM" } } end
+    -- No build, exactly as before: resolving one for real needs Core/Profiles and a pack with
+    -- builds in it, which is a different chain from the one this file is about. The tests that
+    -- want a build say so themselves.
+    ns.Display.activeBuild = function() return nil end
     -- `styleFor` is per ability now (AB1-D7): the preview asks Glow which style THIS spell draws
     -- in rather than reading one style out of the profile.
     ns.Glow = { STYLES = { PIXEL = {}, BUTTON = {}, AUTOCAST = {} }, StopAll = function() end,
@@ -208,11 +220,11 @@ describe("Options (action bars)", function()
   end)
 
   -- The panel's running order is a design decision, not an accident: General (the addon itself and
-  -- the window you are standing in), Rotations, Abilities, Queue (what you see), Action Bars (where
-  -- it points), Glow (how it looks), then the optional extras. M1a (2026-09-07 menu-order pass) put
-  -- these into the owner's explicit 1-8 order (Abilities, the 8th being Profiles, is not this
-  -- table's concern -- see Options/Spells.lua and the M1 report for why). Two groups sharing an
-  -- `order` renders them in pairs() order, which differs between openings.
+  -- the window you are standing in), Rotations, Abilities, Queue (what you see), then the optional
+  -- extras. M1a (2026-09-07 menu-order pass) put these into the owner's explicit 1-8 order
+  -- (Abilities, the 8th being Profiles, is not this table's concern -- see Options/Spells.lua and
+  -- the M1 report for why). Two groups sharing an `order` renders them in pairs() order, which
+  -- differs between openings.
   it("orders the settings groups, each exactly once", function()
     local seen, orders = {}, {}
     for key, g in pairs(Options.table().args) do
@@ -228,27 +240,31 @@ describe("Options (action bars)", function()
     -- rather than sitting at the bottom where Import/Export used to be.
     assert.equal("rotation", seen[orders[2]])
     assert.equal("queue", seen[orders[3]])
-    -- PE6-D3: "Action bars" is gone from the tree entirely -- it is an inline panel on General now,
-    -- so Glow follows Queue directly and nothing navigates to a node that no longer exists.
-    assert.equal("glow", seen[orders[4]])
-    -- Everything that TELLS you something lives under one heading (ADR-0015 F37), rather than as
-    -- three more peers of "Queue": announcements, flares and cue sounds are one question.
-    assert.equal("notifications", seen[orders[5]])
+    -- PE6-D3: "Action bars" is gone from the tree entirely -- it is an inline panel on General now.
+    -- AB4-D2: so is "Glow", whose controls became per-ability at AB1 and whose node had been one
+    -- line of signposting ever since. Notifications follows Queue directly, and nothing navigates
+    -- to either of the two nodes that no longer exist.
+    assert.is_nil(Options.table().args.glow)
+    assert.equal("notifications", seen[orders[4]])
   end)
 
   -- D28 (2026-09-07 Notifications pass): Notifications is a single page now -- what used to be the
   -- "Announcements" sub-group is inlined directly into this group's own args, so there is no
-  -- `childGroups` left to pick it from. Peripheral cues and Cue sounds stay exactly where they were
-  -- (still reachable as their own nodes) until the Rotations overhaul gives indicators a home.
-  it("has no group control of its own -- Announcements is inlined, cues and sounds stay put", function()
+  -- `childGroups` left to pick it from. AB4-D2: it has no sub-PAGES left either. Peripheral cues
+  -- went with the controls it was pointing at, and the mute that was the whole of the Cue sounds
+  -- page is an inline panel here -- a page whose only content is one checkbox is a click and a
+  -- page-load to reach one checkbox.
+  it("has no group control and no sub-pages -- everything is inline on the page itself", function()
     local notifications = Options.table().args.notifications
     assert.is_nil(notifications.childGroups)
     assert.is_nil(notifications.args.announce)
-    local overlay, sounds = notifications.args.overlay, notifications.args.sounds
-    assert.equal("group", overlay.type)
-    assert.equal(2, overlay.order)
-    assert.equal("group", sounds.type)
-    assert.equal(3, sounds.order)
+    assert.is_nil(notifications.args.overlay)
+    assert.is_nil(notifications.args.sounds)
+    for key, arg in pairs(notifications.args) do
+      if arg.type == "group" then
+        assert.is_true(arg.inline == true, key .. " is a sub-page of Notifications")
+      end
+    end
     -- And the inlined content is really there, not merely absent from the old wrapper. PE13-D1:
     -- the log is a panel of its own at the bottom of the page rather than loose rows at the top.
     assert.is_not_nil(notifications.args.intro)
@@ -258,10 +274,10 @@ describe("Options (action bars)", function()
   describe("the bar glow toggle", function()
     -- It used to live under Glow, away from the status list that explains what it does. A toggle
     -- whose effect is invisible is where "I turned it on and nothing happened" starts.
-    it("lives in the Action bar glow panel, not in Glow", function()
+    it("lives in the Action bar glow panel, and there is no Glow page left to hide in", function()
       assert.equal("toggle", glowPanel().barGlow.type)
       assert.equal("Enable action bar glow", glowPanel().barGlow.name)
-      assert.is_nil(Options.table().args.glow.args.barGlow)
+      assert.is_nil(Options.table().args.glow)
     end)
 
     it("reads the current setting, and explains what it does", function()
@@ -282,14 +298,12 @@ describe("Options (action bars)", function()
     end)
   end)
 
-  -- AB1: the style picker is on Abilities > (an ability) > Glow now (tests/spec/options_spells_spec)
-  -- and the top-level Glow page is a signpost to it. The one thing this file still asserts about
-  -- that node is that it SAYS where the controls went -- an empty page is a dead end.
-  it("leaves the Glow page pointing at where the controls went", function()
-    local args = Options.table().args.glow.args
-    assert.is_nil(args.style)
-    assert.truthy(args.moved.name:find("All abilities > Glow", 1, true))
-    assert.truthy(args.moved.name:find("General > Action Bars", 1, true))
+  -- AB1 moved the style picker to Abilities > (an ability) > Glow (tests/spec/options_spells_spec)
+  -- and left the top-level node as a signpost. AB4-D2 removes the node: nothing has ever shipped,
+  -- so there is nobody who knew the old page to lead anywhere, and a top-level page whose whole
+  -- content is "this moved" is a page the player opens to learn nothing.
+  it("has no Glow page at all -- not an empty one, not a signpost", function()
+    assert.is_nil(Options.table().args.glow)
   end)
 
   -- WeakAuras' View idea. This is the control that separates "the glow is broken" from "nothing is
@@ -560,6 +574,20 @@ describe("Options (action bars)", function()
 
       ns.BarGlow.spellName = function() return nil end
       assert.truthy(rowText(group().check.args.rows.args):find("Checking EXORCISM", 1, true))
+    end)
+
+    -- AB4-D4. This list read `pack.spells` alone, so on a class with no shipped pack -- the
+    -- standing rule of the whole Abilities redesign -- every ability in it was named by its raw
+    -- symbolic key, and the "fall back to the key" rule made that look deliberate.
+    it("names a registry-only ability with no class pack at all", function()
+      ns.db.char.spells = { REGISTERED_SPELL =
+        { key = "REGISTERED_SPELL", id = 990001, name = "Registered Spell" } }
+      ns.Display.currentPack = function() return nil end
+      ns.Display.computeQueue = function() return { { spell = "REGISTERED_SPELL" } } end
+      ns.BarGlow = { check = function() return {} end,
+                     spellName = function(id) return id == 990001 and "Registered Spell" or nil end }
+      assert.equal("Registered Spell", group().check.args.pick.values().REGISTERED_SPELL)
+      assert.truthy(rowText(group().check.args.rows.args):find("Checking Registered Spell", 1, true))
     end)
 
     -- Offering the whole class data listed passive runes that can never be on a bar, and listed one

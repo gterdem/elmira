@@ -182,10 +182,12 @@ local function iconFor(key, item)
   return ns.Display and ns.Display.spellIcon(key) or nil
 end
 
+-- AB4-D4: through Display's one merged-registry lookup, not `pack.spells` alone. This used to read
+-- the class pack's table only, so on a class that ships no pack -- a normal state, not an error --
+-- hovering the strip showed the bare key instead of the spell's own tooltip for every ability the
+-- player had added from their spellbook.
 local function spellIDFor(key)
-  local pack = ns.Display and ns.Display.currentPack()
-  local data = pack and pack.spells and pack.spells[key]
-  return data and data.id or nil
+  return ns.Display and ns.Display.spellID and ns.Display.spellID(key) or nil
 end
 
 -- PE10-D1's hard requirement, and the only part of it a player would ever notice going wrong:
@@ -831,24 +833,47 @@ end
 
 function Queue.isLocked() return profile().locked and true or false end
 
--- Which spell key an id belongs to, cached per pack. Classic gives every RANK its own spell id and
--- the pack ships one id per ability, so the id the client reports for a cast usually is NOT the
--- pack's id -- the same rank mismatch that stopped the bar glow finding buttons. Names have no rank.
-local castKeys, castNames, castPack -- mutants: equivalent deletion only makes these globals
+-- Which spell key an id belongs to, cached. Classic gives every RANK its own spell id and the pack
+-- ships one id per ability, so the id the client reports for a cast usually is NOT the pack's id --
+-- the same rank mismatch that stopped the bar glow finding buttons. Names have no rank.
+--
+-- AB4 review: over the MERGED registry (`ns.spellKeyByID` does the merge), and NO pack is required.
+-- This was the fourth lookup of the shape AB4-D4 fixed: it gave up before doing anything when there
+-- was no class pack, so on such a class a cast of an ability the player had registered themselves
+-- resolved to nothing at all -- the strip could not tell "you pressed it" from "the rotation changed
+-- its mind", and Display.noteCast never fired the ability's own `used` cue.
+--
+-- What the cache is keyed on. The pack, because it decides most of the map; and the SIZE of this
+-- character's registry, because that is what changes when the player adds or removes a spell
+-- mid-session, and a map latched before that would not know the new ability until a reload. An
+-- in-place edit of an existing entry is not caught, which is deliberate: nothing in the addon edits
+-- one, and walking every entry per cast to notice would cost more than it buys.
+-- `castSize` starts nil and every reading of it is a number, so "never built" is a state of its own
+-- rather than one that happens to look like "built for no pack with an empty registry".
+local castKeys, castNames, castPack, castSize -- mutants: equivalent deletion only makes these globals
+local function registrySize()
+  local n = 0
+  for _ in pairs((ns.Spells and ns.Spells.store and ns.Spells.store()) or {}) do n = n + 1 end
+  return n
+end
 function Queue.keyForSpellID(id)
+  if not id then return nil end
   local pack = ns.Display and ns.Display.currentPack()
-  if not (pack and id) then return nil end
-  if castPack ~= pack then
+  local size = registrySize()
+  if castPack ~= pack or castSize ~= size then
     castKeys = ns.spellKeyByID and ns.spellKeyByID(pack) or {}
     castNames = {}
-    for key, data in pairs(pack.spells or {}) do
-      local name = type(data) == "table" and data.id and GetSpellInfo and GetSpellInfo(data.id)
+    -- Walked from the id->key map rather than from the spell table: that map is already merged AND
+    -- already collision-resolved, so two keys sharing one id cannot make the name index depend on
+    -- pairs() order the way the key table would.
+    for keyID, key in pairs(castKeys) do
+      local name = GetSpellInfo and GetSpellInfo(keyID)
       if name and not castNames[name] then castNames[name] = key end
     end
     -- Only latch when the client actually answered. GetSpellInfo returns nil for a spell whose
     -- data has not streamed in yet; caching that empty index would silently drop every rank match
     -- for the rest of the session, which is the exact failure noteMissing exists to make audible.
-    if next(castNames) then castPack = pack end
+    if next(castNames) then castPack, castSize = pack, size end
   end
   if castKeys[id] then return castKeys[id] end
   local name = GetSpellInfo and GetSpellInfo(id)

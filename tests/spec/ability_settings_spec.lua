@@ -60,6 +60,10 @@ describe("Core.AbilitySettings", function()
       assert.equal(48, t.size)
       assert.is_false(t.color)
       assert.equal(1, t.alpha)
+      -- AB4-D1: no progress swipe until one is asked for. A swipe over a texture that is on screen
+      -- for a second and a half is noise, and both fills are meaningless for an ability the tracker
+      -- has no cooldown or buff numbers for.
+      assert.equal("none", t.fill)
       assert.is_true(t.suggested)
       assert.is_true(t.active)
       assert.is_false(t.ready)
@@ -185,6 +189,10 @@ describe("Core.AbilitySettings", function()
       -- while the APPEARANCE beside it still comes from All abilities
       A.set(A.ALL, "texture", "size", 96)
       assert.equal(96, A.effective("EXORCISM", "texture").size)
+      -- AB4-D1: the fill is an appearance CHOICE, so it follows size and colour rather than
+      -- placement -- "every texture sweeps its cooldown" is a look, not a position.
+      A.set(A.ALL, "texture", "fill", "cooldown")
+      assert.equal("cooldown", A.effective("EXORCISM", "texture").fill)
     end)
 
     it("keeps an ability's own on/off for those four even while it is linked", function()

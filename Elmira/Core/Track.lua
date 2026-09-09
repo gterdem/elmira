@@ -27,6 +27,13 @@ local Track = {}
 -- reading a first sighting rather than a flood of edges for everything that happens to be ready.
 -- The returned table REPLACES it -- an ability that has left the watched set leaves no memory
 -- behind, so re-adding it later starts clean instead of resuming a stale comparison.
+--
+-- AB4-D1: each row of the returned memory also carries the NUMBERS behind the three booleans --
+-- `cooldown`/`cooldownFull` and `remaining`/`duration`. The progress fill on an indicator texture
+-- needs how much is left AND how long the whole thing lasts, and every one of those four readings
+-- was already being taken here to decide `ready`, `active` and `expiring`. Reporting them costs
+-- one extra state call (`baseCooldown`, and only while the ability is actually on cooldown) and
+-- saves Display a second pass over the same abilities at 10 Hz.
 function Track.tick(state, watched, prev)
   local events, now = {}, {}
   if not state then return events, now end
@@ -35,10 +42,15 @@ function Track.tick(state, watched, prev)
     local was = prev and prev[key]
     -- Ready is BOTH halves: off cooldown and castable. A spell whose cooldown has finished while
     -- you cannot afford it is not something to tell anyone about.
-    local ready = (state:cooldown(key) or 0) <= 0 and state:usable(key) == true
+    local cooldown = state:cooldown(key) or 0
+    local ready = cooldown <= 0 and state:usable(key) == true
+    -- How long this cooldown LASTS, asked for only while one is running: `baseCooldown` is an
+    -- observe-and-cache reading (docs/07 §9.1 -- GetSpellBaseCooldown lies on this client), so off
+    -- cooldown it answers with whatever was last seen, which is not a fact about now.
+    local cooldownFull = cooldown > 0 and (state:baseCooldown(key) or 0) or nil
     -- `stacks` rather than the remaining seconds decides "is it up": an aura with no expiry reads
     -- zero seconds remaining, and treating that as "not up" would silence every permanent buff.
-    local stacks, remaining = state:buff(key)
+    local stacks, remaining, duration = state:buff(key)
     local active = stacks ~= nil
     local expiring = active and (remaining or 0) > 0 and (remaining or 0) <= (row.expiring or 3)
     if ready and not (was and was.ready) then events[#events + 1] = { key = key, event = "ready" } end
@@ -46,7 +58,9 @@ function Track.tick(state, watched, prev)
     if expiring and not (was and was.expiring) then
       events[#events + 1] = { key = key, event = "expiring" }
     end
-    now[key] = { ready = ready, active = active, expiring = expiring }
+    now[key] = { ready = ready, active = active, expiring = expiring,
+                 cooldown = cooldown, cooldownFull = cooldownFull,
+                 remaining = active and remaining or nil, duration = active and duration or nil }
   end
   return events, now
 end

@@ -246,6 +246,10 @@ function SpellsPage.matches(entry)
   return A.channelOn(entry.key, filterShow)
 end
 
+-- The one write path for both halves of the filter (AB4 review). The two rows below used to assign
+-- the locals themselves, which left this function with no caller outside the specs -- a function
+-- only a spec calls is a bug report, and here it was the specific one where the panel and the test
+-- can drift: a spec proving the predicate against a value the UI can no longer produce.
 function SpellsPage.setFilter(name, show)
   filterName, filterShow = name or "", show or "all"
 end
@@ -259,13 +263,13 @@ local function filterArgs(order)
       name = {
         type = "input", order = 1, width = "relative", relWidth = 0.6, name = L["Name contains"],
         get = function() return filterName end,
-        set = function(_, v) filterName = v or "" end,
+        set = function(_, v) SpellsPage.setFilter(v, filterShow) end,
       },
       show = {
         type = "select", order = 2, width = "relative", relWidth = 0.4, name = L["Show"],
         values = values, sorting = SHOW_ORDER,
         get = function() return filterShow end,
-        set = function(_, v) filterShow = v or "all" end,
+        set = function(_, v) SpellsPage.setFilter(filterName, v) end,
       },
     },
   }
@@ -494,6 +498,10 @@ local SHAPE_LABELS = { ring = "Ring", disc = "Disc", square = "Square", diamond 
                        arrow = "Arrow", star = "Star", bar = "Bar", chevron = "Chevron" }
 local PLACE_LABELS = { row = "With the other indicators", centre = "Centre of the screen",
                        custom = "Somewhere I choose" }
+-- AB4-D1. Worded as what the swipe MEASURES, not as what it looks like: "radial progress" tells a
+-- player nothing about which of their two timers they are about to see.
+local FILL_LABELS = { none = "Nothing", cooldown = "How much cooldown is left",
+                      buff = "How much of its buff is left" }
 
 local function labelled(list, labels)
   local out = {}
@@ -595,6 +603,19 @@ local function textureArgs(key)
     isPercent = true, disabled = linked(key, "texture"),
     get = function() return effective(key, "texture").alpha or 1 end,
     set = function(_, v) put(key, "texture", "alpha", v) end,
+  }
+  -- AB4-D1. Between the appearance controls and the moments, because that is what it is: how the
+  -- texture is drawn while it is up, not another moment for it to appear at.
+  args.fill = {
+    type = "select", order = 9.5, name = L["Fill with"], disabled = linked(key, "texture"),
+    values = labelled(textureList("FILLS"), FILL_LABELS),
+    sorting = textureList("FILLS"),
+    desc = L["Sweeps the texture round like a cooldown while it is on screen. \"How much of its "
+          .. "buff is left\" drains the other way, so what is lit is what is left. Nothing is "
+          .. "drawn when there is no cooldown or buff running -- and the moment this ability "
+          .. "counts as about to run out is the one on its General tab."],
+    get = function() return (ns.Textures and ns.Textures.fillOf(effective(key, "texture"))) or "none" end,
+    set = function(_, v) put(key, "texture", "fill", v) end,
   }
   -- All five of Core/Track's events, unlike the screen edge's two (AB3-D1). `suggested` and
   -- `active` SHOW the texture while the state holds; the other three flash it for a second and a

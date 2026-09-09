@@ -42,25 +42,19 @@ Announce.CATEGORIES = {
   { key = "cooldown", label = "Long cooldowns used",   color = "OK",        shareable = true },
 }
 
--- Categories the Notifications page does NOT offer a routing row for.
---
--- EMPTY since AB1-D10. `cooldown` was the only entry: PE14-D3 took its row off the page while the
--- Abilities redesign decided what would drive it. That is now the per-ability Announcement tab,
--- which says WHETHER a cooldown is announced; WHERE the resulting line goes -- chat, screen, party,
--- raid -- is still a routing question, so the row belongs back on Notifications with the others.
--- The table stays because `listed()` is the one filter both the page and `Announce.test()` read.
-Announce.OFF_PAGE = {}
-
 -- The categories the Notifications page shows a row for -- and therefore the ones `Announce.test()`
 -- sends a sample of. ONE list for both: a test button that announces a kind the page no longer
 -- offers is a control demonstrating a setting nobody can find, and two separate filters would drift
 -- the first time a category moved.
+--
+-- AB4-D2: there is no `OFF_PAGE` filter any more. It held exactly one key for exactly one release
+-- (PE14-D3 hid `cooldown` while the Abilities redesign decided what would drive it) and has been
+-- empty since AB1-D10 put that row back. An empty filter still reads as "some categories are
+-- hidden, go and find out which", and that question now has no answer. Named still, rather than
+-- folded into `CATEGORIES` at both call sites: what the page lists and what a category IS are two
+-- ideas, and the next one to be held back should have one place to be held back in.
 function Announce.listed()
-  local out = {}
-  for _, cat in ipairs(Announce.CATEGORIES) do
-    if not Announce.OFF_PAGE[cat.key] then out[#out + 1] = cat end
-  end
-  return out
+  return Announce.CATEGORIES
 end
 
 -- Where each kind goes before anyone changes anything. The Log is always on and is not listed.

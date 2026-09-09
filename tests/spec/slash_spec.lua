@@ -56,6 +56,30 @@ describe("Core.Slash", function()
       assert.truthy(Slash.run("export")[1]:find("no data pack", 1, true))
     end)
 
+    -- AB4-D5: how many ability settings came with the rotation, the way the options window has
+    -- said since AB2-D5. Settings that arrived silently and overwrote a glow colour are the worst
+    -- possible surprise, and settings that did NOT arrive look identical from the chat frame.
+    --
+    -- The bundled string comes from the Share tab's "export with its abilities' settings"; a plain
+    -- `/elm export` carries no settings, which is what the second test here holds.
+    it("import reports the ability settings that travelled with the rotation", function()
+      ns.db.char = { abilities = {} }
+      helper.load("Elmira/Core/AbilitySettings.lua")
+      local str = ns.UserBuilds.exportKey(pack, "PALADIN_EXODIN", {
+        abilities = { EXORCISM = { glow = { color = { r = 1, g = 0, b = 0 } } },
+                      JUDGEMENT = { edge = { enabled = true } } },
+        spells = { EXORCISM = { id = 415073, name = "Exorcism" } },
+      })
+      local line = Slash.run("import " .. str .. " shared")[1]
+      assert.truthy(line:find("Also merged the settings of 2 abilities", 1, true))
+      assert.same({ r = 1, g = 0, b = 0 }, ns.db.char.abilities.EXORCISM.glow.color)
+    end)
+
+    it("import says nothing about settings when a rotation carried none", function()
+      local str = Slash.run("export PALADIN_WRATHLIKE")[2]
+      assert.is_nil(Slash.run("import " .. str .. " bare")[1]:find("Also merged", 1, true))
+    end)
+
     it("import stores a fork, dated, and the profile command then knows it", function()
       local str = Slash.run("export PALADIN_WRATHLIKE")[2]
       local lines = Slash.run("import " .. str .. " my wrath")
@@ -1206,14 +1230,20 @@ describe("Core.Slash", function()
 
     before_each(function()
       ns = helper.ns()
-      -- Frames, reduced to "answer every call": nothing here asserts on one
+      -- Frames, reduced to "answer every METHOD call": nothing here asserts on one
       -- (tests/spec/textures_spec.lua does), it only has to be creatable.
-      _G.UIParent = setmetatable({}, { __index = function() return function() end end })
-      _G.CreateFrame = function()
-        return setmetatable({}, { __index = function()
-          return function() return setmetatable({}, { __index = function() return function() end end }) end
-        end })
+      --
+      -- PascalCase only, the same rule textures_spec and queue_spec use: a catch-all that answers
+      -- every key answers `frame.fillDuration` too, and a diagnostic whose whole job is to say
+      -- "this fill is measuring nothing" would then report a running swipe on every frame.
+      local function method(_, k)
+        if type(k) == "string" and k:match("^%u") then
+          return function() return setmetatable({}, { __index = method }) end
+        end
+        return nil
       end
+      _G.UIParent = setmetatable({}, { __index = method })
+      _G.CreateFrame = function() return setmetatable({}, { __index = method }) end
       helper.load("Elmira/Core/Colors.lua")
       helper.load("Elmira/Core/Spells.lua")
       A = helper.load("Elmira/Core/AbilitySettings.lua")
@@ -1243,7 +1273,7 @@ describe("Core.Slash", function()
     it("names the ability, its source, size, placement and the moments it appears at", function()
       A.set("EXORCISM", "texture", "enabled", true)
       local lines = Slash.run("debug textures")
-      assert.is_true(hasLineMatching(lines, "EXORCISM  source=icon size=48 position=row"))
+      assert.is_true(hasLineMatching(lines, "EXORCISM  source=icon size=48 position=row fill=none"))
       assert.is_true(hasLineMatching(lines, "shows on: suggested, active"))
       assert.is_true(hasLineMatching(lines, "last shown=never"))
     end)
@@ -1279,6 +1309,27 @@ describe("Core.Slash", function()
       local lines = Slash.run("debug textures")
       assert.is_true(hasLineMatching(lines, "on screen=true"))
       assert.is_true(hasLineMatching(lines, "last shown=4%.0s ago"))
+    end)
+
+    -- AB4-D1. A fill picked for an ability whose cooldown or buff the client has no numbers for
+    -- draws nothing at all, and a texture with no swipe on it looks exactly like one whose fill was
+    -- never picked.
+    it("names the fill, and says when it is measuring nothing", function()
+      A.set("EXORCISM", "texture", "enabled", true)
+      A.set(A.ALL, "texture", "fill", "cooldown")
+      ns.Textures.Fire("EXORCISM", "suggested")
+      local lines = Slash.run("debug textures")
+      assert.is_true(hasLineMatching(lines, "fill=cooldown"))
+      assert.is_true(hasLineMatching(lines, "nothing to measure right now"))
+      -- ...and it stops saying so the moment there IS something to measure.
+      ns.Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 4, cooldownFull = 6 } }, 0)
+      assert.is_false(hasLineMatching(Slash.run("debug textures"), "nothing to measure right now"))
+    end)
+
+    it("says nothing about a fill nobody asked for", function()
+      A.set("EXORCISM", "texture", "enabled", true)
+      ns.Textures.Fire("EXORCISM", "suggested")
+      assert.is_false(hasLineMatching(Slash.run("debug textures"), "nothing to measure right now"))
     end)
 
     it("'debug textures <KEY>' test-fires that ability, and refuses a word that is not one", function()

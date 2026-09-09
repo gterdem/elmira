@@ -1,5 +1,23 @@
 # Changelog
 ## Unreleased
+- **New: a texture can sweep its own cooldown or buff.** "Fill with" on an ability's Texture tab
+  draws a progress sweep over the indicator showing how much of that ability's cooldown is left, or
+  how much of its buff is — the buff one drains the other way, so what is lit is what is left.
+  Nothing is drawn when there is no cooldown or buff running, and `/elm debug textures` says so
+  rather than leaving you looking at a texture with no sweep on it.
+- **Changed: the Glow, Peripheral cues and Cue sounds pages are gone.** Every cue an ability can
+  make — its glow, its texture, its screen edge, its sounds, its announcement — is set on that
+  ability, under Abilities. "Play ability sounds", the one switch that silences all of them at once,
+  is a panel on Notifications instead of a page of its own.
+- **Changed: the Profiles page says that ability settings are per character** and do not switch with
+  the profile, and points at Abilities › Share for copying them.
+- **Changed: `/elm import` says how many abilities' settings came with the rotation**, the way the
+  options window already did.
+- **Fixed: on a class Elmira ships no data for, an ability you registered yourself now glows on your
+  action bars, shows its real tooltip on the queue strip, is named properly in the action-bar check,
+  and is recognised when you cast it** — so the strip pops it and anything that ability is set to do
+  "when you use it" actually happens. Four lookups still stopped as soon as they found no class
+  data. An ability added part-way through a session is picked up straight away, without a `/reload`.
 - **Fixed: the "no visible action-bar button holds X" warning no longer repeats.** It is said once
   per ability, and not again until a button for that ability turns up and is taken away again. It
   used to be forgotten every time the client reported any change to the action bars — which on a
