@@ -30,10 +30,10 @@ describe("Core.DB", function()
     -- The Builder's item palette ships showing trinkets only: most characters have nothing on-use
     -- in the other slots, and a palette of empty rows teaches you to stop reading it.
     assert.is_false(DB.defaults.profile.paletteAllSlots)
-    -- The hint's brightness and shape. `secondaryStyle = false` means "the same as the main glow";
-    -- the fraction is pinned to a number so deleting it cannot silently fall back to the constant.
+    -- The next-cast glow's brightness, pinned to a number so deleting it cannot silently fall back
+    -- to the constant. It has no style of its own (PE7): it always draws in the main style, dimmed.
     assert.equal(0.35, DB.defaults.profile.glow.secondaryAlpha)
-    assert.is_false(DB.defaults.profile.glow.secondaryStyle)
+    assert.is_nil(DB.defaults.profile.glow.secondaryStyle)
     -- The only category that can reach party chat, so the bar for what counts is pinned: 120s
     -- takes Avenging Wrath and Aura Mastery and leaves Crusader Strike's 6s alone.
     assert.equal(120, DB.defaults.profile.announce.cooldownFloor)

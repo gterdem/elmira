@@ -66,15 +66,36 @@ describe("Core.Announce", function()
       assert.same({ "rotation", "warning", "status", "cooldown" }, keys)
     end)
 
+    -- PE14-D1: two of them renamed to say what they carry. "Rotation changes" read as "you changed
+    -- rotation" -- config chatter -- for the one category that fires mid-fight and takes the screen
+    -- by default; "Status" said nothing at all about first-login and setup housekeeping.
     it("gives each one its own colour and its renamed label", function()
       assert.equal("HIGHLIGHT", A.category("rotation").color)
-      assert.equal("Rotation changes", A.category("rotation").label)
+      assert.equal("What just changed", A.category("rotation").label)
       assert.equal("WARN", A.category("warning").color)
       assert.equal("Problems", A.category("warning").label)
       assert.equal("MUTED", A.category("status").color)
-      assert.equal("Status", A.category("status").label)
+      assert.equal("Settings and setup", A.category("status").label)
       assert.equal("OK", A.category("cooldown").color)
       assert.equal("Long cooldowns used", A.category("cooldown").label)
+    end)
+
+    -- PE14-D3: the cooldown row left the Notifications page, and NOTHING ELSE about the category
+    -- left with it -- announcing a long cooldown becomes a per-ability setting, so the engine side
+    -- has to keep working while the page stops offering it.
+    it("keeps every kind emittable while leaving cooldowns off the page", function()
+      local keys = {}
+      for _, c in ipairs(A.listed()) do keys[#keys + 1] = c.key end
+      assert.same({ "rotation", "warning", "status" }, keys)
+      assert.is_true(A.OFF_PAGE.cooldown)
+      assert.is_not_nil(A.category("cooldown"))
+      assert.is_not_nil(A.DEFAULT_ROUTES.cooldown)
+      assert.is_true(A.worthAnnouncing(180))
+      local heard = 0
+      A.registerSink("chat", function() heard = heard + 1 end)
+      ns.db.profile.announce.routes.cooldown = { chat = true }
+      assert.is_not_nil(A.emit("cooldown", "Avenging Wrath used"))
+      assert.equal(1, heard)
     end)
 
     it("has no category left for the two that were never emitted", function()
@@ -486,9 +507,15 @@ describe("Core.Announce", function()
   end)
 
   describe("the test button", function()
-    it("sends one of every kind", function()
-      assert.equal(#A.CATEGORIES, A.test())
-      assert.equal(#A.CATEGORIES, #A.log())
+    -- PE14-D3: one of every kind THE PAGE OFFERS. Testing a kind with no row is a button
+    -- demonstrating a setting the player cannot find, so both read the same list.
+    it("sends one of every kind the page offers, and none it does not", function()
+      assert.equal(#A.listed(), A.test())
+      assert.equal(#A.listed(), #A.log())
+      assert.is_true(#A.listed() < #A.CATEGORIES)
+      for _, entry in ipairs(A.log()) do
+        assert.is_not.equal("cooldown", entry.category)
+      end
     end)
 
     -- The point of pressing it is to see the result now, not after the next fight.

@@ -13,8 +13,10 @@ describe("Core.Visibility", function()
     V = helper.load("Elmira/Core/Visibility.lua")
   end)
 
-  local function show(mode, inCombat, hasTarget)
-    return V.shouldShow(mode, { inCombat = inCombat, hasTarget = hasTarget })
+  -- PE9-D6: the second argument is "a target you can FIGHT", not "a target". `hasTarget` was what
+  -- this asked for, and a bank NPC satisfied it -- clicking one in a city popped the strip up.
+  local function show(mode, inCombat, attackable)
+    return V.shouldShow(mode, { inCombat = inCombat, targetAttackable = attackable })
   end
 
   it("'always' shows in every state", function()
@@ -33,6 +35,17 @@ describe("Core.Visibility", function()
     assert.is_true(show("combat_or_target", false, true))
     assert.is_true(show("combat_or_target", true, false))
     assert.is_false(show("combat_or_target", false, false))
+  end)
+
+  -- PE9-D6. The reading Display/Driver hands in is UnitCanAttack, so a friendly target arrives here
+  -- as `targetAttackable = false` -- and an old-shaped context carrying only `hasTarget` must not
+  -- keep working by accident, or the fix is a rename nothing enforces.
+  it("a target you cannot attack is not a reason to show anything", function()
+    assert.is_false(V.shouldShow("combat_or_target",
+                                 { inCombat = false, targetAttackable = false }))
+    assert.is_false(V.shouldShow("combat_or_target", { inCombat = false, hasTarget = true }))
+    local _, reason = V.shouldShow("combat_or_target", { inCombat = false, hasTarget = true })
+    assert.equal("out of combat, no target", reason)
   end)
 
   it("says why, so an empty screen can be explained", function()

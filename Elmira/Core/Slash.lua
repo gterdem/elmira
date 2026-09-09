@@ -327,6 +327,40 @@ end
 
 Slash.register{ key = "help", desc = ns.L["Show this help"], order = 0, run = helpLines }
 
+-- PE15-D2: what the client answers RIGHT NOW for every spell the active rotation gates on --
+-- true, false, or "cannot tell". The owner reported a rune ability being announced as gained and
+-- lost three times in one fight, and nothing could say whether the reading behind it had wobbled
+-- or held steady; that had to be inferred from the source. This makes the next report of that
+-- shape a reading instead. `known` is the State contract, not a client call, so Core may ask it.
+--
+-- EVERY row with a spell, not only the dead ones: a row that could not be read stays ACTIVE, so
+-- listing only what is already dimmed would hide the exact case this line exists to catch.
+local function knownLines(lines)
+  if not (ns.Display and ns.Display.gateRows) then return lines end
+  local _, rows = ns.Display.gateRows()
+  local state = ns.API and ns.API.GetState()
+  local seen, spells = {}, {}
+  for _, row in ipairs(rows or {}) do
+    if row.spell and not seen[row.spell] then
+      seen[row.spell] = true
+      spells[#spells + 1] = row.spell
+    end
+  end
+  table.sort(spells)
+  if #spells == 0 then return lines end
+  if not (state and state.known) then
+    lines[#lines + 1] = "known: no state to ask."
+    return lines
+  end
+  lines[#lines + 1] = "known (a \"cannot tell\" is never announced and never remembered):"
+  for _, spell in ipairs(spells) do
+    local answer = state:known(spell)
+    if answer == nil then answer = "cannot tell" end
+    lines[#lines + 1] = string.format("  %s = %s", spell, tostring(answer))
+  end
+  return lines
+end
+
 Slash.register{
   key = "debug", args = "state|bars|swing|cues|perf|libs|memory|alloc|dump|queue|gates",
   desc = ns.L["Diagnostics"], order = 10,
@@ -350,7 +384,8 @@ Slash.register{
       local rows, key = ns.Display.inactiveRows()
       if not key then return { "gates: no build is active." } end
       if #rows == 0 then
-        return { string.format("gates: every row of %s is live for this character.", tostring(key)) }
+        return knownLines({
+          string.format("gates: every row of %s is live for this character.", tostring(key)) })
       end
       local lines = { string.format("gates: %d row(s) of %s are not live for this character:",
                                     #rows, tostring(key)) }
@@ -359,19 +394,18 @@ Slash.register{
           tostring(row.spell or ("item " .. tostring(row.item))),
           table.concat(row.reasons, "; "))
       end
-      return lines
+      return knownLines(lines)
     elseif sub == "bars" then
-      -- Walks the WHOLE chain, because "the bar glow does not work" has four independent causes and
+      -- Walks the WHOLE chain, because "the bar glow does not work" has several independent causes and
       -- the old version of this command could only report the first. Counting registered providers
       -- says nothing about whether one found a button, and a provider that silently returns nothing
       -- looks identical to a provider that is not there.
       local p = ns.db and ns.db.profile
       local lines = {}
       if p and p.glow then
-        lines[#lines + 1] = string.format("glow: enabled=%s barGlow=%s style=%s active=%d",
-          tostring(p.glow.enabled), tostring(p.glow.barGlow), tostring(p.glow.style),
+        lines[#lines + 1] = string.format("glow: barGlow=%s style=%s active=%d",
+          tostring(p.glow.barGlow), tostring(p.glow.style),
           ns.Glow and ns.Glow.activeCount() or 0)
-        if p.glow.enabled == false then lines[#lines + 1] = "  -> glow is OFF in the options" end
         if p.glow.barGlow == false then lines[#lines + 1] = "  -> bar glow is OFF in the options" end
       end
 

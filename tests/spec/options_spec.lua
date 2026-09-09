@@ -44,7 +44,17 @@ describe("Options (overlay/peripheral cues)", function()
   -- the glow); `animate` is the motion. All three shipped as a single toggle labelled, confusingly,
   -- the same as the visibility dropdown below it.
   describe("Queue section switches", function()
-    local function queueArgs() return Options.table().args.queue.args end
+    -- PE11-D2: the page is three inline panels now, so every row lives one level down in
+    -- `queue.args.<panel>.args`. Flattened here rather than naming the panel at each call site: the
+    -- KEYS did not change, only which panel holds them, so a row that moves between panels is still
+    -- found -- while a row that disappeared still reads nil and still fails.
+    local function queueArgs()
+      local out = {}
+      for _, panel in pairs(Options.table().args.queue.args) do
+        for key, row in pairs(panel.args) do out[key] = row end
+      end
+      return out
+    end
     -- The master switch and the wizard live on General; the strip's own settings on Queue. Two
     -- accessors rather than one, so a row moving pages fails here rather than silently reading nil.
     local function generalArgs() return Options.table().args.general.args end
@@ -73,20 +83,58 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal("Turns the whole display off: no queue, no bar glow, no update loop.", row.desc)
     end)
 
+    -- PE11-D1: the switch is named for what it switches ("Enable the queue strip", the shape
+    -- General's "Enable action bar glow" already uses). It used to be "Show the queue strip", five
+    -- rows above a dropdown called "Show the queue" -- one page, two nearly identical labels.
     it("offers the strip separately, and says the glow survives it", function()
       local row = queueArgs().showQueue
-      assert.equal("Show the queue strip", row.name)
-      assert.equal("Off keeps the action-bar glow and hides the icons.", row.desc)
+      assert.equal("Enable the queue strip", row.name)
+      assert.is_truthy(row.desc:find("keeps the action-bar glow", 1, true))
       assert.is_true(row.get())
       row.set(nil, false)
       assert.is_false(ns.db.profile.showQueue)
       assert.is_false(row.get())
     end)
 
+    -- PE9-D4/D5. Three settings that all change how the strip DRAWS rather than what it contains,
+    -- which is exactly the class of change the driver would never repaint for on its own.
+    it("offers waits, keybinds and the rule name, defaulted so today's screen is unchanged", function()
+      assert.equal("Show waits", queueArgs().waits.name)
+      assert.equal("gcd", queueArgs().waits.get())
+      assert.same({ "off", "gcd", "always" }, queueArgs().waits.sorting())
+      assert.equal("Only when longer than a GCD", queueArgs().waits.values().gcd)
+
+      assert.equal("Keybinds", queueArgs().keybinds.name)
+      assert.equal("first", queueArgs().keybinds.get())
+      assert.same({ "off", "first", "all" }, queueArgs().keybinds.sorting())
+      assert.equal("On every icon", queueArgs().keybinds.values().all)
+
+      assert.equal("Show the rule name", queueArgs().showReason.name)
+      assert.is_false(queueArgs().showReason.get())
+
+      queueArgs().waits.set(nil, "always")
+      queueArgs().keybinds.set(nil, "off")
+      queueArgs().showReason.set(nil, true)
+      assert.equal("always", ns.db.profile.waits)
+      assert.equal("off", ns.db.profile.keybinds)
+      assert.is_true(ns.db.profile.showReason)
+    end)
+
+    it("repaints on each of the three new rows, or the change waits for the queue to move", function()
+      local redraws = 0
+      ns.Display.refresh = function() redraws = redraws + 1 end
+      queueArgs().waits.set(nil, "off")
+      queueArgs().keybinds.set(nil, "all")
+      queueArgs().showReason.set(nil, true)
+      assert.equal(3, redraws)
+    end)
+
     it("offers the motion separately", function()
       local row = queueArgs().animate
       assert.equal("Animate changes", row.name)
-      assert.equal("Icons slide when the queue moves and pop when you cast the suggestion.", row.desc)
+      -- PE11-D3: a function now, because the tooltip grows the reason the row is greyed out when
+      -- it is. Read through the call, or every desc assertion on this page tests a closure address.
+      assert.is_truthy(row.desc():find("Icons slide when the queue moves", 1, true))
       assert.is_true(row.get())
       row.set(nil, false)
       assert.is_false(ns.db.profile.animate)
@@ -139,7 +187,7 @@ describe("Options (overlay/peripheral cues)", function()
       local general = args().general
       assert.equal("General", general.name)
       assert.equal("Enable Elmira", general.args.enabled.name)
-      assert.equal("Choose your rotation", general.args.chooseRotation.name)
+      assert.equal("Choose Your Rotation", general.args.chooseRotation.name)
       assert.equal("Jumps straight to picking or editing your rotation.", general.args.chooseRotation.desc)
       assert.equal("Show minimap button", general.args.minimap.name)
       assert.equal("Shows Elmira's launcher button on the minimap.", general.args.minimap.desc)
@@ -164,16 +212,21 @@ describe("Options (overlay/peripheral cues)", function()
           assert.is_nil(seen[row.order], key .. " shares order " .. tostring(row.order))
           seen[row.order] = key
         end
-        assert.same({ "enabled", "chooseRotation", "minimap", "locked" },
+        -- PE8: the three switches group on the left and the BUTTON ends the row, because a button
+        -- is the only one of the four that fills its cell -- a toggle draws hard against its cell's
+        -- left edge however wide the cell is, so it can never sit flush right.
+        assert.same({ "enabled", "minimap", "locked", "chooseRotation" },
                     { seen[1], seen[2], seen[3], seen[4] })
-        assert.equal("window", seen[10])
+        assert.equal("scale", seen[10])
+        -- PE6-D3: Action Bars sits between the window's own scale and the slash-command list.
+        assert.equal("bars", seen[15])
         assert.equal("slash", seen[20])
       end)
 
     -- ADR-0015 SS1's front door. AceConfigDialog:Open only creates a NEW frame when
     -- `OpenFrames[appName]` is nil, so calling it again on an already-open panel just moves the
     -- SAME frame's selection -- this button never closes and reopens the window.
-    it("Choose your rotation runs Options.Open('rotation')", function()
+    it("Choose Your Rotation runs Options.Open('rotation')", function()
       local calls = {}
       local original = Options.Open
       Options.Open = function(...) calls[#calls + 1] = { ... } end
@@ -215,37 +268,26 @@ describe("Options (overlay/peripheral cues)", function()
         assert.is_false(set)
       end)
 
-      -- Locking with the on-screen message still in move mode would leave a mouse-eating frame
-      -- across the middle of the screen -- the same failure the window's own OnClose guards against.
-      it("also leaves move mode when locking, but never when merely unlocking", function()
+      -- PE13-D2: leaving the on-screen message's move mode used to happen here, which meant
+      -- /elm lock -- the same decision, taken elsewhere -- left a mouse-eating frame across the
+      -- middle of the screen. Queue.SetLocked owns both temporary modes now, so this row must NOT
+      -- reach past it: a second owner is how the two paths drifted apart in the first place.
+      it("leaves ending move mode to Queue.SetLocked rather than doing it itself", function()
         local stopped = 0
         ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
-        args().general.args.locked.set(nil, false)
+        args().general.args.locked.set(nil, true)
         assert.equal(0, stopped)
-        args().general.args.locked.set(nil, true)
-        assert.equal(1, stopped)
-      end)
-
-      it("still locks when leaving move mode errors, and says so", function()
-        local logged = {}
-        ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
-        local locked
-        ns.Queue.SetLocked = function(v) locked = v end
-        ns.Announcers = { StopMoving = function() error("MessageFrame has no Clear()") end }
-        args().general.args.locked.set(nil, true)
-        assert.is_true(locked, "an error leaving move mode must not skip locking")
-        assert.equal(1, #logged)
-        assert.is_truthy(logged[1]:find("locked", 1, true))
       end)
     end)
 
     -- Whole-window scale rather than a font size: AceGUI row heights are fixed, so a larger font
     -- clips inside the same row. Scale is the one lever that grows the text and the row together.
-    it("puts the panel's own scale on General, in a group that says what it scales", function()
-      local window = args().general.args.window
-      assert.equal("Options window", window.name)
-      assert.is_true(window.inline)
-      local row = window.args.scale
+    -- PE6-D2: a plain row, not a titled box. An AceConfig inline group is always full width, so a
+    -- panel around one 170px slider is a full-width frame drawn for nothing, and "Panel scale"
+    -- already names what it scales.
+    it("puts the panel's own scale on General as a plain row, with no box around it", function()
+      assert.is_nil(args().general.args.window)
+      local row = args().general.args.scale
       assert.equal("Panel scale", row.name)
       assert.equal("range", row.type)
       assert.equal(0.9, row.min)
@@ -284,32 +326,167 @@ describe("Options (overlay/peripheral cues)", function()
       end)
     end)
 
-    it("leaves Queue holding only the strip, with every row exactly once, and no lock any more",
+    -- PE11-D2: three inline panels, each answering one question, instead of a flat list of
+    -- thirteen. The ORDER inside each panel is most-reached-for first, and it is asserted here
+    -- because the whole point of the pass is which control sits next to which.
+    it("lays Queue out as three panels, each row exactly once, and no lock any more",
       function()
         local queue = args().queue
         assert.equal("Queue", queue.name)
-        assert.is_nil(queue.args.enabled, "the master switch is still on the Queue page")
-        assert.is_nil(queue.args.setup, "the wizard button is still on the Queue page")
-        assert.is_nil(queue.args.locked, "Lock position moved to General as Lock all positions")
-        local seen = {}
-        for key, row in pairs(queue.args) do
-          assert.is_number(row.order, key .. " has no order")
-          assert.is_nil(seen[row.order], key .. " shares order " .. tostring(row.order))
-          seen[row.order] = key
+        local panels = {}
+        for key, panel in pairs(queue.args) do
+          assert.equal("group", panel.type, key .. " is not a panel")
+          assert.is_true(panel.inline, key .. " is a tree node, not an inline panel")
+          assert.is_number(panel.order, key .. " has no order")
+          assert.is_nil(panels[panel.order], key .. " shares order " .. tostring(panel.order))
+          panels[panel.order] = key
         end
-        assert.same({ "showQueue", "depth", "scale", "animate", "visibility", "learning" },
-                    { seen[1], seen[2], seen[3], seen[4], seen[5], seen[6] })
+        -- No outer wrapper around the three (the nesting weight the owner flagged on General): the
+        -- panels are the page's own args, so there are exactly three of them and nothing else.
+        assert.same({ "when", "size", "tells" }, { panels[1], panels[2], panels[3] })
+        assert.equal("When you see it", queue.args.when.name)
+        assert.equal("Size and position", queue.args.size.name)
+        assert.equal("What it tells you", queue.args.tells.name)
+
+        local function orderOf(panel)
+          local seen = {}
+          for key, row in pairs(queue.args[panel].args) do
+            assert.is_number(row.order, key .. " has no order")
+            assert.is_nil(seen[row.order], key .. " shares order " .. tostring(row.order))
+            seen[row.order] = key
+          end
+          -- Read back by order, not by pairs(): the assertion below is about the order the player
+          -- sees, and a gap in the numbering has to show up as a missing row rather than be sorted
+          -- away. Past the last row seen[i] is nil, which assigns nothing.
+          local out = {}
+          for i = 1, 10 do out[i] = seen[i] end
+          return out
+        end
+        assert.same({ "showQueue", "visibility", "oocAlpha" }, orderOf("when"))
+        assert.same({ "depth", "scale", "matchBars", "grow", "spacing", "position" },
+                    orderOf("size"))
+        -- `animate` sits with what the strip TELLS you, not with its size: ADR-0015 §3 forbids the
+        -- strip to glow, so motion is how it says "something changed" -- information, not decoration.
+        assert.same({ "waits", "keybinds", "showReason", "animate", "learning" }, orderOf("tells"))
+
+        -- The rows that left for General stayed gone, at either level.
+        for _, panel in pairs(queue.args) do
+          assert.is_nil(panel.args.enabled, "the master switch is back on the Queue page")
+          assert.is_nil(panel.args.setup, "the wizard button is back on the Queue page")
+          assert.is_nil(panel.args.locked, "Lock position belongs on General")
+        end
       end)
 
-    -- Two sliders both labelled "Scale", one page apart, is a guessing game. The strip's is named
-    -- for what it scales now that the window has one of its own.
-    it("names the strip's scale for the strip", function()
-      local row = args().queue.args.scale
-      assert.equal("Strip scale", row.name)
-      assert.is_truthy(row.desc)
+    -- PE11-D1: it lives in a panel called "Size and position" now, so "Strip scale" was saying
+    -- "size" twice. The window's own scale is on another page and still says which one it is.
+    it("names the strip's size for what it is, inside the size panel", function()
+      local row = args().queue.args.size.args.scale
+      assert.equal("Size", row.name)
+      assert.is_truthy(row.desc())
       assert.equal(1.0, row.get())
       row.set(nil, 1.3)
       assert.equal(1.3, ns.db.profile.scale)
+    end)
+
+    -- PE11-D1: the two names that collided are gone. Asserted as the literal strings, because the
+    -- defect they fix is exactly "which one of these did I just change".
+    it("no longer offers two controls whose names read the same", function()
+      local queue = args().queue
+      assert.equal("Enable the queue strip", queue.args.when.args.showQueue.name)
+      assert.equal("When to show it", queue.args.when.args.visibility.name)
+      assert.equal("Casts to show", queue.args.size.args.depth.name)
+      assert.equal("Direction", queue.args.size.args.grow.name)
+    end)
+
+    -- PE11-D4. The third instance this session of "the master switch is off and the twelve
+    -- controls under it still look live", so it is the page's rule now.
+    describe("with the strip switched off", function()
+      local function rows()
+        local queue = args().queue
+        return { queue.args.when.args.visibility, queue.args.when.args.oocAlpha,
+                 queue.args.size.args.depth, queue.args.size.args.scale,
+                 queue.args.size.args.matchBars, queue.args.size.args.grow,
+                 queue.args.size.args.spacing, queue.args.size.args.position,
+                 queue.args.tells.args.waits, queue.args.tells.args.keybinds,
+                 queue.args.tells.args.showReason, queue.args.tells.args.animate,
+                 queue.args.tells.args.learning }
+      end
+
+      it("greys out every other control and names the switch that brings them back", function()
+        local function nameOf(row)
+          return type(row.name) == "function" and row.name() or row.name
+        end
+        for _, row in ipairs(rows()) do
+          assert.is_falsy(row.disabled(), nameOf(row) .. " is greyed out while the strip is on")
+        end
+        ns.db.profile.showQueue = false
+        for _, row in ipairs(rows()) do
+          local name = nameOf(row)
+          assert.is_true(row.disabled(), name .. " still looks live with the strip off")
+          assert.is_truthy(row.desc():find("Enable the queue strip", 1, true),
+                           name .. " does not say which switch turns it back on")
+        end
+        -- The switch itself is never greyed out: it is the way back.
+        assert.is_nil(args().queue.args.when.args.showQueue.disabled)
+      end)
+
+      -- A greyed control must still show what is STORED. The `get = function() return false end`
+      -- shape used by an unavailable cue elsewhere in this file would report `false` for a setting
+      -- the player had turned on, which reads as "your setting was thrown away".
+      it("keeps showing the stored value of every control it greys out", function()
+        ns.db.profile.showReason = true
+        ns.db.profile.animate = false
+        ns.db.profile.depth = 5
+        ns.db.profile.oocAlpha = 0.4
+        ns.db.profile.showQueue = false
+        local queue = args().queue
+        assert.is_true(queue.args.tells.args.showReason.get())
+        assert.is_false(queue.args.tells.args.animate.get())
+        assert.equal(5, queue.args.size.args.depth.get())
+        assert.equal(0.4, queue.args.when.args.oocAlpha.get())
+      end)
+
+      -- The fade has a second way to be dead: in combat-only mode there is no out-of-combat strip
+      -- for it to act on, so the slider is offering to change nothing.
+      it("also greys the out-of-combat fade when the strip is combat only", function()
+        ns.Visibility = { MODES = { "always", "combat" }, DEFAULT = "always" }
+        local function fade() return args().queue.args.when.args.oocAlpha end
+        ns.db.profile.visibility = "always"
+        assert.is_falsy(fade().disabled())
+        ns.db.profile.visibility = "combat"
+        assert.is_true(fade().disabled())
+        assert.is_truthy(fade().desc():find("combat only", 1, true))
+        -- and it is still the stored number, not a zero
+        assert.equal(1, fade().get())
+      end)
+    end)
+
+    -- PE11-D5. The strip is hidden out of combat with no target by default, so "unlock it and drag
+    -- it" asked the player to drag something that is not on screen.
+    describe("Position the Strip", function()
+      local function row() return args().queue.args.size.args.position end
+
+      it("starts and ends positioning mode, and relabels itself while it is on", function()
+        local calls, on = {}, false
+        ns.Queue.isPositioning = function() return on end
+        ns.Queue.StartPositioning = function() calls[#calls + 1] = "start"; on = true; return true end
+        ns.Queue.StopPositioning = function() calls[#calls + 1] = "stop"; on = false; return true end
+
+        assert.equal("execute", row().type)
+        assert.equal("Position the Strip", row().name())
+        row().func()
+        assert.same({ "start" }, calls)
+        -- The label is read fresh on every build, and AceConfigDialog rebuilds after an execute.
+        assert.equal("Done Positioning", row().name())
+        row().func()
+        assert.same({ "start", "stop" }, calls)
+        assert.equal("Position the Strip", row().name())
+      end)
+
+      it("promises the lock is left alone, which is what makes it a mode and not a setting",
+        function()
+          assert.is_truthy(row().desc():find("lock setting is left exactly as it was", 1, true))
+        end)
     end)
   end)
 
@@ -349,9 +526,13 @@ describe("Options (overlay/peripheral cues)", function()
   -- that deserves. Every row below could be present and do nothing; these check it does something.
   describe("Glow appearance", function()
     local function glowArgs() return Options.table().args.glow.args end
+    -- PE7-D3: the cast-after-next cluster lives on General -> Action Bars -> Action bar glow now,
+    -- under the switch that decides whether anything on the bars glows at all. Same controls, same
+    -- behaviour, one page across -- so these assertions moved with them rather than being rewritten.
+    local function hintArgs() return Options.table().args.general.args.bars.args.check.args end
 
     before_each(function()
-      ns.db.profile.glow = { enabled = true, style = "PIXEL", barGlow = true, color = false,
+      ns.db.profile.glow = { style = "PIXEL", barGlow = true, color = false,
                              particles = false, frequency = false, thickness = false,
                              speed = false, secondary = false }
       helper.load("Elmira/Display/Glow.lua")
@@ -376,7 +557,7 @@ describe("Options (overlay/peripheral cues)", function()
     describe("the dim hint's brightness", function()
       it("offers a slider only once the hint is switched on", function()
         ns.db.profile.glow.secondary = false
-        local row = glowArgs().secondaryAlpha
+        local row = hintArgs().secondaryAlpha
         assert.equal("range", row.type)
         assert.equal(0.05, row.min)
         assert.equal(1, row.max)
@@ -392,70 +573,34 @@ describe("Options (overlay/peripheral cues)", function()
       it("reads and writes the profile through Glow, so the render agrees with the panel", function()
         helper.load("Elmira/Display/Glow.lua")
         ns.db.profile.glow.secondary = true
-        local row = glowArgs().secondaryAlpha
+        local row = hintArgs().secondaryAlpha
         assert.equal(ns.Glow.secondaryAlpha(), row.get())
         row.set(nil, 0.6)
         assert.equal(0.6, ns.db.profile.glow.secondaryAlpha)
         assert.equal(0.6, row.get())
       end)
 
-      -- The SAME button, so the two brightnesses are directly comparable rather than at the mercy
-      -- of where two different buttons sit.
-      -- The owner's design, not just a brightness knob: two glows of the SAME shape are hard to
-      -- tell apart however dim one is, and on Proc dimming does not read at all.
-      it("offers the hint its own style, defaulting to the main one", function()
-        helper.load("Elmira/Display/Glow.lua")
-        ns.Glow.available = function() return { PIXEL = true, PROC = true } end
-        ns.db.profile.glow.secondary = true
-        local row = glowArgs().secondaryStyle
-        assert.equal("select", row.type)
-        assert.equal("Same as above", row.values()[""])
-        assert.equal("Proc", row.values().PROC)
-        assert.equal("", row.get(), "unset means the same style as the main glow")
-        -- Changing the hint's shape has to tear the running glows down, or the button keeps the
-        -- old shape until the suggestion happens to change.
-        local stopped = 0
-        ns.Glow.StopAll = function() stopped = stopped + 1 end
-        ns.Queue = { Layout = function() end }
-        row.set(nil, "PROC")
-        assert.equal(1, stopped, "the running glow was not restarted in the new style")
-        assert.equal("PROC", ns.db.profile.glow.secondaryStyle)
-        assert.equal("PROC", row.get())
-        -- Back to "same as above" stores a falsey value, not the empty string.
-        row.set(nil, "")
-        assert.is_false(ns.db.profile.glow.secondaryStyle)
-        assert.equal("", row.get())
-      end)
-
       it("names the hint section and says why it ships off", function()
-        assert.equal("The cast after next", glowArgs().hintHeader.name)
-        assert.equal("header", glowArgs().hintHeader.type)
-        local row = glowArgs().secondary
+        assert.equal("The cast after next", hintArgs().hintHeader.name)
+        assert.equal("header", hintArgs().hintHeader.type)
+        local row = hintArgs().secondary
         assert.is_truthy(row.desc:find("compete for the same glance", 1, true))
-        assert.is_truthy(glowArgs().secondaryStyle.desc:find("Same as above", 1, true))
       end)
 
-      it("hides the hint's controls until the hint is on", function()
+      it("hides the next-cast controls until it is on, and offers no style of its own", function()
         ns.db.profile.glow.secondary = false
-        assert.is_true(glowArgs().secondaryStyle.hidden())
-        assert.is_true(glowArgs().previewDim.hidden())
+        assert.is_true(hintArgs().previewDim.hidden())
+        assert.is_true(hintArgs().secondaryAlpha.hidden())
         ns.db.profile.glow.secondary = true
-        assert.is_false(glowArgs().secondaryStyle.hidden())
-      end)
-
-      -- Both pickers read one list, so they can never offer styles the other does not.
-      it("offers the same styles for the hint as for the main glow", function()
-        helper.load("Elmira/Display/Glow.lua")
-        ns.Glow.available = function() return { PIXEL = true } end
-        ns.db.profile.glow.secondary = true
-        assert.is_nil(glowArgs().style.values().PROC)
-        assert.is_nil(glowArgs().secondaryStyle.values().PROC)
-        assert.equal("Pixel", glowArgs().secondaryStyle.values().PIXEL)
+        assert.is_false(hintArgs().previewDim.hidden())
+        -- PE7 amendment: brightness is the ONLY difference the second glow may make, so that once
+        -- each ability carries its own style this cannot silently override what the player chose.
+        assert.is_nil(hintArgs().secondaryStyle)
       end)
 
       it("previews the dim hint, and only when there is a hint to preview", function()
         ns.db.profile.glow.secondary = false
-        local row = glowArgs().previewDim
+        local row = hintArgs().previewDim
         assert.equal("execute", row.type)
         assert.is_true(row.hidden())
         ns.db.profile.glow.secondary = true
@@ -606,19 +751,23 @@ describe("Options (overlay/peripheral cues)", function()
         category = function() return nil end,
         plain = function(t) return t end,
         CATEGORIES = {},
+        listed = function() return {} end,
         CHANNELS = { "chat", "screen", "sound", "party" },
         routes = function() return {} end,
       }
-      ns.Queue.ApplyLearningPreset = function() return { depth = 1, scale = 1.4 } end
+      ns.Queue.ApplyLearningPreset = function() return { depth = 1, scale = 1.4, showReason = true } end
       ns.db.profile.learning = false
-      Options.table().args.queue.args.learning.set(nil, true)
+      Options.table().args.queue.args.tells.args.learning.set(nil, true)
       assert.equal(1, #said)
       assert.equal("status", said[1][1])
       assert.is_truthy(said[1][2]:find("Learning mode on"))
+      -- PE9-D5: the preset now switches a third setting on, and a sentence that still listed two
+      -- would be the settings screen lying about what it just did.
+      assert.is_truthy(said[1][2]:find("rule names on"))
     end)
 
     it("offers the dim second-suggestion hint, off, and says why", function()
-      local row = glowArgs().secondary
+      local row = hintArgs().secondary
       assert.is_false(row.get())
       assert.is_truthy(row.desc:find("queue itself stopped glowing"))
       row.set(nil, true)
@@ -650,11 +799,27 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal("Colour", glowArgs().color.name)
       assert.is_falsy(glowArgs().color.hasAlpha)
       assert.is_truthy(glowArgs().color.desc)
-      assert.equal("toggle", glowArgs().secondary.type)
-      assert.equal("Also hint the cast after next", glowArgs().secondary.name)
+      assert.equal("toggle", hintArgs().secondary.type)
+      -- PE7-D3 renamed it to the string PE7-D1 freed: with the old master gone, "Glow the next
+      -- cast" is no longer taken, and it says what the toggle does better than "hint" did.
+      assert.equal("Glow the next cast", hintArgs().secondary.name)
       assert.equal("execute", glowArgs().preview.type)
-      assert.equal("Preview glow", glowArgs().preview.name)
+      assert.equal("Preview Glow", glowArgs().preview.name)
       assert.is_truthy(glowArgs().preview.desc)
+    end)
+
+    -- PE1-D7: button labels are Title Case, the way the client's own UI writes them. Asserted as
+    -- the literal strings a player reads, so a future lowercase label is a test failure rather
+    -- than something only a screenshot review would catch. Minor words inside a phrase stay lower
+    -- case ("Reset These to Defaults"), and prose is untouched.
+    it("labels every glow button in Title Case", function()
+      assert.equal("Preview Glow", glowArgs().preview.name)
+      assert.equal("Reset These to Defaults", glowArgs().reset.name)
+      -- PE7-D3 dropped "hint" from the cluster's labels once the toggle stopped saying it, and the
+      -- amendment dropped the style picker altogether -- the next-cast glow follows the main style.
+      assert.equal("Preview", hintArgs().previewDim.name)
+      assert.is_nil(hintArgs().secondaryStyle)
+      assert.equal("How dim it is", hintArgs().secondaryAlpha.name)
     end)
 
     -- The driver only repaints when the queue changes, so a colour change would otherwise not
@@ -694,7 +859,7 @@ describe("Options (overlay/peripheral cues)", function()
       glowArgs().thickness.set(nil, 2)
       ns.db.profile.glow.style = "PROC"
       glowArgs().speed.set(nil, 2)
-      glowArgs().secondary.set(nil, true)
+      hintArgs().secondary.set(nil, true)
       assert.equal(6, stopped)
       -- The style picker has always done its own teardown; it must keep doing it.
       glowArgs().style.set(nil, "BUTTON")
@@ -730,6 +895,12 @@ describe("Options (overlay/peripheral cues)", function()
       return Options.table().args.notifications.args
     end
 
+    -- PE13-D1: the log lives in a panel of its own at the bottom of the page, so its rows are one
+    -- level deeper than the settings. Same keys, one hop further in.
+    local function logArgs()
+      return announceArgs().log.args
+    end
+
     before_each(function()
       helper.load("Elmira/Core/Announce.lua")
       ns.db.profile.announce = {
@@ -746,30 +917,55 @@ describe("Options (overlay/peripheral cues)", function()
         sounds = function() return { None = "None", Chime = "Chime" } end,
         ApplyFont = function() return true end,
         SetMoving = function() return true end,
+        StopMoving = function() return true end,
         isMoving = function() return false end,
       }
     end)
 
-    -- D28: the page opens with an intro sentence, ahead of even the Log.
+    -- D28: the page opens with an intro sentence.
     it("opens with an intro sentence", function()
       local intro = announceArgs().intro
       assert.equal("description", intro.type)
       assert.equal(0, intro.order)
-      assert.is_true(intro.order < announceArgs().logHeader.order)
+      assert.is_true(intro.order < announceArgs().log.order)
+    end)
+
+    -- PE13-D1. The log used to be the first thing on the page, one row per message, so every
+    -- setting below it moved down as the addon talked and the page was never twice the same shape.
+    -- It is one inline panel now, with ONE order, and that order is after everything else.
+    it("keeps the log in a panel at the bottom, whatever the message count", function()
+      local args = announceArgs()
+      assert.equal("group", args.log.type)
+      assert.is_true(args.log.inline)
+      assert.equal("Notifications Log", args.log.name)
+      -- Nothing on the page sits below it, and no row of it leaks back out to the page.
+      for key, row in pairs(args) do
+        if key ~= "log" and type(row) == "table" and row.order then
+          assert.is_true(row.order < args.log.order, key .. " is below the log panel")
+        end
+      end
+      assert.is_nil(args.logHeader)
+      assert.is_nil(args.logClear)
+      local before = args.log.order
+      for i = 1, 12 do ns.Announce.emit("status", "line " .. i) end
+      assert.equal(before, announceArgs().log.order)
+      assert.equal(64, announceArgs().duration.order)  -- and the settings did not move either
     end)
 
     it("says so plainly when nothing has been said yet", function()
-      assert.is_truthy(announceArgs().logEmpty.name:find("Nothing yet"))
-      assert.is_nil(announceArgs().log1)
+      assert.is_truthy(logArgs().logEmpty.name:find("Nothing yet"))
+      assert.is_nil(logArgs().log1)
     end)
 
     it("lists what was said, newest first, in the category's own colour", function()
       ns.Announce.emit("status", "first")
       ns.Announce.emit("warning", "second")
-      local args = announceArgs()
+      local args = logArgs()
       assert.is_truthy(args.log1.name:find("second"))
       assert.is_truthy(args.log1.name:find(ns.Colors.WARN.hex))
       assert.is_truthy(args.log2.name:find("first"))
+      -- PE14-D1: the prefix on a log row is the category's label, so the rename shows here too.
+      assert.is_truthy(args.log2.name:find("Settings and setup", 1, true))
       assert.is_nil(args.logEmpty)
       -- Each line is its own row, in order, under the header and above the Clear button.
       assert.equal("description", args.log1.type)
@@ -780,28 +976,36 @@ describe("Options (overlay/peripheral cues)", function()
 
     it("empties the log on request", function()
       ns.Announce.emit("status", "x")
-      announceArgs().logClear.func()
+      logArgs().logClear.func()
       assert.equal(0, #ns.Announce.log())
     end)
 
     it("gives every category its own row of channels", function()
       local args = announceArgs()
-      for _, c in ipairs(ns.Announce.CATEGORIES) do
+      for _, c in ipairs(ns.Announce.listed()) do
         assert.is_not_nil(args["cat" .. c.key], c.key .. " has no row")
         assert.is_true(args["cat" .. c.key].inline)
       end
     end)
 
-    -- The Log is the record, not a channel; party/raid are offered only where the category is
-    -- shareable in code, so no amount of clicking can put "my rotation changed" into a group's chat.
-    it("offers party and raid only where the category may leave the client, and never the log", function()
+    -- PE14-D3: the cooldown row is off this page entirely -- announcing a long cooldown is a
+    -- property of the ability, not a routing choice, so it moves to the Abilities tab. It was the
+    -- only `shareable` category, so the Party and Raid toggles and the cooldown-length slider come
+    -- off the page with it. Nothing in the engine changed; only the page stopped offering it.
+    it("no longer offers the cooldown row, its group toggles or its length slider", function()
       local args = announceArgs()
-      assert.is_nil(args.catrotation.args.party)
-      assert.is_nil(args.catrotation.args.raid)
-      assert.is_nil(args.catwarning.args.party)
-      assert.is_nil(args.catwarning.args.raid)
-      assert.is_not_nil(args.catcooldown.args.party)
-      assert.is_not_nil(args.catcooldown.args.raid)
+      assert.is_nil(args.catcooldown)
+      for _, c in ipairs(ns.Announce.listed()) do
+        local row = args["cat" .. c.key].args
+        assert.is_nil(row.party, c.key .. " still offers party")
+        assert.is_nil(row.raid, c.key .. " still offers raid")
+        assert.is_nil(row.floor, c.key .. " still offers the cooldown slider")
+      end
+    end)
+
+    -- The Log is the record, not a channel: no row can switch it off.
+    it("offers chat, screen and sound for every kind, and never the log", function()
+      local args = announceArgs()
       assert.is_nil(args.catrotation.args.log)
       assert.is_not_nil(args.catrotation.args.chat)
       assert.is_not_nil(args.catrotation.args.screen)
@@ -831,35 +1035,6 @@ describe("Options (overlay/peripheral cues)", function()
       assert.is_true(announceArgs().catrotation.args.screen.get())
     end)
 
-    -- D22: party and raid are their own controls, read and written independently, on the one
-    -- category that ever shows them.
-    it("reads and writes the party toggle without touching raid", function()
-      local args = announceArgs().catcooldown.args
-      assert.is_false(args.party.get())
-      args.party.set(nil, true)
-      assert.is_true(args.party.get())
-      assert.is_false(args.raid.get())
-      assert.equal(true, ns.db.profile.announce.routes.cooldown.party)
-    end)
-
-    it("reads and writes the raid toggle without touching party", function()
-      local args = announceArgs().catcooldown.args
-      assert.is_false(args.raid.get())
-      args.raid.set(nil, true)
-      assert.is_true(args.raid.get())
-      assert.is_false(args.party.get())
-      assert.equal(true, ns.db.profile.announce.routes.cooldown.raid)
-    end)
-
-    -- The first touch has to copy the shipped defaults before writing, exactly like the ordinary
-    -- channels do -- otherwise switching raid on would switch chat/screen/sound off for cooldown.
-    it("keeps the other channels when raid is switched on for the first time", function()
-      local args = announceArgs().catcooldown.args
-      args.raid.set(nil, true)
-      assert.is_true(args.raid.get())
-      assert.is_false(args.chat.get())    -- cooldown ships chat off; still off, not nil/on
-    end)
-
     -- D25: there is no "which of my tabs" select any more -- a plain sentence says how Elmira
     -- decides, since the decision itself now lives in Display/Announcers, not a stored index here.
     it("explains how the chat sink picks a window, instead of offering a stale index", function()
@@ -886,7 +1061,6 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal("Friz Quadrata TT", args.font.get())
       assert.equal(18, args.size.get())
       assert.equal(4, args.duration.get())
-      assert.is_false(args.move.get())
     end)
 
     it("offers the fonts the player actually has", function()
@@ -894,21 +1068,42 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal("Friz Quadrata TT", args.font.values()["Friz Quadrata TT"])
     end)
 
-    it("reflects move mode being on", function()
+    -- PE13-D2/D3. It was a toggle disabled while positions were locked -- and `locked` defaults to
+    -- TRUE, so out of the box it was grey and pointed at another page. It is the same control as
+    -- the Queue page's "Position the Strip" now: an execute that relabels while the mode is on.
+    it("relabels while move mode is on instead of ever going grey", function()
+      local row = announceArgs().move
+      assert.equal("execute", row.type)
+      assert.equal("Move screen messages", row.name())
+      assert.is_nil(row.disabled)
+      assert.is_nil(row.get)
       ns.Announcers.isMoving = function() return true end
-      assert.is_true(announceArgs().move.get())
+      assert.equal("Done Moving", announceArgs().move.name())
     end)
 
-    -- D18: locking positions on General ends move mode AND must stop it being switched back on
-    -- until unlocked, or the toggle would read as broken the moment the strip locked underneath it.
-    it("is disabled, with a reason, while positions are locked on General", function()
-      local row = announceArgs().move
-      assert.is_false(row.disabled())
-      assert.equal("Shows one sample of every kind so you can see how tall it gets, and lets you "
-                 .. "drag it.", row.desc())
+    it("stays usable, and says nothing about unlocking, while positions are locked", function()
       ns.Queue.isLocked = function() return true end
-      assert.is_true(row.disabled())
-      assert.equal("Unlock all positions on the General page first.", row.desc())
+      local row = announceArgs().move
+      assert.equal("Move screen messages", row.name())
+      assert.is_nil(row.disabled)
+      assert.is_nil(row.desc:find("Unlock"))
+      -- And pressing it while locked really does start the mode, rather than doing nothing.
+      local moved
+      ns.Announcers.SetMoving = function(v) moved = v end
+      row.func()
+      assert.is_true(moved)
+    end)
+
+    -- The mode is temporary and the lock is a setting: pressing this must never store one as the
+    -- other, or a /reload mid-drag would leave the player unlocked for good.
+    it("never writes the lock setting", function()
+      ns.Queue.isLocked = function() return true end
+      ns.db.profile.locked = true
+      announceArgs().move.func()
+      assert.is_true(ns.db.profile.locked)
+      ns.Announcers.isMoving = function() return true end
+      announceArgs().move.func()
+      assert.is_true(ns.db.profile.locked)
     end)
 
     -- D24: the shared "Sound" select under "How they look" is gone; each row picks its own.
@@ -948,23 +1143,56 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal("Chime", ns.db.profile.announce.sounds.rotation)
     end)
 
-    it("turns move mode on and reports it", function()
-      local moved
-      ns.Announcers.SetMoving = function(v) moved = v end
-      announceArgs().move.set(nil, true)
-      assert.is_true(moved)
+    -- PE14-D2: picking a sound plays it. The names come from whatever media packs the player runs,
+    -- so the list means nothing on its own, and the only other way to audition one was to go and
+    -- make a real notification happen. It plays through the announcement sink itself, AFTER
+    -- storing, so what is heard is exactly what the next real message will use.
+    it("plays the sound it was just given, through the sink the announcement uses", function()
+      local heard = {}
+      ns.Announcers.sound = function(c)
+        heard[#heard + 1] = { key = c and c.key, name = ns.db.profile.announce.sounds[c and c.key] }
+      end
+      announceArgs().catwarning.args.soundPick.set(nil, "Chime")
+      assert.same({ { key = "warning", name = "Chime" } }, heard)
+      -- "None" goes down the same path; staying silent is that path's own answer.
+      announceArgs().catwarning.args.soundPick.set(nil, "None")
+      assert.same({ key = "warning", name = "None" }, heard[2])
     end)
 
-    it("sends one message of every kind on request", function()
+    -- It runs from inside a widget's own handler, where a throw is a visible Lua error.
+    it("still stores the choice when there is nothing able to play it", function()
+      ns.Announcers.sound = nil
+      announceArgs().catwarning.args.soundPick.set(nil, "Chime")
+      assert.equal("Chime", ns.db.profile.announce.sounds.warning)
+    end)
+
+    it("turns move mode on, and the second press ends it", function()
+      local moved, stopped = nil, 0
+      ns.Announcers.SetMoving = function(v) moved = v end
+      ns.Announcers.StopMoving = function() stopped = stopped + 1 end
+      announceArgs().move.func()
+      assert.is_true(moved)
+      assert.equal(0, stopped)
+      ns.Announcers.isMoving = function() return true end
+      announceArgs().move.func()
+      assert.equal(1, stopped)
+    end)
+
+    -- PE14-D3: one message per kind THE PAGE SHOWS. The button and the routing table read the
+    -- same list, so it cannot go on testing a kind there is no row for.
+    it("sends one message of every kind the page shows, and none it does not", function()
       announceArgs().test.func()
-      assert.equal(#ns.Announce.CATEGORIES, #ns.Announce.log())
+      assert.equal(#ns.Announce.listed(), #ns.Announce.log())
+      for _, entry in ipairs(ns.Announce.log()) do
+        assert.is_not.equal("cooldown", entry.category)
+      end
     end)
 
     -- A button for previewing your own settings must not put six lines in a group's chat.
     it("keeps the test messages out of party, whatever the routing says", function()
       local partied = 0
       ns.Announce.registerSink("party", function() partied = partied + 1 end)
-      ns.db.profile.announce.routes.cooldown = { party = true }
+      ns.db.profile.announce.routes.rotation = { party = true, raid = true }
       announceArgs().test.func()
       assert.equal(0, partied)
     end)
@@ -975,27 +1203,36 @@ describe("Options (overlay/peripheral cues)", function()
       local args = announceArgs()
       local expected = {
         intro      = { type = "description", order = 0 },
-        logHeader  = { type = "description", order = 1 },
-        logEmpty   = { type = "description", order = 2 },
-        logClear   = { type = "execute", order = 30, name = "Clear messages" },
+        log        = { type = "group", order = 90, name = "Notifications Log" },
         routing    = { type = "header", order = 40, name = "Where each kind of message goes" },
         where      = { type = "header", order = 60, name = "How they look" },
         chatInfo   = { type = "description", order = 61 },
         font       = { type = "select", order = 62, name = "Screen font" },
         size       = { type = "range", order = 63, name = "Screen text size" },
         duration   = { type = "range", order = 64, name = "Seconds on screen" },
-        move       = { type = "toggle", order = 66, name = "Move the on-screen message" },
-        test       = { type = "execute", order = 67, name = "Test each kind" },
+        move       = { type = "execute", order = 66, name = "Move screen messages" },
+        test       = { type = "execute", order = 67, name = "Test Each Kind" },
       }
       for key, want in pairs(expected) do
         local row = args[key]
         assert.is_not_nil(row, key .. " is missing")
         assert.equal(want.type, row.type, key .. " is the wrong kind of control")
         assert.equal(want.order, row.order, key .. " is in the wrong place")
-        if want.name then assert.equal(want.name, row.name, key .. " is labelled wrongly") end
+        if want.name then
+          local name = type(row.name) == "function" and row.name() or row.name
+          assert.equal(want.name, name, key .. " is labelled wrongly")
+        end
       end
-      assert.is_truthy(args.logHeader.name:find("Log"))
-      assert.equal("medium", args.logHeader.fontSize)
+      local log = logArgs()
+      assert.equal("description", log.logHeader.type)
+      assert.equal(1, log.logHeader.order)
+      assert.is_truthy(log.logHeader.name:find("newest first"))
+      assert.equal("medium", log.logHeader.fontSize)
+      assert.equal("description", log.logEmpty.type)
+      assert.equal(2, log.logEmpty.order)
+      assert.equal("execute", log.logClear.type)
+      assert.equal(30, log.logClear.order)
+      assert.equal("Clear Messages", log.logClear.name)
       assert.is_truthy(args.move.desc)
       assert.is_truthy(args.test.desc)
       -- Removed entirely, not merely renamed (D24/D25).
@@ -1015,7 +1252,7 @@ describe("Options (overlay/peripheral cues)", function()
 
     it("names and colours each category's row and keeps them in order", function()
       local args = announceArgs()
-      for i, c in ipairs(ns.Announce.CATEGORIES) do
+      for i, c in ipairs(ns.Announce.listed()) do
         local group = args["cat" .. c.key]
         assert.equal("group", group.type)
         assert.equal(40 + i, group.order)
@@ -1026,37 +1263,26 @@ describe("Options (overlay/peripheral cues)", function()
 
     -- The toggles used to be ordered by pairs(), so they came out in a different order for every
     -- category and a different order again on another Lua build.
-    it("lays the channel toggles out in one fixed order, party then raid last", function()
-      local args = announceArgs().catcooldown.args
-      for _, key in ipairs({ "chat", "screen", "sound", "party", "raid" }) do
-        assert.equal("toggle", args[key].type, key .. " is not a toggle")
-        assert.is_not_nil(args[key].name, key .. " has no label")
+    it("lays the channel toggles out in one fixed order in every row", function()
+      for _, c in ipairs(ns.Announce.listed()) do
+        local args = announceArgs()["cat" .. c.key].args
+        for _, key in ipairs({ "chat", "screen", "sound" }) do
+          assert.equal("toggle", args[key].type, key .. " is not a toggle")
+          assert.is_not_nil(args[key].name, key .. " has no label")
+        end
+        assert.equal(1, args.chat.order)
+        assert.equal(2, args.screen.order)
+        assert.equal(3, args.sound.order)
       end
-      assert.equal(1, args.chat.order)
-      assert.equal(2, args.screen.order)
-      assert.equal(3, args.sound.order)
-      assert.equal(4, args.party.order)
-      assert.equal(5, args.raid.order)
-    end)
-
-    it("numbers a non-shareable category's toggles without a gap where party/raid would be", function()
-      local args = announceArgs().catrotation.args
-      assert.equal(1, args.chat.order)
-      assert.equal(2, args.screen.order)
-      assert.equal(3, args.sound.order)
-      assert.is_nil(args.party)
-      assert.is_nil(args.raid)
     end)
 
     -- D22: every toggle in a row shares the same "when it fires" sentence -- the whole point is
     -- that the reader learns WHEN before picking a pipe.
     it("gives every toggle in a row the same when-it-fires sentence", function()
-      local args = announceArgs().catcooldown.args
+      local args = announceArgs().catwarning.args
       assert.is_truthy(args.chat.desc)
       assert.equal(args.chat.desc, args.screen.desc)
       assert.equal(args.chat.desc, args.sound.desc)
-      assert.equal(args.chat.desc, args.party.desc)
-      assert.equal(args.chat.desc, args.raid.desc)
     end)
 
     -- Each category's own sentence, not the same text copy-pasted for all four.
@@ -1065,27 +1291,17 @@ describe("Options (overlay/peripheral cues)", function()
       local args = announceArgs()
       assert.truthy(args.catrotation.args.chat.desc:find(
         "a line in your rotation becomes usable or stops being usable", 1, true))
-      assert.truthy(args.catcooldown.args.chat.desc:find(
-        "a cooldown of 2 minutes or longer", 1, true))
       assert.truthy(args.catwarning.args.chat.desc:find(
         "no visible bar button holds the spell, or a display component errored", 1, true))
       assert.truthy(args.catstatus.args.chat.desc:find(
         "Learning mode rewrites two other settings", 1, true))
     end)
 
-    -- D23: the same slider as before, now living directly under the row it answers for.
-    it("puts the cooldown floor slider inside the cooldown category's own group", function()
-      local args = announceArgs().catcooldown.args
-      assert.equal("range", args.floor.type)
-      assert.equal(6, args.floor.order)
-      assert.is_nil(announceArgs().catrotation.args.floor)
-    end)
-
     -- Without a cap the panel grows without limit and the switches below the log become
     -- unreachable on a long session.
     it("lists at most twenty log lines however many there are", function()
       for i = 1, 25 do ns.Announce.emit("status", "line " .. i) end
-      local args = announceArgs()
+      local args = logArgs()
       assert.is_not_nil(args.log20)
       assert.is_nil(args.log21)
       assert.is_truthy(args.log1.name:find("line 25"))
@@ -1316,28 +1532,32 @@ describe("Options (overlay/peripheral cues)", function()
   -- The category shipped routable to party with nothing ever emitting it, so "what will appear
   -- here" was unanswerable from the panel. The slider is the answer, and its description is the
   -- explanation the owner asked for.
+  -- PE14-D3: the SLIDER left the panel with the cooldown row -- a duration floor cannot tell a
+  -- tank's defensive save from a DPS burst, which is the distinction that decides whether a group
+  -- wants to hear about it, so it becomes a per-ability setting. The RULE stayed exactly where it
+  -- was: the engine still asks it on every cast, and the stored floor is still what answers.
   describe("what counts as a cooldown worth announcing", function()
-    -- D23: the slider moved to sit directly under the cooldown row it answers for, inside that
-    -- category's own inline group, rather than living apart from it under "How they look".
-    local function row()
-      return Options.table().args.notifications.args.catcooldown.args.floor
-    end
-
-    it("offers a floor, and says what it means in abilities the player knows", function()
+    it("is no longer asked anywhere on the Notifications page", function()
       helper.load("Elmira/Core/Announce.lua")
-      assert.equal("range", row().type)
-      assert.equal(0, row().min)
-      assert.is_truthy(row().desc:find("Crusader Strike", 1, true))
-      assert.is_truthy(row().desc:find("two minutes", 1, true))
+      local page = Options.table().args.notifications.args
+      assert.is_nil(page.catcooldown)
+      assert.is_nil(page.floor)
+      for key, entry in pairs(page) do
+        if type(entry) == "table" and type(entry.args) == "table" then
+          assert.is_nil(entry.args.floor, key .. " still carries the cooldown slider")
+        end
+      end
     end)
 
-    it("reads through Announce, so the panel and the rule agree", function()
+    it("still decides, off the page, from the stored floor", function()
       helper.load("Elmira/Core/Announce.lua")
       ns.db.profile.announce = ns.db.profile.announce or {}
-      assert.equal(ns.Announce.cooldownFloor(), row().get())
-      row().set(nil, 45)
-      assert.equal(45, ns.db.profile.announce.cooldownFloor)
-      assert.equal(45, row().get())
+      assert.equal(120, ns.Announce.cooldownFloor())
+      assert.is_true(ns.Announce.worthAnnouncing(180))
+      assert.is_false(ns.Announce.worthAnnouncing(30))
+      ns.db.profile.announce.cooldownFloor = 45
+      assert.equal(45, ns.Announce.cooldownFloor())
+      assert.is_true(ns.Announce.worthAnnouncing(60))
     end)
   end)
 

@@ -572,6 +572,8 @@ describe("Core.Conditions", function()
         { { "seal_linger", "SEAL_OF_COMMAND" }, "seal of command is still lingering" },
         { { "cooldown_ready", "EXORCISM" }, "exorcism is off cooldown" },
         { { "cooldown_gt", "DIVINE_STORM", 1 }, "divine storm has more than 1s of cooldown left" },
+        -- PE3-D5: the number only survives for a caller that supplies no `slotName` -- the panel
+        -- always does, and the named sentence is pinned in its own test below.
         { { "item_ready", 13 }, "the item in slot 13 is ready" },
         { { "swing", maxRemaining = 0.5 }, "next swing within 0.5s" },
         { { "swing", minRemaining = 1 }, "next swing at least 1s away" },
@@ -582,6 +584,17 @@ describe("Core.Conditions", function()
       for _, case in ipairs(cases) do
         assert.equal(case[2], Conditions.describe(case[1], ctx), case[1][1])
       end
+    end)
+
+    -- PE3-D5 (2026-09-08 owner ruling, in-game): "the item in slot 13 is ready" is an API detail
+    -- read aloud, and the slot dropdown two controls away already said "Trinket 1". Core keeps the
+    -- number; the WORD comes from the caller's `slotName`, so the two can never disagree.
+    it("names an equipment slot rather than numbering it, when the caller can name one", function()
+      ctx.slotName = function(slot) return slot == 13 and "Trinket 1" or "Trinket 2" end
+      assert.equal("Trinket 1 is off cooldown", Conditions.describe({ "item_ready", 13 }, ctx))
+      assert.equal("Trinket 2 is off cooldown", Conditions.describe({ "item_ready", 14 }, ctx))
+      assert.equal("Soul Of The Exile on Trinket 2",
+                   Conditions.describe({ "enchant", 14, "SOUL_OF_THE_EXILE" }, ctx))
     end)
 
     -- One phrasing per requirement. Core/Gates already words a static gate in the voice of it being

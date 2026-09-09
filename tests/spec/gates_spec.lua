@@ -268,10 +268,52 @@ describe("Core.Gates", function()
 
     -- "This client will not tell me" is not "you have not learned it", and treating them alike
     -- would dim every row in the build.
+    --
+    -- PE15: the row stays live AND says so -- `certain` false is how Display/Driver knows this
+    -- verdict is a guess, so that it is neither announced nor remembered. Without the flag the
+    -- guess is stored as if it were a reading, and the next real answer looks like the character
+    -- gained or lost the ability.
     it("says nothing when the client cannot answer whether a spell is known", function()
       local s = state{}
       s.known = function() return nil end
-      assert.is_true(Gates.evaluate(build({ spell = "DIVINE_STORM" }), s, ctx)[1].active)
+      local row = Gates.evaluate(build({ spell = "DIVINE_STORM" }), s, ctx)[1]
+      assert.is_true(row.active)
+      assert.is_false(row.certain)
+    end)
+
+    -- The ordinary case must stay certain, or nothing is ever announced again.
+    it("is certain about every verdict the character actually answered", function()
+      local live = Gates.evaluate(
+        build({ spell = "DIVINE_STORM", when = { { "bonus", "HOLY_POWER_CONSUME" } } }),
+        state{ known = { DIVINE_STORM = true }, bonuses = { HOLY_POWER_CONSUME = true } }, ctx)
+      assert.is_true(live[1].certain)
+      -- A dynamic gate is undecidable BY DESIGN and is not doubt about the client. Treating the
+      -- two alike would mark most of the build uncertain and silence the announcements entirely.
+      local dynamic = Gates.evaluate(
+        build({ spell = "DIVINE_STORM", when = { { "enemies", min = 3 } } }),
+        state{ known = { DIVINE_STORM = true } }, ctx)
+      assert.is_true(dynamic[1].certain)
+    end)
+
+    -- One gate the client stated plainly settles the row: "this cannot fire, and here is the
+    -- requirement" is a fact, whatever went unread beside it.
+    it("is certain about a row something definitely blocks, whatever else went unread", function()
+      local s = state{ level = 40 }
+      s.known = function() return nil end
+      local row = Gates.evaluate(
+        build({ spell = "DIVINE_STORM", when = { { "level", min = 60 } } }), s, ctx)[1]
+      assert.is_false(row.active)
+      assert.is_true(row.certain)
+    end)
+
+    -- The other reading the client can refuse: a static gate nothing could read. A flavour with no
+    -- engraving leaves every rune row live, and that row is a guess for the same reason.
+    it("is uncertain about a static gate the client cannot read", function()
+      local row = Gates.evaluate(build({ spell = "X", when = { { "rune", "RUNE_WRATH" } } }),
+                                 state{ runes = {}, known = { X = true } },
+                                 { capabilities = { runes = false } })[1]
+      assert.is_true(row.active)
+      assert.is_false(row.certain)
     end)
 
     it("answers empty rather than erroring with nothing to evaluate", function()
@@ -386,6 +428,18 @@ describe("Core.Gates", function()
       assert.equal("needs the 4-set", snap.DIVINE_STORM.reason)
     end)
 
+    -- PE15: the flag has to survive the collapse to one verdict per spell, or Display/Driver can
+    -- never see it. Between two rows that agree, the reading the client GAVE wins -- a spell whose
+    -- second entry is certainly available is certainly available.
+    it("carries whether the verdict could be read at all", function()
+      local snap = Gates.snapshot(rows{ { spell = "DIVINE_STORM", active = true, certain = false,
+                                          reasons = {} } })
+      assert.is_false(snap.DIVINE_STORM.certain)
+      snap = Gates.snapshot(rows{ { spell = "DIVINE_STORM", active = true, certain = false, reasons = {} },
+                                  { spell = "DIVINE_STORM", active = true, certain = true, reasons = {} } })
+      assert.is_true(snap.DIVINE_STORM.certain)
+    end)
+
     it("keys an item row by its slot", function()
       local snap = Gates.snapshot(rows{ { item = 13, active = true, reasons = {} } })
       assert.is_true(snap["item:13"].active)
@@ -416,6 +470,22 @@ describe("Core.Gates", function()
     it("says nothing about a spell that was not there before", function()
       local diff = Gates.diff({}, { DIVINE_STORM = { active = true } })
       assert.equal(0, #diff.activated)
+    end)
+
+    -- PE15. "I could not tell" is not a state the character was ever in, so a change into or out
+    -- of it is not a change. Both directions, because suppressing only one of them still announces
+    -- half of every wobble -- and a snapshot with no flag at all (an older or hand-built one) is
+    -- treated as certain, since a diff that quietly says nothing is the worse failure.
+    it("says nothing when either side of the change is a reading the client could not give", function()
+      local guess = Gates.diff({ DIVINE_STORM = { active = false, certain = true } },
+                               { DIVINE_STORM = { active = true, certain = false } })
+      assert.equal(0, #guess.activated)
+      local recovered = Gates.diff({ DIVINE_STORM = { active = true, certain = false } },
+                                   { DIVINE_STORM = { active = false, certain = true } })
+      assert.equal(0, #recovered.deactivated)
+      local plain = Gates.diff({ DIVINE_STORM = { active = false, certain = true } },
+                               { DIVINE_STORM = { active = true, certain = true } })
+      assert.equal(1, #plain.activated)
     end)
 
     -- An unordered list names the same two spells in a different order every time and reads like

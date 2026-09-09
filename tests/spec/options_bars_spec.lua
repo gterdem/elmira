@@ -18,7 +18,7 @@ describe("Options (action bars)", function()
     ns = helper.reset()
     ns.L = setmetatable({}, { __index = function(_, k) return k end })
     helper.load("Elmira/Core/Colors.lua")
-    ns.db = { profile = { glow = { enabled = true, barGlow = true, style = "PIXEL" } } }
+    ns.db = { profile = { glow = { barGlow = true, style = "PIXEL", secondary = false } } }
     ns.Display = { refresh = function() end, computeQueue = function() return { { spell = "EXORCISM" } } end }
     ns.Glow = { STYLES = { PIXEL = {}, BUTTON = {}, AUTOCAST = {} }, StopAll = function() end }
     ns.Queue = { Layout = function() end }
@@ -30,7 +30,11 @@ describe("Options (action bars)", function()
 
   before_each(load)
 
-  local function group() return Options.table().args.bars.args end
+  -- PE6-D3: Action Bars is an inline panel on the General page now, not a top-level tree node.
+  local function group() return Options.table().args.general.args.bars.args end
+  -- PE6-D4.4: the master toggle, its Preview button and the preview's note live INSIDE the
+  -- "Action bar glow" panel, above the check rows that diagnose exactly that switch.
+  local function glowPanel() return group().check.args end
   local function rowText(args)
     local out = {}
     for _, row in pairs(args) do
@@ -46,10 +50,10 @@ describe("Options (action bars)", function()
   it("says what the section is for, and names its two halves", function()
     local args = group()
     assert.truthy(rowText(args):find("glows the button holding your next suggested spell", 1, true))
-    assert.equal("Bar addon", args.bars.name)
-    assert.equal("Is my spell showing?", args.check.name)
-    assert.equal("Preview glow", args.preview.name)
-    assert.truthy(args.preview.desc:find("without waiting for a fight", 1, true))
+    assert.equal("Bar Addons", args.bars.name)
+    assert.equal("Action bar glow", args.check.name)
+    assert.equal("Preview Glow", glowPanel().preview.name)
+    assert.truthy(glowPanel().preview.desc:find("without waiting for a fight", 1, true))
     assert.truthy(args.check.args.pick.desc:find("suggesting right now", 1, true))
     assert.equal("Test with", args.check.args.pick.name)
   end)
@@ -57,6 +61,10 @@ describe("Options (action bars)", function()
   -- The client's font has no U+25CF/U+2714/U+2718: the first in-game run rendered every marker as
   -- an identical empty box, so all four bar states and every check verdict looked the same. A
   -- decoration that does not decode is worse than none, because it reads as a control.
+  --
+  -- PE6-D5 lifted that constraint for the bar list: a TEXTURE draws where a font glyph does not, so
+  -- the rows carry the same shipped `mark_*` set the Builder's status column uses. The check rows
+  -- below them are still words, and still must not reach for a glyph.
   it("marks every state in characters the client can actually draw", function()
     ns.BarProviders = { status = function() return {
       { name = "ElvUI", state = "active", activeName = "ElvUI" },
@@ -73,6 +81,39 @@ describe("Options (action bars)", function()
     end
     assert.truthy(text:find("OK", 1, true))
     assert.truthy(text:find("FAIL", 1, true))
+  end)
+
+  -- PE6-D5: four states, four different pictures and three different text colours. The ASCII this
+  -- replaced drew ONE mark for "active" and the SAME mark for the other three, so "installed but
+  -- something else is driving your bars" and "not installed at all" were indistinguishable -- the
+  -- exact failure the list exists to prevent, one layer down.
+  it("draws each bar state with its own shipped texture and its own state colour", function()
+    ns.BarProviders = { status = function() return {
+      { name = "ElvUI", state = "active", activeName = "ElvUI" },
+      { name = "Bartender4", state = "inactive", activeName = "ElvUI" },
+      { name = "Dominos", state = "absent" },
+      { name = "Blizzard", state = "fallback", activeName = "ElvUI" },
+    } end }
+    local byName = {}
+    for _, row in pairs(group().bars.args) do
+      local name = row.name
+      for _, who in ipairs({ "ElvUI", "Bartender4", "Dominos", "Blizzard" }) do
+        if name:find(who, 1, true) and not name:find("glowing buttons", 1, true) then
+          byName[who] = name
+        end
+      end
+    end
+    -- The texture, referenced exactly as Rotation.MARKS does -- not a second copy of the path.
+    assert.truthy(byName.ElvUI:find(ns.Rotation.MARKS.firing.mark, 1, true))
+    assert.truthy(byName.Bartender4:find(ns.Rotation.MARKS.waiting.mark, 1, true))
+    assert.truthy(byName.Blizzard:find(ns.Rotation.MARKS.waiting.mark, 1, true))
+    assert.truthy(byName.Dominos:find(ns.Rotation.MARKS.blocked.mark, 1, true))
+    -- ... and the STATE words carry the colour, while the addon name keeps white/grey.
+    assert.truthy(byName.ElvUI:find("|cff" .. ns.Colors.OK.hex .. "Detected", 1, true))
+    assert.truthy(byName.Bartender4:find("|cff" .. ns.Colors.WARN.hex .. "installed, but", 1, true))
+    assert.truthy(byName.Blizzard:find("|cff" .. ns.Colors.WARN.hex .. "available", 1, true))
+    assert.truthy(byName.Dominos:find("|cff" .. ns.Colors.MUTED.hex .. "not installed", 1, true))
+    assert.truthy(byName.ElvUI:find("|cffFFFFFFElvUI", 1, true))
   end)
 
   describe("the bar addon list", function()
@@ -182,11 +223,12 @@ describe("Options (action bars)", function()
     -- rather than sitting at the bottom where Import/Export used to be.
     assert.equal("rotation", seen[orders[2]])
     assert.equal("queue", seen[orders[3]])
-    assert.equal("bars", seen[orders[4]])
-    assert.equal("glow", seen[orders[5]])
+    -- PE6-D3: "Action bars" is gone from the tree entirely -- it is an inline panel on General now,
+    -- so Glow follows Queue directly and nothing navigates to a node that no longer exists.
+    assert.equal("glow", seen[orders[4]])
     -- Everything that TELLS you something lives under one heading (ADR-0015 F37), rather than as
     -- three more peers of "Queue": announcements, flares and cue sounds are one question.
-    assert.equal("notifications", seen[orders[6]])
+    assert.equal("notifications", seen[orders[5]])
   end)
 
   -- D28 (2026-09-07 Notifications pass): Notifications is a single page now -- what used to be the
@@ -202,31 +244,33 @@ describe("Options (action bars)", function()
     assert.equal(2, overlay.order)
     assert.equal("group", sounds.type)
     assert.equal(3, sounds.order)
-    -- And the inlined content is really there, not merely absent from the old wrapper.
+    -- And the inlined content is really there, not merely absent from the old wrapper. PE13-D1:
+    -- the log is a panel of its own at the bottom of the page rather than loose rows at the top.
     assert.is_not_nil(notifications.args.intro)
-    assert.is_not_nil(notifications.args.logHeader)
+    assert.is_not_nil(notifications.args.log.args.logHeader)
   end)
 
   describe("the bar glow toggle", function()
     -- It used to live under Glow, away from the status list that explains what it does. A toggle
     -- whose effect is invisible is where "I turned it on and nothing happened" starts.
-    it("lives in Action Bars, not in Glow", function()
-      assert.equal("toggle", group().barGlow.type)
+    it("lives in the Action bar glow panel, not in Glow", function()
+      assert.equal("toggle", glowPanel().barGlow.type)
+      assert.equal("Enable action bar glow", glowPanel().barGlow.name)
       assert.is_nil(Options.table().args.glow.args.barGlow)
     end)
 
     it("reads the current setting, and explains what it does", function()
-      assert.is_true(group().barGlow.get())
+      assert.is_true(glowPanel().barGlow.get())
       ns.db.profile.glow.barGlow = false
-      assert.is_false(group().barGlow.get())
-      assert.truthy(group().barGlow.desc:find("not just the queue icon", 1, true))
+      assert.is_false(glowPanel().barGlow.get())
+      assert.truthy(glowPanel().barGlow.desc:find("not just the queue icon", 1, true))
     end)
 
     it("writes the setting, drops glows it will no longer refresh, and repaints", function()
       local stopped, painted = 0, 0
       ns.Glow.StopAll = function() stopped = stopped + 1 end
       ns.Display.refresh = function() painted = painted + 1 end
-      group().barGlow.set(nil, false)
+      glowPanel().barGlow.set(nil, false)
       assert.is_false(ns.db.profile.glow.barGlow)
       assert.equal(1, stopped)
       assert.equal(1, painted)
@@ -257,7 +301,7 @@ describe("Options (action bars)", function()
       local frame, lit, style = { "button" }, nil, nil
       ns.BarGlow = { buttonsFor = function() return { frame } end }
       ns.Glow.Start = function(f, s) lit, style = f, s; return true end
-      local args = group()
+      local args = glowPanel()
       assert.is_true(Options.previewGlow())
       assert.equal(frame, lit)
       assert.equal("PIXEL", style)
@@ -283,20 +327,20 @@ describe("Options (action bars)", function()
     end)
 
     it("shows its note as a full-width line under the button", function()
-      local note = group().previewNote
+      local note = glowPanel().previewNote
       assert.equal("description", note.type)
       assert.equal("full", note.width)
-      assert.is_true(note.order > group().preview.order)
+      assert.is_true(note.order > glowPanel().preview.order)
     end)
 
     it("opens with no note, even after a previous preview left one", function()
       ns.BarGlow = { buttonsFor = function() return { { "button" } } end }
       ns.Glow.Start = function() return true end
-      local args = group()
+      local args = glowPanel()
       Options.previewGlow()
       assert.truthy(args.previewNote.name():find("action bars", 1, true))
       -- Reopening the panel rebuilds the table; a stale result must not greet the next visit.
-      assert.equal("", group().previewNote.name())
+      assert.equal("", glowPanel().previewNote.name())
     end)
 
     -- Two previews in a row must not leave the first button lit: nothing else will ever clear it.
@@ -327,7 +371,7 @@ describe("Options (action bars)", function()
       local lit = false
       ns.BarGlow = { buttonsFor = function() return { { "button" } } end }
       ns.Glow.Start = function() lit = true; return true end
-      group().preview.func()
+      glowPanel().preview.func()
       assert.is_true(lit)
     end)
 
@@ -386,14 +430,14 @@ describe("Options (action bars)", function()
       ns.addon = nil
       ns.BarGlow = { buttonsFor = function() return { { "button" } } end }
       ns.Glow.Start = function() return true end
-      local args = group()
+      local args = glowPanel()
       assert.is_true(Options.previewGlow())
       assert.truthy(args.previewNote.name():find("stay lit", 1, true))
     end)
 
     it("says why when the spell is not on a bar, rather than doing nothing", function()
       ns.BarGlow = { buttonsFor = function() return {} end }
-      local args = group()
+      local args = glowPanel()
       assert.is_false(Options.previewGlow())
       assert.truthy(args.previewNote.name():find("not on a bar Elmira can see", 1, true))
     end)
@@ -403,7 +447,7 @@ describe("Options (action bars)", function()
     it("distinguishes a missing glow library from a missing button", function()
       ns.BarGlow = { buttonsFor = function() return { { "button" } } end }
       ns.Glow.Start = function() return false end
-      local args = group()
+      local args = glowPanel()
       assert.is_false(Options.previewGlow())
       assert.truthy(args.previewNote.name():find("glow library is not loaded", 1, true))
     end)
@@ -467,7 +511,7 @@ describe("Options (action bars)", function()
         { label = "glow", ok = false },
       })
       assert.truthy(text:find("Glow is switched on", 1, true))
-      assert.truthy(text:find("Also glow your action bar", 1, true))
+      assert.truthy(text:find("Enable action bar glow", 1, true))
     end)
 
     -- An unknown spell key is not a bar problem, and must not be reported as one.
@@ -559,15 +603,14 @@ describe("Options (action bars)", function()
       assert.is_nil(Options.checkSpell())
     end)
 
-    -- Three switches can darken a perfectly placed, perfectly visible button. The panel used to
+    -- Two switches can darken a perfectly placed, perfectly visible button. The panel used to
     -- blame the same one every time, telling people to turn on a toggle that was already on.
-    it("names the right switch when the glow is off, out of three", function()
+    it("names the right switch when the glow is off, out of two", function()
       local function detailFor(which)
         return checkWith({ { label = "glow", ok = false, detail = which } })
       end
       assert.truthy(detailFor("addon"):find("Elmira itself is switched off", 1, true))
-      assert.truthy(detailFor("queue"):find("Glow the next cast", 1, true))
-      assert.truthy(detailFor("bars"):find("Also glow your action bar", 1, true))
+      assert.truthy(detailFor("bars"):find("Enable action bar glow", 1, true))
     end)
 
     it("explains being hidden in the player's terms, not the display's", function()

@@ -37,10 +37,16 @@ Interface.CONTRACT = {
   -- static fallback is safe, and a reading taken during the GCD must never be cached as a duration.
   "baseCooldown", "powerCost",
   -- Added at M5g. "Do you know this spell at all" is a different question from `usable`, which is
-  -- IsUsableSpell and answers false when you are merely out of mana or out of range. Core/Engine
+  -- IsUsableSpell and answers false when you are merely out of mana or out of range -- its SECOND
+  -- return (PE9-D2) says which of those two it was: true means the resource half. Core/Engine
   -- skips an unknown ability silently and correctly (ADR-0006 rule 5); Core/Gates has to be able to
   -- SAY so, which nothing on the contract could.
   "known",
+  -- Added at PE9 (D6). `targetExists` is UnitExists and says nothing about hostility, so the
+  -- "in combat, or when you have a target" visibility mode showed the strip for a bank NPC.
+  -- Separate member rather than a stricter `targetExists`, because the Rotation panel's context
+  -- line legitimately wants the loose reading ("target: yes").
+  "targetAttackable",
 }
 
 -- docs/01 §2: class-specific accessors are optional members guarded by a capability flag, so Core
@@ -86,7 +92,10 @@ function Interface.newNullState()
     gcd = function() return 0 end,
     gcdDuration = function() return 0 end,
     cooldown = function() return 0 end,
-    usable = function() return false end,
+    -- Two returns since PE9-D2: "can I cast this" and "is the reason a RESOURCE one". The second is
+    -- false here rather than nil for the same reason the strip only dims on it -- "this client has
+    -- not told me you are out of mana" must never be drawn as "you are out of mana".
+    usable = function() return false, false end,
     -- nil, not false: "this client cannot tell me" is not "you have not learned it", and Gates
     -- would dim every row in the build on the strength of the difference.
     known = function() return nil end,
@@ -97,6 +106,7 @@ function Interface.newNullState()
     targetType = function() return nil end,
     targetHPPct = function() return nil end,
     targetExists = function() return false end,
+    targetAttackable = function() return false end,
     inCombat = function() return false end,
     moving = function() return false end,
     weapon = function() return nil end,

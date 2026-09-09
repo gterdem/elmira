@@ -43,11 +43,15 @@ Gates.NEEDS_CAPABILITY = { rune = "runes", no_rune = "runes" }
 -- one it cannot build, and one that throws against this state are the same answer here -- "cannot
 -- say" -- and a gate check must never be the thing that takes the display down. Separate guards for
 -- each would each be unreachable, which is a check that cannot fail.
+-- Second return: "the answer is missing because nothing could READ it", which is a different
+-- thing from a gate that is simply about right now. PE15 hangs the whole certainty flag on that
+-- distinction -- treat every nil alike and every row carrying a dynamic gate becomes "uncertain",
+-- which would silence the announcements entirely instead of only the untrue ones.
 local function leafTest(cond, state)
   local ok, passed = pcall(function()
     return ns.__schemaConditions[cond[1]].make(cond)(state)
   end)
-  if not ok then return nil end
+  if not ok then return nil, true end
   return passed == true
 end
 
@@ -56,35 +60,44 @@ end
 -- `all` fails if any static child fails, whatever the dynamic ones do. `any` fails only when EVERY
 -- branch is static and every one of them fails -- one undecidable branch means the row may still
 -- fire tonight, and calling it inactive would be a lie the player cannot check.
+--
+-- SECOND RETURN (PE15): whether that nil is "nothing could read this" rather than "this gate is
+-- about right now". Only ever meaningful alongside a nil verdict -- an answer the client gave is
+-- an answer, whatever its unreadable siblings did -- and it is what lets a row say "my verdict is
+-- a guess" without pretending a dynamic gate is a client failure.
 local function verdict(cond, state, caps)
   if type(cond) ~= "table" then return nil end
   local kind = cond[1]
 
   if kind == "all" then
-    local undecided = false
+    local undecided, unreadable = false, false
     for i = 2, #cond do
-      local v = verdict(cond[i], state, caps)
+      local v, u = verdict(cond[i], state, caps)
+      -- A gate that definitely blocks settles the row on its own: there is nothing uncertain about
+      -- a false the client stated plainly, however little it would say about the gate next to it.
       if v == false then return false end
       if v == nil then undecided = true end
+      if u then unreadable = true end
     end
     -- `return not undecided` would answer FALSE here, i.e. "statically blocked", for a row whose
     -- static gates all pass and whose remaining gates are simply about right now.
-    if undecided then return nil end
+    if undecided then return nil, unreadable end
     return true
   elseif kind == "any" then
-    local allStatic = true
+    local allStatic, unreadable = true, false
     for i = 2, #cond do
-      local v = verdict(cond[i], state, caps)
+      local v, u = verdict(cond[i], state, caps)
       if v == true then return true end
       if v == nil then allStatic = false end
+      if u then unreadable = true end
     end
     -- Not `allStatic and false or nil`: in Lua that yields nil whatever allStatic is, because the
     -- `and` arm is itself false. The one shape of this idiom that silently never works.
     if allStatic then return false end
-    return nil -- mutants: equivalent falling through answers nil for a composite kind too
+    return nil, unreadable -- mutants: equivalent falling through answers nil for a composite kind too
   elseif kind == "not" then
-    local v = verdict(cond[2], state, caps)
-    if v == nil then return nil end
+    local v, u = verdict(cond[2], state, caps)
+    if v == nil then return nil, u end
     return not v
   end
 
@@ -92,7 +105,7 @@ local function verdict(cond, state, caps)
   -- Only when the client has SAID it cannot read this. A nil `caps` is a client that has not been
   -- asked, which is how every spec and every pre-M5g caller arrives.
   local needed = Gates.NEEDS_CAPABILITY[kind]
-  if needed and caps and caps[needed] == false then return nil end
+  if needed and caps and caps[needed] == false then return nil, true end
   return leafTest(cond, state)
 end
 Gates.verdict = verdict
@@ -133,6 +146,10 @@ function Gates.describe(cond, ctx)
   elseif kind == "weapon" then
     return string.format("a %s equipped", tostring(key))
   elseif kind == "enchant" then
+    -- PE3-D5: the slot by its name when the caller can name one ("Soul of the Exile on Shoulder"),
+    -- never the raw number that only the inventory API cares about.
+    local slot = ctx.slotName and ctx.slotName(key)
+    if slot then return string.format("%s on %s", pretty(cond[3]), slot) end
     return string.format("%s on slot %s", pretty(cond[3]), tostring(key))
   -- Composites in words. Schema's label grammar ("any(rune:RUNE_ART_OF_WAR,bonus:X)") is right for
   -- a debug dump and wrong in a sentence a player reads.
@@ -151,34 +168,58 @@ end
 
 -- Gates.evaluate(compiled, state, ctx) -> rows
 --
--- One row per entry, in priority order: { index, spell, item, active, reasons }.
+-- One row per entry, in priority order: { index, spell, item, active, reasons, certain }.
 -- `active` false means this row cannot fire for this character until something about the character
 -- changes. Display/Driver turns that into an announcement; M5e's Builder dims the row.
+--
+-- `certain` (PE15) is false when the verdict rests on a reading the client would not give: `known`
+-- answering nil, or a static gate nothing could read. `active` is still a plain boolean for every
+-- existing consumer -- the engine, the queue and the Builder's status dot are untouched -- but
+-- Display/Driver refuses to REMEMBER an uncertain row, and Gates.diff refuses to announce one.
+-- Without that, an unreadable moment reads as "you no longer have Divine Storm" and the next
+-- readable one reads as "you have it again", and the addon reports its own blindness as news.
 function Gates.evaluate(compiled, state, ctx)
   local rows = {}
   if not (compiled and compiled.entries and state) then return rows end
 
   for i, entry in ipairs(compiled.entries) do
-    local reasons, active = {}, true
+    local reasons, active, certain = {}, true, true
 
     -- A spell the character has not learned is the commonest static gate of all, and it is not a
     -- condition: Core/Engine skips it silently (ADR-0006 rule 5), which is right for the rotation
     -- and useless for explaining it.
-    if entry.spell and state.known and state:known(entry.spell) == false then
-      active = false
-      reasons[#reasons + 1] = pretty(entry.spell) .. " learned"
-    end
-
-    for _, cond in ipairs(entry.when or {}) do
-      if verdict(cond, state, ctx and ctx.capabilities) == false then
+    --
+    -- Three-valued on purpose (Adapters/Interface: "nil, not false"). A state with no `known` at
+    -- all was never asked and is not uncertain; a `known` that answers nil was asked and would not
+    -- say, and a row is not dimmed for that -- it is simply not spoken about.
+    if entry.spell and state.known then
+      local learned = state:known(entry.spell)
+      if learned == false then
         active = false
-        reasons[#reasons + 1] = Gates.describe(cond, ctx)
+        reasons[#reasons + 1] = pretty(entry.spell) .. " learned"
+      elseif learned == nil then
+        certain = false
       end
     end
 
+    for _, cond in ipairs(entry.when or {}) do
+      local passed, unreadable = verdict(cond, state, ctx and ctx.capabilities)
+      if passed == false then
+        active = false
+        reasons[#reasons + 1] = Gates.describe(cond, ctx)
+      elseif unreadable then
+        certain = false
+      end
+    end
+
+    -- One gate the client stated plainly settles the row, whatever else went unread: "this cannot
+    -- fire, and here is the requirement" is a fact, and withholding it because some other gate was
+    -- unreadable would lose the announcement this file exists for.
+    if not active then certain = true end
+
     rows[#rows + 1] = {
       index = i, spell = entry.spell, item = entry.item,
-      active = active, reasons = reasons,
+      active = active, reasons = reasons, certain = certain,
     }
   end
   return rows
@@ -192,8 +233,15 @@ function Gates.snapshot(rows)
     local key = row.spell or (row.item and ("item:" .. tostring(row.item)))
     if key then
       local held = out[key]
-      if held == nil or (row.active and not held.active) then
-        out[key] = { active = row.active, reason = row.reasons[1] }
+      -- An active row wins over an inactive one, as it always has. Between two rows that AGREE,
+      -- the one the client could actually read wins: a spell whose second entry is certainly
+      -- available is certainly available, and inheriting the first row's doubt would suppress a
+      -- change that is real.
+      local wins = held == nil
+        or (row.active and not held.active)
+        or (row.active == held.active and row.certain ~= false and held.certain == false)
+      if wins then
+        out[key] = { active = row.active, reason = row.reasons[1], certain = row.certain ~= false }
       end
     end
   end
@@ -202,11 +250,18 @@ end
 
 -- What changed between two snapshots. Sorted, because an unordered announcement lists the same two
 -- spells in a different order every time and reads like two different messages.
+--
+-- PE15: only a transition between two verdicts the client actually gave. "I could not tell" is not
+-- a state the character was ever in, so a change into or out of it is not news -- and announcing
+-- one is how the addon came to report a rune being engraved and un-engraved during a fight, which
+-- cannot happen. `certain` is only ever suppressing when explicitly false: a snapshot that carries
+-- no flag at all is treated as certain, because a diff that quietly announces nothing is the worse
+-- of the two failures.
 function Gates.diff(before, after)
   local activated, deactivated = {}, {}
   for key, now in pairs(after or {}) do
     local was = (before or {})[key]
-    if was and was.active ~= now.active then
+    if was and was.certain ~= false and now.certain ~= false and was.active ~= now.active then
       if now.active then
         -- The reason it USED to be blocked is the news: "you now have the 4-set".
         activated[#activated + 1] = { spell = key, reason = was.reason }

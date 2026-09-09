@@ -1393,6 +1393,31 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       local state = Vanilla.newState({}, {}, {})
       assert.is_false(state:usable("NOT_A_REAL_KEY"))
     end)
+
+    -- PE9-D2. IsUsableSpell answers `usable, noMana` and the second value was thrown away, so
+    -- "you cannot pay for this" and "you are two steps too far away" arrived here identical. The
+    -- display draws them differently -- one dims the icon, the other must not -- so the adapter has
+    -- to carry the difference. Purely additive: the first return still means what it always did.
+    it("carries the RESOURCE half of the reading as a second return", function()
+      local spells = spellsFixture()
+      mock.spell(spells.JUDGEMENT.id, { known = true })
+      mock.noMana[spells.JUDGEMENT.id] = true
+      local state = Vanilla.newState(spells, setsFixture(), soulsFixture())
+      local ok, noResource = state:usable("JUDGEMENT")
+      assert.is_false(ok)
+      assert.is_true(noResource)
+    end)
+
+    it("says false to the resource half when the spell is simply castable", function()
+      local spells = spellsFixture()
+      mock.spell(spells.JUDGEMENT.id, { known = true })
+      local state = Vanilla.newState(spells, setsFixture(), soulsFixture())
+      local ok, noResource = state:usable("JUDGEMENT")
+      assert.is_true(ok)
+      assert.is_false(noResource)
+      local _, none = state:usable("NOT_A_REAL_KEY")
+      assert.is_false(none, "an unknown key must not read as 'out of mana'")
+    end)
   end)
 
   describe("castTime()", function()
@@ -1632,6 +1657,18 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
     it("reports true when a target exists (harness limitation: cannot simulate no-target)", function()
       local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
       assert.is_true(state:targetExists())
+    end)
+
+    -- PE9-D6. UnitExists says a bank NPC is a target; the visibility rule meant "something to
+    -- fight", and every city is full of the difference.
+    it("targetAttackable() tells a mob from a friendly NPC, and from no target at all", function()
+      local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+      assert.is_true(state:targetAttackable())
+      mock.targetAttackable = false
+      assert.is_false(state:targetAttackable(), "a friendly target must not count")
+      mock.targetAttackable, mock.targetExists = true, false
+      assert.is_false(state:targetAttackable(), "no target must not count")
+      assert.is_false(state:targetExists())
     end)
   end)
 

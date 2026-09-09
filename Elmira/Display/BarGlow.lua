@@ -181,6 +181,34 @@ function BarGlow.buttonsFor(spellKey)
   return {}, nil
 end
 
+-- PE10-D4. How big one of the player's real action buttons is ON SCREEN, in pixels, so the queue
+-- strip can be scaled to match it. Returns the size and the spell key it was measured from, or nil
+-- when none of the keys offered is on a visible bar -- which the caller must treat as "say so and
+-- change nothing", never as a default.
+--
+-- `GetWidth` alone is the wrong reading and the reason this is not a one-liner at the call site: a
+-- button reports its width in its OWN coordinate space, and every bar addon scales its bars. A
+-- 32-wide button on a bar at 1.25 covers 40 screen pixels, and matching against the 32 would leave
+-- the strip a fifth too small with no hint as to why.
+function BarGlow.buttonSize(spellKeys)
+  for _, key in ipairs(spellKeys or {}) do
+    local buttons = BarGlow.buttonsFor(key)
+    local button = buttons and buttons[1]
+    if type(button) == "table" and type(button.GetWidth) == "function" then
+      local ok, width = pcall(button.GetWidth, button)
+      if ok and type(width) == "number" and width > 0 then
+        local scale = 1
+        if type(button.GetEffectiveScale) == "function" then
+          local okScale, s = pcall(button.GetEffectiveScale, button)
+          if okScale and type(s) == "number" and s > 0 then scale = s end
+        end
+        return width * scale, key
+      end
+    end
+  end
+  return nil
+end
+
 function BarGlow.keybindFor(spellKey)
   local id = spellIDFor(spellKey)
   if not id then return nil end
@@ -252,7 +280,7 @@ function BarGlow.noteMissing(spellKey)
   if not spellKey or announced[spellKey] then return false end
   announced[spellKey] = true
   local profileGlow = ns.db and ns.db.profile and ns.db.profile.glow
-  if not (profileGlow and profileGlow.enabled and profileGlow.barGlow) then return false end
+  if not (profileGlow and profileGlow.barGlow) then return false end
   -- Routed as a warning (F37) rather than printed: the player decides whether this reaches chat,
   -- the screen or only the Log. The latch above stays -- it is per SPELL and clears when the bars
   -- change, which is finer than Announce's per-sentence one.
@@ -308,8 +336,8 @@ end
 -- `describe()` above answers the same question for a developer, in one dense dump; this answers it
 -- for the player, and the difference that matters is SEPARATING the causes. "No glow" has half a
 -- dozen distinct ones -- the spell is not on a bar, the button is on a page or stance you cannot
--- see, the bar glow is off, the queue glow is off, Elmira is switched off entirely, or Elmira is
--- simply hidden right now -- and each needs a different action. Collapsing them into "not found" is
+-- see, the bar glow is off, Elmira is switched off entirely, or Elmira is simply hidden right now
+-- -- and each needs a different action. Collapsing them into "not found" is
 -- what sends somebody to reinstall an addon that was never the problem.
 --
 -- Two rules this function is easy to get wrong, and did:
@@ -317,8 +345,8 @@ end
 --     priority order, skips any whose buttons are all hidden, and falls through to the Blizzard
 --     scan. An independent walk that stopped at the first provider returning ANY button reported
 --     "you cannot see that button" while the glow was working fine on a second bar addon.
---   * A green chain must mean a glow. Reporting every bar question green while `enabled` is off, or
---     while the queue is hidden out of combat, is the exact lie this panel exists to prevent.
+--   * A green chain must mean a glow. Reporting every bar question green while the bar glow is off,
+--     or while the queue is hidden out of combat, is the exact lie this panel exists to prevent.
 --
 -- Each row is { label, ok, detail }: ok true (passed), false (this is the problem) or nil (not
 -- reached, because an earlier row failed). `detail` is DATA -- a name, a count, a mode -- never a
@@ -367,11 +395,10 @@ function BarGlow.check(spellKey)
   end
   row("visible", true, buttonName(visible[1]))
 
-  -- Everything above can pass while no glow happens, for four different reasons. Naming the wrong
+  -- Everything above can pass while no glow happens, for three different reasons. Naming the wrong
   -- one is worse than naming none: the panel told a player to turn on a toggle that was already on.
   local p = ns.db and ns.db.profile
   if p and p.enabled == false then return row("glow", false, "addon"), id end
-  if not (p and p.glow and p.glow.enabled) then return row("glow", false, "queue"), id end
   if not (p and p.glow and p.glow.barGlow) then return row("glow", false, "bars"), id end
   row("glow", true)
 

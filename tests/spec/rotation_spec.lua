@@ -63,6 +63,19 @@ describe("Options/Rotation (the Rotation section)", function()
     return Rotation.group().args.playstyles.args
   end
 
+  -- PE5-D1/D2: a detail header row right-aligns its buttons by FILLING the row -- every control
+  -- relative, the relWidths summing to exactly 1.0. AceGUI's Flow layout starts a new row the moment
+  -- they exceed it (AceGUI-3.0.lua:730), which would drop the last button onto a line of its own.
+  -- Returns the sum so a caller can also compare the two shapes of the row against each other.
+  local function headerRelSum(header)
+    local total = 0
+    for key, arg in pairs(header) do
+      assert.equal("relative", arg.width, key .. " cannot be right-aligned")
+      total = total + arg.relWidth
+    end
+    return total
+  end
+
   before_each(function()
     ns = helper.reset()
     ns.L = setmetatable({}, { __index = function(_, k) return k end })
@@ -123,10 +136,19 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_true(g.args.builder.order < g.args.share.order)
     end)
 
-    it("gives the Builder a search box and a list of spells and items", function()
+    -- PE2-D3.3: the search box lives INSIDE the Abilities group now, as its first element, so it
+    -- reads as a filter on that list rather than on the whole page.
+    -- PE3-D2: and it owns the WHOLE row -- at half width the first 0.32 palette button flowed up
+    -- beside it and sat misaligned, an EditBox carrying a label above its box where a Button has
+    -- none. A "full" control ends its row, so the grid always starts on a fresh one.
+    -- PE4-D3: and it is not drawn at all for a palette of the size a class pack actually has. ~20-30
+    -- abilities, sorted by name and three across, is a list you read rather than search -- while the
+    -- box costs a permanent row plus its label. It comes back by itself past 30 entries.
+    it("gives the Builder a list of spells and items, and no search box for a small palette", function()
       installPack()
       local args = Rotation.group().args.builder.args
-      assert.equal("input", args.search.type)
+      assert.is_nil(args.search, "the page-level search box is gone")
+      assert.is_nil(args.spells.args.search, "a search box for a palette you can already see")
       assert.equal("group", args.spells.type)
       assert.equal("group", args.items.type)
       assert.is_true(args.spells.inline)
@@ -423,27 +445,46 @@ describe("Options/Rotation (the Rotation section)", function()
       Rotation.setSearch("")
     end
 
+    -- PE4-D3: the search box only exists once the palette is bigger than 30 entries, so a test that
+    -- wants to drive the box has to give it a palette that big. Registry entries, because that is
+    -- what the palette is one row per (D58) -- a class pack of this size is exactly the case the
+    -- rule keeps the box for.
+    local function installBigPalette(n)
+      installPalette(function() return true end)
+      for i = 1, n do
+        ns.db.char.spells["EXTRA_" .. i] = { key = "EXTRA_" .. i, id = 900000 + i,
+                                             name = "Extra " .. i, source = "id" }
+      end
+    end
+
     it("lists the pack's abilities and not its rune records", function()
       installPalette(function() return true end)
       local args = Rotation.group().args.builder.args.spells.args
       local names = {}
       for key, row in pairs(args) do
-        if key ~= "add" then names[#names + 1] = row.name end
+        if key ~= "add" and key ~= "search" then names[#names + 1] = row.name end
       end
       assert.equal(2, #names, "expected Exorcism and Divine Storm, no rune record")
     end)
 
     -- The whole point of the owner's "show everything, grey the rest" choice: the row you cannot
     -- use yet has to say what to do about it.
-    it("dims an un-known ability and names the rune that grants it", function()
+    -- PE2-D3.2: the row you cannot use yet still has to say what to do about it -- but the sentence
+    -- moved out of the label and into the tooltip, so three buttons fit across a row.
+    it("dims an un-known ability and names the rune that grants it, in the tooltip", function()
       installPalette(function() return false end)
       local args = Rotation.group().args.builder.args.spells.args
-      local text = ""
-      for _, row in pairs(args) do
-        if row.name:find("DIVINE_STORM", 1, true) then text = row.name end
+      local row
+      for key, candidate in pairs(args) do
+        if key ~= "search" and candidate.name:find("DIVINE_STORM", 1, true) then row = candidate end
       end
-      assert.is_truthy(text:find("engrave", 1, true), "no reason on the greyed row")
-      assert.is_truthy(text:find("|cff9AA0A6", 1, true), "the un-known row is not dimmed")
+      assert.is_truthy(row, "no row for the un-known ability")
+      -- This palette is the INERT (template) shape, a description: an AceGUI Label has no tooltip
+      -- to move the reason into, so there it stays in the text. The clickable shape puts it in
+      -- `desc` instead -- see "moves the reason into the tooltip on a clickable palette" below.
+      assert.equal("description", row.type)
+      assert.is_truthy(row.name:find("Engrave", 1, true), "no reason on the greyed row")
+      assert.is_truthy(row.name:find("|cff9AA0A6", 1, true), "the un-known row is not dimmed")
     end)
 
     it("does not dim anything when the client cannot tell what is known", function()
@@ -480,8 +521,8 @@ describe("Options/Rotation (the Rotation section)", function()
     end)
 
     it("routes the search box through the accessor", function()
-      installPalette(function() return true end)
-      local row = Rotation.group().args.builder.args.search
+      installBigPalette(31)
+      local row = Rotation.group().args.builder.args.spells.args.search
       row.set(nil, "judge")
       assert.equal("judge", Rotation.search())
       assert.equal("judge", row.get())
@@ -901,7 +942,7 @@ describe("Options/Rotation (the Rotation section)", function()
       install("fork")
       BUILD.entries[1].disabled = true
       local args = Rotation.group().args.builder.args.list.args
-      assert.is_truthy(args.r1.args.sentence.name:find("switched off", 1, true))
+      assert.is_truthy(args.r1.args.sentence.name:find("Switched off", 1, true))
       assert.is_false(args.r1.args.body.args.on.get())
       BUILD.entries[1].disabled = nil
     end)
@@ -912,7 +953,10 @@ describe("Options/Rotation (the Rotation section)", function()
       install("fork")
       local args = Rotation.group().args.builder.args.list.args
       assert.is_truthy(args.r2.args.sentence.name:find("stacks or more", 1, true))
-      assert.is_truthy(args.r1.args.sentence.name:find("it is ready", 1, true))
+      assert.is_nil(args.r2.args.sentence.name:find("is cast", 1, true), "the verb is back")
+      -- PE2-D2.3: line 1 has no conditions here, so it gets no sentence control at all rather than
+      -- an empty full-width description reserving a blank row.
+      assert.is_nil(args.r1.args.sentence)
     end)
 
     -- It used to count them. "2 conditions" said the same thing about every row that had two,
@@ -965,8 +1009,14 @@ describe("Options/Rotation (the Rotation section)", function()
           VENGEANCE_BUFF = { id = 7, proc = true },
           RUNE_PURIFYING_POWER = { id = 8, rune = "wrist" },
         },
-        sets = {}, souls = {},
-        bonuses = { HOLY_POWER_CONSUME = { note = "Divine Storm consumes Holy Power" },
+        -- PE3-D3: the readable words the condition editor's Value dropdown reads -- a set's `name`,
+        -- a soul's `short`, a bonus's `note` and the `from` list that says which of the two a bonus
+        -- comes from. Shaped exactly as Classes/Paladin.lua ships them.
+        sets = { PALADIN_T35_INQUISITION = { name = "Inquisition Shockplate (T3.5)" } },
+        souls = { SOUL_OF_THE_EXILE = { short = "Exile" } },
+        bonuses = { HOLY_POWER_CONSUME = { note = "Divine Storm consumes Holy Power",
+                      from = { { set = "PALADIN_T35_INQUISITION", pieces = 4 },
+                               { soul = "SOUL_OF_THE_EXILE" } } },
                     HOLY_WRATH_INSTANT = { note = "Holy Wrath is instant" } },
         builds = {
           TEMPLATE = {
@@ -1117,18 +1167,89 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_false(Rotation.isExpanded(2))
       end)
 
-      it("says whether it has unsaved changes, and offers Save and Discard accordingly", function()
+      -- PE4-D1/D4: the row is three buttons now, right-aligned as a group (four relative widths
+      -- summing to exactly 1.0), and each label is coloured by what it does -- but ONLY while it is
+      -- enabled, because AceGUI greys a disabled button's FONT OBJECT and a `|cff` escape inside
+      -- the text would win over that, leaving a green Save that does nothing.
+      it("says whether it has unsaved changes, and offers Save, Discard and Reset accordingly", function()
         local args = builder().editing.args
         assert.is_truthy(args.state.name:find("Mine", 1, true))
         assert.is_truthy(args.state.name:find("saved", 1, true))
         assert.is_true(args.save.disabled, "nothing to save yet")
         assert.is_true(args.discard.disabled)
+        assert.equal("Save", args.save.name, "a disabled Save is still painted green")
+        assert.equal("Discard", args.discard.name)
+
+        assert.equal(0.4, args.state.relWidth)
+        for _, key in ipairs({ "state", "save", "discard", "reset" }) do
+          assert.equal("relative", args[key].width, key .. " cannot be right-aligned")
+        end
+        assert.equal(1.0, args.save.relWidth + args.discard.relWidth + args.reset.relWidth
+                          + args.state.relWidth)
 
         Rotation.moveRow(1, 1)
         args = builder().editing.args
         assert.is_truthy(args.state.name:find("unsaved changes", 1, true))
         assert.is_false(args.save.disabled)
         assert.is_false(args.discard.disabled)
+        assert.equal(ns.Colors.wrap(ns.Colors.OK, "Save"), args.save.name)
+        assert.equal(ns.Colors.wrap(ns.Colors.BAD, "Discard"), args.discard.name)
+      end)
+
+      -- PE4-D1. Reset writes the DRAFT, never the saved rotation: that is what makes it undoable
+      -- (Discard puts the saved lines back) and why it carries no confirmation popup.
+      describe("Reset, which puts the template back", function()
+        it("is disabled while the draft already matches the template", function()
+          local args = builder().editing.args
+          assert.is_true(args.reset.disabled)
+          assert.equal("Reset", args.reset.name, "a disabled Reset is still painted red")
+          assert.is_truthy(args.reset.desc:find("Nothing is saved until you press Save", 1, true))
+        end)
+
+        it("is disabled for a rotation that was started empty and has no original", function()
+          forkKey = realUserBuilds.create(PACK, "Scratch")
+          Rotation.discard()
+          assert.is_false(Rotation.canReset())
+          assert.is_true(builder().editing.args.reset.disabled)
+          assert.is_false(Rotation.resetToTemplate(), "there is no template to go back to")
+        end)
+
+        it("puts the template's lines into the draft, leaving the saved rotation alone", function()
+          Rotation.removeRow(1)
+          Rotation.removeRow(1)
+          assert.is_true(Rotation.save())
+          assert.equal(3, #realUserBuilds.find(PACK, forkKey).entries)
+
+          local args = builder().editing.args
+          assert.is_false(args.reset.disabled)
+          assert.equal(ns.Colors.wrap(ns.Colors.BAD, "Reset"), args.reset.name)
+
+          args.reset.func()
+          local rows = Rotation.listRows()
+          assert.equal(5, #rows, "the template's lines are not back in the draft")
+          assert.equal("EXORCISM", rows[1].spell)
+          assert.equal("DIVINE_STORM", rows[2].spell)
+          assert.is_nil(rows[1].src, "a reset line claims to be a line the display is running")
+          assert.is_false(builder().editing.args.save.disabled, "Reset did not mark the draft dirty")
+          assert.equal(3, #realUserBuilds.find(PACK, forkKey).entries,
+            "Reset wrote the SAVED rotation, so Discard could not undo it")
+
+          -- Undoable, which is the whole design: Discard throws the reset draft away and the saved
+          -- three lines come back.
+          Rotation.discard()
+          assert.equal(3, #Rotation.listRows())
+        end)
+
+        -- A deep copy, exactly as a fork is: a draft holding a reference into the shipped template
+        -- would edit it for every character on the account, and the edit would vanish on reload
+        -- with no sign it had ever been made.
+        it("copies the template's conditions rather than sharing them", function()
+          Rotation.removeRow(1)
+          Rotation.resetToTemplate()
+          assert.is_true(Rotation.removeCondition(1, 1), "the reset line lost its conditions")
+          assert.equal(1, #PACK.builds.TEMPLATE.entries[1].when,
+            "editing the draft edited the shipped template itself")
+        end)
       end)
     end)
 
@@ -1825,24 +1946,28 @@ describe("Options/Rotation (the Rotation section)", function()
         local status = builder().list.args.r1.args.status
         assert.equal("description", status.type)
         assert.equal(0.2, status.width)
-        assert.is_truthy(status.name:find("|TInterface\\COMMON\\Indicator-Green:12|t", 1, true))
+        assert.is_truthy(status.name:find("|TInterface\\AddOns\\Elmira\\media\\mark_firing:12|t", 1, true))
         assert.is_nil(status.name:find(">>", 1, true), "the ASCII fallback is still present")
       end)
 
-      -- D43's texture-dot mechanism, D73's colour map (2026-09-07 owner ruling, reversed from R1):
-      -- firing green, waiting amber/yellow ("can fire, just not this instant"), blocked/off/unsaved
-      -- grey ("cannot happen on this character right now"). Each is a real |T...|t texture escape,
-      -- not a glyph the client's font would draw as an empty box.
-      it("maps every state to the D73-decided indicator texture", function()
+      -- D43's texture-dot mechanism; PE2-D1's shapes (2026-09-08 owner ruling) replace the four
+      -- Blizzard `Indicator-*` files, which had only four shapes between six states -- `blocked`,
+      -- `off` and `unsaved` were byte-identical, so the legend named a distinction the screen did
+      -- not draw. Shape AND colour now: five shipped textures, and `blocked`/`wrong` deliberately
+      -- share the cross and differ only in the colour they paint the sentence.
+      it("gives every state its own shipped texture, and every grey state a different one", function()
         local expectFile = {
-          firing = "Indicator-Green", blocked = "Indicator-Gray",
-          waiting = "Indicator-Yellow", off = "Indicator-Gray", unsaved = "Indicator-Gray",
+          firing = "mark_firing", waiting = "mark_waiting", blocked = "mark_blocked",
+          off = "mark_off", unsaved = "mark_unsaved", wrong = "mark_wrong",
         }
         for markState, file in pairs(expectFile) do
           local look = Rotation.MARKS[markState]
-          assert.is_truthy(look.mark:find("|TInterface\\COMMON\\" .. file .. ":", 1, true), markState)
-          assert.is_truthy(look.mark:find("|t", 1, true), markState)
+          assert.equal("|TInterface\\AddOns\\Elmira\\media\\" .. file .. ":12|t", look.mark, markState)
+          assert.is_truthy(look.desc and #look.desc > 0, markState .. " has no tooltip sentence")
         end
+        assert.are_not.equal(Rotation.MARKS.blocked.mark, Rotation.MARKS.off.mark)
+        assert.are_not.equal(Rotation.MARKS.off.mark, Rotation.MARKS.unsaved.mark)
+        assert.are_not.equal(Rotation.MARKS.blocked.colour, Rotation.MARKS.wrong.colour)
       end)
 
       it("answers nothing, not an error, when there is no rotation at all", function()
@@ -1869,7 +1994,7 @@ describe("Options/Rotation (the Rotation section)", function()
         queue = queueOf(1)
         assert.equal("grey", Rotation.lineState(2)) -- DIVINE_STORM's bonus gate: character lacks it
         assert.is_truthy(builder().list.args.r2.args.status.name
-          :find("|TInterface\\COMMON\\Indicator-Gray:12|t", 1, true))
+          :find("|TInterface\\AddOns\\Elmira\\media\\mark_blocked:12|t", 1, true))
       end)
 
       it("reads amber for a dynamic condition that is merely not true yet, and renders the amber dot", function()
@@ -1879,7 +2004,7 @@ describe("Options/Rotation (the Rotation section)", function()
         queue = queueOf(1)
         assert.equal("amber", Rotation.lineState(3))
         assert.is_truthy(builder().list.args.r3.args.status.name
-          :find("|TInterface\\COMMON\\Indicator-Yellow:12|t", 1, true))
+          :find("|TInterface\\AddOns\\Elmira\\media\\mark_waiting:12|t", 1, true))
       end)
 
       -- The literal D87 example: a `seal` condition naming a seal no line of the build casts any
@@ -1891,7 +2016,8 @@ describe("Options/Rotation (the Rotation section)", function()
         queue = queueOf(1)
         assert.equal("red", Rotation.lineState(3))
         local mark = builder().list.args.r3.args.status
-        assert.is_truthy(mark.name:find("|TInterface\\COMMON\\Indicator-Red:12|t", 1, true))
+        assert.is_truthy(mark.name:find("|TInterface\\AddOns\\Elmira\\media\\mark_wrong:12|t", 1, true))
+        assert.equal("|cff" .. ns.Colors.BAD.hex, Rotation.MARKS.wrong.colour)
 
         -- The SAME seal, once a line actually casts it, is merely a dynamic wait -- amber, not red.
         Rotation.appendSpell("SEAL_OF_TESTING")
@@ -1939,7 +2065,7 @@ describe("Options/Rotation (the Rotation section)", function()
     describe("the header sentence (D85)", function()
       it("matches the wording the read-only page already uses for the same condition", function()
         local entry = Rotation.draft().entries[1]
-        local sentence = Rotation.headerSentence(entry, 1)
+        local sentence = Rotation.headerSentence(entry)
         -- `Rotation.conditionSummary` is exactly what the read-only "Rotation, top to bottom" page
         -- shows under this same line (`lineRowsArgs`/`row.summary`) -- one call, so there is nowhere
         -- for the two pages to say the same rule in different words.
@@ -1947,33 +2073,55 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_truthy(sentence:find(wordsAlone, 1, true))
       end)
 
-      it("reads as a plain unconditional sentence for the first line, and a fallback one after it", function()
-        assert.equal("EXORCISM is cast when mana at least 40%.",
-          Rotation.headerSentence({ spell = "EXORCISM", when = Rotation.draft().entries[1].when }, 1))
-        assert.equal("JUDGEMENT is cast when the above is not applicable.",
-          Rotation.headerSentence({ spell = "JUDGEMENT" }, 3))
-        assert.equal("JUDGEMENT is cast when it is ready.",
-          Rotation.headerSentence({ spell = "JUDGEMENT" }, 1))
-        assert.equal("EXORCISM is switched off.",
-          Rotation.headerSentence({ spell = "EXORCISM", disabled = true }, 1))
+      -- PE2-D2.3/D2.4 (2026-09-08 owner ruling): the CONDITION and nothing else. The ability name
+      -- came from the dropdown immediately above the sentence, and "when the above is not
+      -- applicable" restated priority ordering the page already explains once at the top. Dropping
+      -- the verb settles D2.4 at the same time -- a trinket line can no longer read "is cast".
+      it("is the condition alone, with no ability name, no verb and no priority restatement", function()
+        local sentence = Rotation.headerSentence(
+          { spell = "EXORCISM", when = Rotation.draft().entries[1].when })
+        assert.equal("mana at least 40%", sentence)
+        assert.is_nil(sentence:find("EXORCISM", 1, true))
+        assert.is_nil(sentence:find("is cast", 1, true))
+        assert.is_nil(sentence:find("not applicable", 1, true))
       end)
 
-      -- The one-condition fold (D85), for a line that is NOT first -- distinct wording from both
-      -- the first-line fold above and the unconditional "above is not applicable" case.
-      it("folds a single condition into a LATER line's sentence too", function()
-        assert.equal("EXORCISM is cast when the above is not applicable and mana at least 40%.",
-          Rotation.headerSentence({ spell = "EXORCISM", when = Rotation.draft().entries[1].when }, 3))
+      -- A line with no conditions renders NOTHING: an empty full-width description still reserves a
+      -- blank row, so the panel must leave the whole control out.
+      it("says nothing at all for a line with no conditions, wherever it sits", function()
+        assert.equal("", Rotation.headerSentence({ spell = "JUDGEMENT" }))
+        assert.is_nil(builder().list.args.r3.args.sentence,
+          "an empty sentence still reserves a row")
       end)
 
-      it("ends in a colon rather than folding TWO conditions into the sentence", function()
+      -- PE3-D5 (2026-09-08 owner ruling, in-game): the trinket line's sentence said "the item in
+      -- slot 13 is ready" while the slot dropdown two controls away said "Trinket 1". This is the
+      -- CALL SITE half of that fix -- Core can name a slot only if the panel hands it a namer, and
+      -- a namer nothing passes is the shape of defect this repo keeps shipping.
+      it("names the trinket slot in an item line's sentence rather than numbering it", function()
+        local sentence = Rotation.headerSentence({ item = 13, when = { { "item_ready", 13 } } })
+        assert.equal("Trinket 1 is off cooldown", sentence)
+        assert.is_nil(sentence:find("slot 13", 1, true), "the raw inventory slot number is back")
+      end)
+
+      it("says only that a switched-off line is switched off", function()
+        assert.equal("Switched off.",
+          Rotation.headerSentence({ spell = "EXORCISM", disabled = true }))
+      end)
+
+      -- Where the position USED to change the wording, it now cannot: the same entry reads the same
+      -- whether it is line 1 or line 3.
+      it("reads identically for the same conditions at any position", function()
+        local entry = { spell = "EXORCISM", when = Rotation.draft().entries[1].when }
+        assert.equal(Rotation.headerSentence(entry, 1), Rotation.headerSentence(entry, 3))
+      end)
+
+      it("names two conditions rather than trailing off into a colon", function()
         Rotation.addCondition(3, "in_combat")
         Rotation.addCondition(3, "not_moving")
-        -- The EXACT text, not merely "contains a colon somewhere": the first-line and later-line
-        -- forms both end in a colon, and only the full sentence tells them apart.
-        assert.equal("JUDGEMENT is cast when the above is not applicable and:",
-          Rotation.headerSentence(Rotation.draft().entries[3], 3))
-        assert.equal("JUDGEMENT is cast when:",
-          Rotation.headerSentence(Rotation.draft().entries[3], 1))
+        local sentence = Rotation.headerSentence(Rotation.draft().entries[3])
+        assert.equal(Rotation.conditionSummary(Rotation.draft().entries[3]), sentence)
+        assert.is_nil(sentence:find(":", 1, true))
       end)
     end)
 
@@ -2090,8 +2238,19 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_nil(builder().preview)
       end)
 
-      it("is present, above the intro, whenever a draft exists to preview", function()
+      -- PE2-D4.3 (2026-09-08 owner ruling): only while the draft is actually DIRTY. Headed
+      -- "(unsaved)" beside a status line reading "saved", restating the five spells "Right now" had
+      -- just listed, it was three ways of saying one thing and one of them was untrue.
+      it("stays hidden while the draft is clean, however much there is to preview", function()
         queue = queueOf(1)
+        assert.is_false(Rotation.draft().dirty)
+        assert.is_nil(builder().preview)
+      end)
+
+      it("is present, above the intro, once the draft has unsaved changes", function()
+        queue = queueOf(1)
+        Rotation.appendSpell("CONSECRATION")
+        assert.is_true(Rotation.draft().dirty)
         local preview = builder().preview
         assert.equal("group", preview.type)
         assert.equal(2, preview.order)
@@ -2101,18 +2260,34 @@ describe("Options/Rotation (the Rotation section)", function()
     end)
 
     describe("the queue mirror", function()
-      it("lists the queue with its slot numbers, and the state behind it", function()
+      -- PE2-D4.1 (2026-09-08 owner ruling): NO ordinals. `1. 2. 3.` sat directly above a numbered
+      -- rotation list whose numbers mean something else entirely, and the owner read "5.
+      -- Consecration" against rotation line 11 and concluded the data was broken.
+      -- PE3-D1: the separator is the `mark_next` TEXTURE, never U+2192 -- the arrow shipped as an
+      -- empty box on the owner's client, the same way the pre-texture status dots did.
+      it("joins the queue with the chevron texture and no slot numbers, and says the state behind it", function()
         queue = queueOf(1, 3)
         ns.Display.spellIcon = function(key) return key == "EXORCISM" and "tex:ex" or nil end
         local lines = Rotation.mirrorLines()
-        assert.is_truthy(lines[1]:find("1. EXORCISM", 1, true))
-        assert.is_truthy(lines[1]:find("2. JUDGEMENT", 1, true))
+        assert.is_truthy(lines[1]:find("EXORCISM", 1, true))
+        assert.is_truthy(lines[1]:find("JUDGEMENT", 1, true))
+        assert.is_truthy(lines[1]:find("|TInterface\\AddOns\\Elmira\\media\\mark_next:12|t", 1, true),
+          "the separator is a font glyph again, which this client draws as an empty box")
+        assert.is_nil(lines[1]:find("\226\134\146", 1, true), "U+2192 is back in a user-facing string")
+        assert.is_nil(lines[1]:find("1. ", 1, true), "the slot ordinals are back")
+        assert.is_nil(lines[1]:find("2. ", 1, true), "the slot ordinals are back")
         assert.is_truthy(lines[1]:find("|Ttex:ex:0|t", 1, true))
         assert.is_truthy(lines[2]:find("target: yes", 1, true))
         assert.is_truthy(lines[2]:find("mana 100%", 1, true))
-        assert.is_truthy(lines[3]:find("|TInterface\\COMMON\\Indicator-Green:12|t", 1, true),
+        -- PE4-D2: a blank line separates the queue and its context from the key to the symbols,
+        -- and the "Status is as of the last time the queue changed." caveat is gone entirely --
+        -- a permanent line in the most-read panel on the page that hedged about refresh timing and
+        -- that the owner had to ask the meaning of.
+        assert.equal(" ", lines[3], "the queue and the legend run together as one paragraph again")
+        assert.is_truthy(lines[4]:find("|TInterface\\AddOns\\Elmira\\media\\mark_firing:12|t", 1, true),
           "the legend explains the markers")
-        assert.is_truthy(lines[4]:find("last time the queue changed", 1, true))
+        assert.equal(4, #lines, "an extra line is back in the queue mirror")
+        assert.is_nil(table.concat(lines, " "):find("last time the queue changed", 1, true))
       end)
 
       it("names an item line by its slot", function()
@@ -2239,17 +2414,29 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_truthy(body.conditions.args.c1.args.negated.desc:find("NOT", 1, true))
       end)
 
-      it("names each control, and sizes the row so it does not wrap", function()
+      -- PE2-D2.1 (2026-09-08 owner ruling): the reorder tools were 0.25/0.25/0.4, which AceGUI drew
+      -- as `...`, `...`, `Remo...` -- controls that worked and that nobody could read. `width` is a
+      -- multiple of 170px (AceConfigDialog-3.0.lua:49), so a label needs its own share of the row.
+      -- Five tools plus the ability dropdown cannot fit one flow row inside the 960px window, so the
+      -- budget is asserted per ROW: identity + dropdown first, then the tool block below it.
+      it("names every tool in full, and sizes each row so it does not wrap", function()
         Rotation.selectRow(1)
         local row = builder().list.args.r1.args
+        assert.equal("Top", row.top.name)
         assert.equal("Up", row.up.name)
         assert.equal("Down", row.down.name)
+        assert.equal("Bottom", row.bottom.name)
         assert.equal("Remove", row.remove.name)
-        local width = 0
-        for _, control in pairs(row) do
-          if type(control.width) == "number" then width = width + control.width end
+        for _, key in ipairs({ "top", "up", "down", "bottom", "remove" }) do
+          assert.is_true(row[key].width >= 0.4,
+            key .. " is " .. row[key].width .. " wide, which truncates its label")
         end
-        assert.is_true(width < 3.0, "the row sums to " .. width .. " and would wrap")
+
+        local identity = row.expand.width + row.num.width + row.status.width + row.spell.width
+        local tools = row.top.width + row.up.width + row.down.width
+                    + row.bottom.width + row.remove.width
+        assert.is_true(identity < 3.0, "the identity row sums to " .. identity .. " and would wrap")
+        assert.is_true(tools < 3.0, "the tool row sums to " .. tools .. " and would wrap")
 
         local body = row.body.args
         assert.equal("On", body.on.name)
@@ -2276,6 +2463,53 @@ describe("Options/Rotation (the Rotation section)", function()
         Rotation.setCondition(3, 1, "kind", "mode")
         local modes = body().conditions.args.c1.args.key.values
         assert.equal("AoE", modes.AoE, "a mode IS its own label")
+      end)
+
+      -- PE3-D3 (2026-09-08 owner ruling, in-game): the Value dropdown listed
+      -- `CRUSADER_STRIKE_150`, `HOLY_POWER_CONSUME_HOLY`, `JUDICATOR_SOUL` -- the same defect class
+      -- as the "HOLY_SHOCK known" requirement rows PE1-D6 fixed one file over. The words already
+      -- exist in the class data: a bonus's `note`, a set's `name`, a soul's `short`.
+      it("labels a set-bonus key with the bonus's own sentence, never the raw key", function()
+        Rotation.selectRow(2)
+        local key = builder().list.args.r2.args.body.args.conditions.args.c1.args.key
+        assert.equal("Divine Storm consumes Holy Power", key.values.HOLY_POWER_CONSUME)
+        assert.equal("Holy Wrath is instant", key.values.HOLY_WRATH_INSTANT)
+        for id, label in pairs(key.values) do
+          assert.not_equal(id, label, "a raw programmatic key is back in the dropdown")
+        end
+      end)
+
+      -- The owner's words: it must say which set bonus, or the shoulder soul enchant BY NAME --
+      -- a soul is something a player can go and put on their shoulders. Both, when a bonus has both.
+      it("names both of a bonus's sources in the dropdown's tooltip, the soul by its enchant name",
+         function()
+        Rotation.selectRow(2)
+        local key = builder().list.args.r2.args.body.args.conditions.args.c1.args.key
+        local text = key.desc()
+        assert.is_truthy(text:find("Inquisition Shockplate (T3.5)", 1, true),
+          "the set the bonus comes from is not named")
+        assert.is_truthy(text:find("4 pieces", 1, true))
+        assert.is_truthy(text:find("Soul of the Exile", 1, true),
+          "the soul is named as a shoulder enchant, never as SOUL_OF_THE_EXILE")
+        assert.is_truthy(text:find("shoulder enchant", 1, true))
+        assert.is_nil(text:find("SOUL_OF_THE_EXILE", 1, true))
+      end)
+
+      -- Nothing to say is said as nothing: a spell-shaped key would otherwise grow a tooltip line
+      -- that only repeats the label already on the control.
+      it("gives a spell key no source tooltip at all", function()
+        Rotation.addCondition(3, "buff")
+        local key = builder().list.args.r3.args.body.args.conditions.args.c1.args.key
+        assert.is_nil(key.desc())
+      end)
+
+      -- PE3-D4: the Value dropdown takes a row of its own. At 1.1 widths it landed at the end of a
+      -- row of label-less controls and its own "Value" label drew on top of the Field dropdown of
+      -- the row above -- and a bonus's label is now a whole sentence, which needs the width.
+      it("gives the Value dropdown its own full-width row", function()
+        Rotation.selectRow(2)
+        local key = builder().list.args.r2.args.body.args.conditions.args.c1.args.key
+        assert.equal("full", key.width, "the Value label can overlap the Field dropdown again")
       end)
 
       it("names each inventory slot in the slot dropdown", function()
@@ -3940,7 +4174,7 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal(0.32, card.relWidth)
       end)
 
-    it("titles the card with the playstyle name, an Open action, summary, pips and a Copy link action",
+    it("titles the card with the playstyle name, an Open action, summary and pips",
       function()
         installPack()
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", difficulty = "medium",
@@ -3956,24 +4190,60 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal("Fast 2H.", card.arg.summary)
         -- PA6: difficulty is its own level/label field now (CardWidget.lua draws the pip TEXTURES;
         -- see PA6's own correction note above `DIFFICULTY_PIPS` -- a glyph string cannot render on
-        -- this client), not a word on the meta line.
+        -- this client). PE1-D2: the recommended/Unproven bits ride on that same line, muted, and
+        -- the meta line is left empty.
         assert.equal(2, card.arg.difficultyLevel)
-        assert.equal("Medium", card.arg.difficultyLabel)
-        assert.is_falsy(card.arg.meta:find("medium", 1, true))
-        assert.is_truthy(card.arg.meta:find("recommended", 1, true))
+        assert.is_truthy(card.arg.difficultyLabel:find("Medium", 1, true))
+        assert.is_truthy(card.arg.difficultyLabel:find("recommended", 1, true))
+        assert.equal("", card.arg.meta)
         -- PA8: the exact date is no longer on the card face at all...
-        assert.is_falsy(card.arg.meta:find("2026%-08%-01"))
+        assert.is_falsy(card.arg.difficultyLabel:find("2026%-08%-01"))
         -- ...it moved to the mouseover tooltip.
         assert.is_truthy(card.arg.tooltip:find("2026%-08%-01"))
-        -- PA4: no separate source text line any more, but the Copy link action survives.
+        -- PA4: no separate source text line. PE1-D2: and no Copy link action either -- the detail
+        -- panel's own Copy Source Link button is the only one left on the page.
         assert.is_nil(card.arg.source)
-        assert.is_falsy(card.arg.meta:find("wowhead", 1, true))
-        assert.equal("Copy link", card.arg.actions.link.name)
+        assert.is_nil(card.arg.actions.link)
         -- This row IS the one running (top before_each's default activeBuild), so there is no Use
         -- action at all, and the card is flagged active.
         assert.is_nil(card.arg.actions.use)
         assert.is_true(card.arg.active)
       end)
+
+    -- PE1-D2, the layout half stated as data: with a difficulty to fold onto, `meta` is EMPTY, and
+    -- CardWidget.lua's own spec proves an empty `meta` reserves no row on the card.
+    it("folds recommended and Unproven onto the difficulty line, leaving the meta line empty",
+      function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", difficulty = "easy",
+                         recommended = true, experimental = true, fits = true } }
+        local card = cards().card1
+        assert.is_truthy(card.arg.difficultyLabel:find("Easy", 1, true))
+        assert.is_truthy(card.arg.difficultyLabel:find("recommended", 1, true))
+        assert.is_truthy(card.arg.difficultyLabel:find("Unproven", 1, true))
+        assert.equal("", card.arg.meta)
+      end)
+
+    -- ...and the signal is never DROPPED to fit the layout: a catalog entry with no difficulty
+    -- draws no pip line at all, so there is nothing to fold onto and the bits stay on `meta`.
+    it("keeps the bits on the meta line when the row has no difficulty to fold them onto", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", recommended = true,
+                       fits = true } }
+      local card = cards().card1
+      assert.is_nil(card.arg.difficultyLevel)
+      assert.is_nil(card.arg.difficultyLabel)
+      assert.is_truthy(card.arg.meta:find("recommended", 1, true))
+    end)
+
+    -- A plain difficulty with nothing to say beside it must not pick up a trailing separator.
+    it("leaves the difficulty word alone when there is nothing to append to it", function()
+      installPack()
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", difficulty = "hard",
+                       fits = true } }
+      assert.equal("Hard", cards().card1.arg.difficultyLabel)
+      assert.equal("", cards().card1.arg.meta)
+    end)
 
     -- PA5 (2026-09-08, PROVISIONAL split): a playstyle name that IS "Name -- description" prose
     -- shows only the short name on the card, with the full prose in the tooltip.
@@ -3995,18 +4265,26 @@ describe("Options/Rotation (the Rotation section)", function()
         installPack()
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", experimental = true,
                          fits = true } }
+        -- No difficulty on this row, so the bits are still on `meta` (PE1-D2's own no-pips branch).
         local meta = cards().card1.arg.meta
         assert.is_truthy(meta:find("Unproven", 1, true))
         assert.is_falsy(meta:find("experimental", 1, true))
         assert.is_falsy(meta:find("guide", 1, true))
       end)
 
-    -- PA8: the card shows the catalog PHASE, not a raw "experimental" flag or date.
-    it("shows the catalog phase on the meta line", function()
+    -- PE1-D2: the phase came OFF the card -- after D1 the page header states it once, where six
+    -- cards used to repeat it. Asserted against every string the card face carries, not just the
+    -- meta line it used to live on.
+    it("shows the catalog phase nowhere on the card any more", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", phase = "SoD P8",
-                       fits = true } }
-      assert.is_truthy(cards().card1.arg.meta:find("SoD P8", 1, true))
+                       difficulty = "easy", recommended = true, fits = true } }
+      local card = cards().card1
+      assert.is_falsy(card.arg.meta:find("SoD P8", 1, true))
+      assert.is_falsy(card.arg.difficultyLabel:find("SoD P8", 1, true))
+      assert.is_falsy(card.arg.title:find("SoD P8", 1, true))
+      -- ...and it is on the page header instead.
+      assert.is_truthy(Rotation.group().args.detection.name:find("SoD P8", 1, true))
     end)
 
     -- PA9: the card hands the widget a plain `unavailable` flag; D48's own "still gives it a page,
@@ -4113,17 +4391,193 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.has_no.errors(function() cards().card1.arg.actions.open.func() end)
     end)
 
-    -- D71: the link action opens the SAME StaticPopup layer as D35/D61/D67, never a second one, with
-    -- the FULL url (not the shortened host the source line shows).
-    it("opens the source URL popup, in full, when the card's Copy link action runs", function()
+    -- PE1-D3 -------------------------------------------------------------------------------------
+    --
+    -- At 1200px the shared detail area begins below two rows of cards and "Your rotations" -- off
+    -- the bottom of the window -- so clicking a card looked like it did nothing and players never
+    -- found the panel at all. Clicking one now scrolls the page the MINIMUM amount that brings the
+    -- detail panel's header on screen, and does not move at all when it is already visible.
+    describe("scrolling the detail panel's header into view (PE1-D3)", function()
+      -- The arithmetic is a pure function, so it is tested with numbers rather than through frames.
+      -- Every case below uses a 500px viewport over 1500px of content, which makes the range
+      -- exactly 1000px and one scroll unit exactly one pixel -- so an asserted scroll value reads
+      -- directly as "this many pixels", and "not one pixel further" is a literal claim.
+      local function measure(over)
+        local m = { scroll = 0, contentHeight = 1500, viewHeight = 500,
+                    viewTop = 700, viewBottom = 200, detailTop = 600, headerHeight = 40 }
+        for k, v in pairs(over or {}) do m[k] = v end
+        return Rotation.detailScrollValue(m)
+      end
+
+      it("does not move when the header is already fully visible", function()
+        assert.is_nil(measure{ detailTop = 600 })
+      end)
+
+      it("does not move when the header's bottom edge is exactly on the viewport's", function()
+        assert.is_nil(measure{ detailTop = 240 }) -- header bottom 200 == viewBottom
+      end)
+
+      -- The whole point: enough to sit the header's bottom on the viewport's bottom edge, and no
+      -- further. A "scroll the panel into view" or "centre it" implementation answers larger here.
+      it("scrolls down exactly far enough to land the header on the bottom edge", function()
+        assert.equal(120, measure{ detailTop = 120 }) -- header bottom 80, 120px below viewBottom
+      end)
+
+      it("scales the pixel distance by the page's own scrollable range", function()
+        -- Half the range (500px over a 500px viewport) means one pixel costs two scroll units.
+        assert.equal(240, measure{ detailTop = 120, contentHeight = 1000 })
+      end)
+
+      it("adds to the scroll value the page is already at, rather than replacing it", function()
+        assert.equal(320, measure{ detailTop = 120, scroll = 200 })
+      end)
+
+      -- A page shorter than its own viewport is the branch SetScroll itself special-cases (it
+      -- forces offset 0); there is nothing to scroll and asking for a value would divide by <= 0.
+      it("does not move on a page that is shorter than its viewport", function()
+        assert.is_nil(measure{ detailTop = 120, contentHeight = 400 })
+      end)
+
+      it("does not move on a page exactly as tall as its viewport", function()
+        assert.is_nil(measure{ detailTop = 120, contentHeight = 500 })
+      end)
+
+      it("clamps at the top of the scroll range", function()
+        assert.equal(1000, measure{ detailTop = 100, scroll = 950 })
+      end)
+
+      -- Scrolled past a tall detail panel: its header is now ABOVE the viewport, and the minimum
+      -- move is back up to the top edge.
+      it("scrolls back up when the header has gone off the top", function()
+        assert.equal(400, measure{ detailTop = 800, scroll = 500 })
+      end)
+
+      it("clamps at the bottom of the scroll range", function()
+        assert.equal(0, measure{ detailTop = 900, scroll = 30 })
+      end)
+
+      -- The frame-walking glue. Stand-ins for the AceGUI widget tree AceConfigDialog builds: a
+      -- Frame holding a TreeGroup holding the page's single ScrollFrame (AceConfigDialog-3.0.lua:
+      -- 1635-1646), whose last child is `args.detail` and whose own first child is its header row.
+      -- `pairs` skips a nil value, so a test that wants a field ABSENT (an unlaid-out frame answers
+      -- nil to GetTop) says so with this sentinel rather than with `= nil`, which would silently
+      -- leave the default in place and make the test vacuous.
+      local UNSET = {}
+      local function harness(over)
+        local o = { scrollvalue = 0, contentHeight = 1500, viewHeight = 500, viewTop = 700,
+                    viewBottom = 200, detailTop = 600, headerBottom = 560 }
+        for k, v in pairs(over or {}) do o[k] = (v ~= UNSET) and v or nil end
+        local function frame(top, bottom, height)
+          return { GetTop = function() return top end, GetBottom = function() return bottom end,
+                   GetHeight = function() return height end }
+        end
+        local header = { frame = frame(o.detailTop, o.headerBottom) }
+        local detail = { frame = frame(o.detailTop, nil),
+                         children = o.noDetailChildren and {} or { header } }
+        local calls = {}
+        local scroll = {
+          type = "ScrollFrame",
+          children = { { frame = frame(900, 800) }, detail },
+          scrollframe = frame(o.viewTop, o.viewBottom, o.viewHeight),
+          content = frame(nil, nil, o.contentHeight),
+          status = o.noStatus and nil or { scrollvalue = o.scrollvalue },
+          localstatus = {},
+          SetScroll = function(_, v) calls[#calls + 1] = v end,
+        }
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        ns.Options = { dialog = { Open = function() end,
+          OpenFrames = { Elmira = { children = { { children = o.noScroll and {} or { scroll } } } } } } }
+        return calls
+      end
+
+      it("issues no SetScroll at all when the detail panel's header is already visible", function()
+        local calls = harness()
+        cards().card1.arg.actions.open.func()
+        assert.equal(0, #calls, "an already-visible header must produce NO call, not SetScroll(current)")
+      end)
+
+      it("scrolls the page's own ScrollFrame, found under the dialog, when the detail is below",
+        function()
+          local calls = harness{ detailTop = 120, headerBottom = 80 }
+          cards().card1.arg.actions.open.func()
+          assert.same({ 120 }, calls)
+        end)
+
+      it("reads the value the page is already scrolled to", function()
+        local calls = harness{ detailTop = 120, headerBottom = 80, scrollvalue = 200 }
+        cards().card1.arg.actions.open.func()
+        assert.same({ 320 }, calls)
+      end)
+
+      -- A freshly built status table has no `scrollvalue` yet (AceConfigDialog creates it empty,
+      -- :1652-1655), which must read as "at the top", not error.
+      it("treats a status table with no scroll value yet as the top of the page", function()
+        local calls = harness{ detailTop = 120, headerBottom = 80, scrollvalue = UNSET }
+        cards().card1.arg.actions.open.func()
+        assert.same({ 120 }, calls)
+      end)
+
+      it("falls back to the widget's own local status when it has been given no status table",
+        function()
+          local calls = harness{ detailTop = 120, headerBottom = 80, noStatus = true }
+          cards().card1.arg.actions.open.func()
+          assert.same({ 120 }, calls)
+        end)
+
+      it("does nothing, and does not error, when the dialog has no ScrollFrame at all", function()
+        local calls = harness{ detailTop = 120, headerBottom = 80, noScroll = true }
+        assert.has_no.errors(function() cards().card1.arg.actions.open.func() end)
+        assert.equal(0, #calls)
+      end)
+
+      it("does nothing when the detail panel has no header row to reveal", function()
+        local calls = harness{ detailTop = 120, headerBottom = 80, noDetailChildren = true }
+        assert.has_no.errors(function() cards().card1.arg.actions.open.func() end)
+        assert.equal(0, #calls)
+      end)
+
+      -- A frame the client has not laid out yet answers nil to GetTop/GetBottom/GetHeight. Guessing
+      -- a zero there would scroll the page somewhere arbitrary.
+      it("does nothing when the page has not been laid out yet", function()
+        local calls = harness{ detailTop = 120, headerBottom = 80, viewTop = UNSET }
+        assert.has_no.errors(function() cards().card1.arg.actions.open.func() end)
+        assert.equal(0, #calls)
+      end)
+
+      it("does nothing when the detail frame itself has no position yet", function()
+        local calls = harness{ detailTop = UNSET, headerBottom = 80 }
+        assert.has_no.errors(function() cards().card1.arg.actions.open.func() end)
+        assert.equal(0, #calls)
+      end)
+
+      it("does nothing when the content height is not readable yet", function()
+        local calls = harness{ detailTop = 120, headerBottom = 80, contentHeight = UNSET }
+        assert.has_no.errors(function() cards().card1.arg.actions.open.func() end)
+        assert.equal(0, #calls)
+      end)
+
+      -- The dialog stand-ins every other card test uses carry no OpenFrames at all.
+      it("does not error when the options window is not open", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        ns.Options = { dialog = { Open = function() end } }
+        assert.has_no.errors(function() cards().card1.arg.actions.open.func() end)
+      end)
+    end)
+
+    -- PE1-D2: the card no longer carries a Copy link action, WITH a source or without one -- the
+    -- detail panel's own Copy Source Link button is the single place a player copies a guide URL
+    -- from, and every card in both grids is now uniformly body-click + Use.
+    it("has no Copy link action even when the catalog entry ships a source", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true,
                        source = "https://www.wowhead.com/classic/guide/paladin" } }
-      local link = cards().card1.arg.actions.link
-      assert.equal("Shows the full web address in a box you can select and copy.", link.desc)
-      link.func()
-      assert.equal("ELMIRA_SHOW_SOURCE", _G.__lastStaticPopup.which)
-      assert.equal("https://www.wowhead.com/classic/guide/paladin", _G.__lastStaticPopup.data.prefill)
+      local card = cards().card1
+      assert.is_nil(card.arg.actions.link)
+      assert.is_nil(card.arg.source)
+      -- The only actions left are the body click and (on a row that is not running) Use.
+      assert.is_nil(card.arg.actions.open.name:find("link", 1, true))
     end)
 
     it("has no source line or Copy link action at all when the catalog entry carries no source",
@@ -4135,25 +4589,82 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_nil(card.arg.actions.link)
       end)
 
-    -- The Wizard.lua heading, reused word for word so a player never sees it change.
-    it("states level, class and weapon in the detection line", function()
-      installPack()
-      installWizard{}
-      ns.Wizard.detection = function()
-        return { class = "Paladin", level = 60, weapon = { type = "two-hander" } }
+    -- PE1-D1: ONE header row -- what this character is, and which phase the catalog below is for --
+    -- with the New Rotation button beside it. The old sentence ("...Pick how you want to play:")
+    -- named the class a second time and instructed the player to do the thing six clickable cards
+    -- underneath already invite; it stays where it belongs, in the wizard (Setup/Wizard.lua:200).
+    describe("the merged header row (PE1-D1)", function()
+      local function line(detection, rows)
+        installPack()
+        installWizard(rows or { { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true,
+                                   phase = "SoD P8" } })
+        ns.Wizard.detection = function() return detection end
+        return Rotation.group().args.detection.name
       end
-      local line = Rotation.group().args.detection.name
-      assert.is_truthy(line:find("Level 60 Paladin, holding a two%-hander", 1))
-      assert.is_truthy(line:find("Pick how you want to play", 1, true))
-    end)
 
-    it("falls back to '?' and 'unknown' piece by piece when detection cannot answer", function()
-      installPack()
-      installWizard{}
-      ns.Wizard.detection = function() return {} end
-      local line = Rotation.group().args.detection.name
-      assert.is_truthy(line:find("Level %? %?, holding a"))
-      assert.is_truthy(line:find("unknown", 1, true))
+      it("reads level, class, weapon and phase, joined with a middle dot", function()
+        assert.equal("Level 60 Paladin · 1H · SoD P8",
+          line({ class = "PALADIN", level = 60, weapon = { type = "1H" } }))
+      end)
+
+      -- The old version rendered "Level ? ?, holding a unknown" for a character the adapter had not
+      -- answered for yet. A segment we cannot read is OMITTED; nothing ever prints as ?/unknown.
+      it("omits the weapon segment entirely rather than saying 'unknown'", function()
+        local text = line({ class = "PALADIN", level = 60 })
+        assert.equal("Level 60 Paladin · SoD P8", text)
+        assert.is_falsy(text:find("?", 1, true))
+        assert.is_falsy(text:find("unknown", 1, true))
+      end)
+
+      it("omits the phase segment when the catalog carries none", function()
+        local text = line({ class = "PALADIN", level = 60, weapon = { type = "1H" } },
+          { { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } })
+        assert.equal("Level 60 Paladin · 1H", text)
+        assert.is_falsy(text:find("?", 1, true))
+      end)
+
+      -- Level and class share ONE segment, so a readable level with an unreadable class still reads
+      -- as a sentence rather than leaving a dangling "?" where the class would have been.
+      it("keeps the level on its own when the class cannot be read", function()
+        assert.equal("Level 60 · SoD P8", line({ level = 60 }))
+      end)
+
+      it("keeps the class on its own when the level cannot be read", function()
+        assert.equal("Paladin · SoD P8", line({ class = "PALADIN" }))
+      end)
+
+      it("says nothing at all about a character it cannot read anything about", function()
+        local text = line({})
+        assert.equal("SoD P8", text)
+        assert.is_falsy(text:find("?", 1, true))
+        assert.is_falsy(text:find("unknown", 1, true))
+      end)
+
+      -- PA10: the class TOKEN read as shouting; the merged line normalises it the same way the old
+      -- playstyles header did.
+      it("normalises the all-caps class token", function()
+        assert.is_falsy(line({ class = "PALADIN", level = 60 }):find("PALADIN", 1, true))
+      end)
+
+      -- Both are CONTROLS with a relative width, which is the only shape AceConfigDialog will flow
+      -- onto one row (:1444-1452) -- an inline group is forced to `width = "fill"` and could not.
+      it("puts the detection line and New Rotation on one row, as relative-width controls", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        local args = Rotation.group().args
+        assert.equal("relative", args.detection.width)
+        assert.equal(0.72, args.detection.relWidth)
+        assert.equal("relative", args.newRotation.width)
+        assert.equal(0.28, args.newRotation.relWidth)
+        -- Together they fill the row; the button is right-aligned by being the second of the two.
+        assert.equal(1, args.detection.relWidth + args.newRotation.relWidth)
+        assert.is_true(args.newRotation.order > args.detection.order)
+      end)
+
+      -- The wizard's own opening sentence shares nothing with this line and is not touched by it.
+      it("leaves the wizard's own instruction sentence out of the panel entirely", function()
+        assert.is_falsy(line({ class = "PALADIN", level = 60 }):find("Pick how you want to play", 1, true))
+      end)
     end)
 
     -- PA9 (2026-09-08): the "· in use" badge is gone from the card's TITLE -- the widget's own
@@ -4171,6 +4682,9 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_nil(args.card1.arg.actions.use, "the active row still offers a Use action")
         assert.is_falsy(args.card2.arg.active)
         assert.is_falsy(args.card2.arg.title:find("in use", 1, true))
+        -- PE5-D3: the card's own Use button reads its label straight from `useButtonArgs`, so it is
+        -- green here too -- a gold Use on the card beside a green one in the detail panel below it
+        -- would be the same action wearing two colours on one screen.
         assert.equal("Use", args.card2.arg.actions.use.name)
         assert.is_nil(args.card2.arg.actions.use.desc, "a fitting row still explains a reason it does not have")
       end)
@@ -4402,17 +4916,17 @@ describe("Options/Rotation (the Rotation section)", function()
 
     -- PA10: the pack's own `class` is preferred, but a pack that has none must still fall back to
     -- DETECTION's class (also normally-capitalised), not silently say "?" for a class it could
-    -- have named.
-    it("falls back to detection's class for the playstyles header when the pack itself has none",
+    -- have named. PE1-D1 moved the class off the playstyles title, so the surviving reader of that
+    -- fallback chain is the no-catalog sentence.
+    it("falls back to detection's class for the no-catalog sentence when the pack has none",
       function()
         installPack()
-        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+        installWizard{}
         ns.Display.currentPack = function()
-          return { catalog = { PALADIN = CATALOG }, builds = { PALADIN_EXODIN = {} } }
+          return { catalog = { PALADIN = {} }, builds = {} }
         end
         ns.Wizard.detection = function() return { class = "MAGE" } end
-        local header = Rotation.group().args.playstyles.name
-        assert.is_truthy(header:find("Mage", 1, true))
+        assert.is_truthy(Rotation.group().args.noPack.name:find("Mage", 1, true))
       end)
 
     -- PA5/PA8: a playstyle with no em-dash and no `updated` date has nothing extra to say in a
@@ -4424,6 +4938,41 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_nil(cards().card1.arg.tooltip)
     end)
 
+    -- PE1-D7: `type = "execute"` labels are Title Case. Asserted as the literal strings a player
+    -- reads, at their own call sites, so a future lowercase label fails the suite rather than
+    -- waiting for a screenshot. Section headers and prose are deliberately NOT included -- "What
+    -- this rotation needs" and "Rotation, top to bottom" stay sentence case.
+    it("labels every button on the Rotations pages in Title Case", function()
+      installPack()
+      ns.Display.activeBuild = function() return nil, nil end
+      installUserBuilds{ list = function() return { "USER_MINE" } end,
+        find = function(pk, key)
+          if key == "USER_MINE" then return { entries = {} }, "fork", { name = "Mine" } end
+          if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
+        end }
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      local args = Rotation.group().args
+      assert.equal("New Rotation", args.newRotation.name)
+      -- PE2-D3.4: brand-coloured, on its own row -- it navigates away instead of adding, so it must
+      -- not look like the eighteenth ability button. The label itself is unchanged.
+      assert.equal(ns.Colors.wrap(ns.Colors.BRAND, "Add from Spellbook…"),
+        args.builder.args.spells.args.add.name)
+      assert.equal("full", args.builder.args.spells.args.add.width)
+      -- PE4-D4/PE5-D3: colour by what the button DOES, every choice driven by ONE table
+      -- (`BUTTON_COLOURS`, Rotation.lua) so the owner's likely walk-back to destructive-only is one
+      -- line. Green does the thing this page exists for (Use), purple navigates elsewhere (Copy and
+      -- Edit, Edit), red throws work away once and globally (Delete); Rename neither commits nor
+      -- destroys and keeps the default gold. The LABELS are unchanged, which is what these
+      -- assertions still check underneath the escape.
+      local header = args.PALADIN_EXODIN.args.header.args
+      assert.equal(ns.Colors.wrap(ns.Colors.BRAND, "Copy and Edit"), header.copy.name)
+      assert.equal("Use", header.use.name)
+      local fork = args.USER_MINE.args.header.args
+      assert.equal("Rename", fork.rename.name)
+      assert.equal(ns.Colors.wrap(ns.Colors.BAD, "Delete"), fork.delete.name)
+      assert.equal(ns.Colors.wrap(ns.Colors.BRAND, "Edit"), fork.edit.name)
+    end)
+
     it("says so when the class ships no templates, and still offers New rotation", function()
       installPack()
       installWizard{}
@@ -4433,16 +4982,17 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_nil(root.playstyles, "an inline group for an empty catalog names nothing")
     end)
 
-    -- PA10 (2026-09-08): the class TOKEN read as shouting ("Playstyles for PALADIN"); the header now
-    -- reads the normally-capitalised class name. PA11: the header text moved from its own
-    -- description line into the surrounding inline group's own title.
-    it("names the class and catalog phase in the root page's playstyles group title", function()
+    -- PE1-D1: the class and the phase both moved up into the merged header row, so the box title is
+    -- the short word alone -- naming the class a third time on the same screen is what made the old
+    -- "Playstyles for Paladin · SoD P8" read as noise.
+    it("titles the root page's playstyles group with the bare word, naming no class", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true, phase = "SoD P8" } }
       local header = Rotation.group().args.playstyles.name
-      assert.is_truthy(header:find("Paladin", 1, true))
+      assert.equal("Playstyles", header)
+      assert.is_falsy(header:find("Paladin", 1, true))
       assert.is_falsy(header:find("PALADIN", 1, true))
-      assert.is_truthy(header:find("SoD P8", 1, true))
+      assert.is_falsy(header:find("SoD P8", 1, true))
     end)
 
     -- Absolute positions, not just "each is unique": a shift here would leave every row still
@@ -4470,7 +5020,7 @@ describe("Options/Rotation (the Rotation section)", function()
 
     -- D33: the template's OWN page, a tree node -- header, explanation and the needs/lines blocks.
     describe("the template's own page", function()
-      it("has a header naming it, badged when it is the one running, with a Copy and edit button",
+      it("has a header naming it, badged when it is the one running, with a Copy and Edit button",
         function()
           installPack()
           installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
@@ -4481,16 +5031,21 @@ describe("Options/Rotation (the Rotation section)", function()
           assert.is_truthy(header.name.name:find("in use", 1, true))
           assert.is_nil(header.use)
           assert.equal("execute", header.copy.type)
-          assert.equal("Copy and edit", header.copy.name)
+          -- PE4-D4: purple, because it navigates somewhere else.
+          assert.equal(ns.Colors.wrap(ns.Colors.BRAND, "Copy and Edit"), header.copy.name)
           assert.equal("Makes your own editable copy of this template, under a name you choose.",
                        header.copy.desc)
           assert.equal(1, header.name.order)
           assert.equal(2, header.copy.order)
+          -- PE5-D1: no Use on the template already running, so the name takes the share Use would
+          -- have had. A hard-coded name width leaves a hole in exactly this row.
+          assert.equal(1.0, headerRelSum(header))
+          assert.equal(0.75, header.name.relWidth)
           header.copy.func()
           assert.equal("PALADIN_EXODIN", _G.__lastStaticPopup.data.templateKey)
         end)
 
-      it("offers Use before Copy and edit when the template is not the one running", function()
+      it("offers Use before Copy and Edit when the template is not the one running", function()
         installPack()
         ns.Display.activeBuild = function() return nil, nil end
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
@@ -4499,6 +5054,9 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal(1, header.name.order)
         assert.equal(2, header.use.order)
         assert.equal(3, header.copy.order)
+        -- PE5-D1: still exactly one row, and the name gave up precisely Use's width to make room.
+        assert.equal(1.0, headerRelSum(header))
+        assert.equal(0.625, header.name.relWidth)
       end)
 
       it("lists what the rotation needs, one row per check plus the rune shopping list", function()
@@ -4524,6 +5082,56 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal(2, needs.args.n2.order)
         assert.equal(3, needs.args.n3.order)
         assert.equal(4, needs.args.shopping.order)
+      end)
+
+      -- PE1-D5: each ability's own icon before its name, the SAME mechanism the rotation lines one
+      -- block down already use (D72, `Display.spellIcon` -> the merged registry -> the ADAPTER).
+      -- A check whose key is not a spell at all (weapon/speed), or a set, or one that resolves to
+      -- nothing, renders with NO icon AND NO GAP -- not a placeholder texture, and not a stray
+      -- second space that would leave its text hanging away from the mark.
+      it("puts the ability's icon before its name, and nothing at all where there is none",
+        function()
+          installPack()
+          local asked = {}
+          ns.Display.spellIcon = function(key)
+            asked[#asked + 1] = key
+            if key == "HOLY_SHOCK" then return "Interface\\Icons\\Spell_Holy_SearingLight" end
+            if key == "RUNE_ART_OF_WAR" then return "Interface\\Icons\\Ability_Warrior_InnerRage" end
+            return nil
+          end
+          installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = false, checks = {
+            { key = "HOLY_SHOCK", ok = true, text = "Holy Shock known" },
+            { key = "RUNE_ART_OF_WAR", ok = true, text = "Art of War engraved" },
+            { key = "PALADIN_T2_JUDGEMENT", ok = false, text = "Radiant Judgement: 2/4 pieces" },
+            { key = "weapon", ok = false, text = "Weapon: 2H (you have 1H)" },
+          } } }
+          local needs = Rotation.group().args.PALADIN_EXODIN.args.needs.args
+          local green = "|TInterface\\COMMON\\Indicator-Green:12|t "
+          local amber = "|TInterface\\COMMON\\Indicator-Yellow:12|t "
+          assert.equal(green .. "|TInterface\\Icons\\Spell_Holy_SearingLight:0|t Holy Shock known",
+            needs.n1.name)
+          assert.equal(amber:gsub("Yellow", "Green") .. -- a rune check gets its rune's own icon
+            "|TInterface\\Icons\\Ability_Warrior_InnerRage:0|t Art of War engraved", needs.n2.name)
+          -- No icon: the text starts immediately after the mark's single space.
+          assert.equal(amber .. "Radiant Judgement: 2/4 pieces", needs.n3.name)
+          assert.equal(amber .. "Weapon: 2H (you have 1H)", needs.n4.name)
+          -- Resolved through the check's own key, which is what carries the spell/rune identity.
+          -- (`Rotation.group()` renders this row set twice -- the template's page and the shared
+          -- detail area both call `needsArgs` -- so the keys repeat; the first pass is the claim.)
+          assert.equal("HOLY_SHOCK", asked[1])
+          assert.equal("RUNE_ART_OF_WAR", asked[2])
+          assert.equal("PALADIN_T2_JUDGEMENT", asked[3])
+          assert.equal("weapon", asked[4])
+        end)
+
+      -- An install where the display module has not wired `spellIcon` (or a class pack with no
+      -- registry) must still render every row, plainly.
+      it("renders the rows unchanged when no icon lookup is available at all", function()
+        installPack()
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = false,
+          checks = { { key = "HOLY_SHOCK", ok = true, text = "Holy Shock known" } } } }
+        assert.equal("|TInterface\\COMMON\\Indicator-Green:12|t Holy Shock known",
+          Rotation.group().args.PALADIN_EXODIN.args.needs.args.n1.name)
       end)
 
       it("says nothing extra is needed when every check passes", function()
@@ -4554,6 +5162,12 @@ describe("Options/Rotation (the Rotation section)", function()
           assert.is_truthy(about.source.name:find("Source:", 1, true))
           assert.is_truthy(about.source.name:find("wowhead%.com"))
           assert.equal("execute", about.link.type)
+          -- PE1-D7: after D2 removed the cards' own link buttons this is the only copy-link button
+          -- on the page, and D3 lands the player here -- so it names what it copies. An AceGUI
+          -- button clips its text rather than growing, so the row is rebalanced to fit the label.
+          assert.equal("Copy Source Link", about.link.name)
+          assert.equal(1.4, about.source.width)
+          assert.equal(0.8, about.link.width)
           assert.equal(1, about.summary.order)
           assert.equal(2, about.notes.order)
           assert.equal(3, about.meta.order)
@@ -4600,7 +5214,8 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal("Rotation, top to bottom", lines.name)
         assert.is_truthy(lines.args.l1.name:find("Exorcism", 1, true))
         -- D43: the firing mark is the green texture dot, not the ASCII ">>".
-        assert.is_truthy(lines.args.l1.name:find("|TInterface\\COMMON\\Indicator-Green:12|t", 1, true))
+        assert.is_truthy(lines.args.l1.name
+          :find("|TInterface\\AddOns\\Elmira\\media\\mark_firing:12|t", 1, true))
         assert.is_truthy(lines.args.l1.name:find("always", 1, true))
       end)
 
@@ -4697,16 +5312,25 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_nil(mine.use)
       assert.is_falsy(other.name.name:find("in use", 1, true))
       assert.equal("execute", other.use.type)
-      -- Active: name, from, rename, delete (no Use). Not active: Use slots in between.
+      -- PE5-D2: both shapes of the row fill it exactly, and the name -- not a gap -- absorbs the
+      -- width of the Use button the active fork does not have.
+      assert.equal(1.0, headerRelSum(mine))
+      assert.equal(1.0, headerRelSum(other))
+      assert.is_true(mine.name.relWidth > other.name.relWidth,
+        "the active fork's name must take the width its missing Use button gave up")
+      -- PE5-D2: Use, Edit, Rename, Delete -- most-wanted first, destructive last.
+      -- Active: name, from, edit, rename, delete (no Use). Not active: Use slots in between.
       assert.equal(1, mine.name.order)
       assert.equal(2, mine.from.order)
-      assert.equal(3, mine.rename.order)
-      assert.equal(4, mine.delete.order)
+      assert.equal(3, mine.edit.order)
+      assert.equal(4, mine.rename.order)
+      assert.equal(5, mine.delete.order)
       assert.equal(1, other.name.order)
       assert.equal(2, other.from.order)
       assert.equal(3, other.use.order)
-      assert.equal(4, other.rename.order)
-      assert.equal(5, other.delete.order)
+      assert.equal(4, other.edit.order)
+      assert.equal(5, other.rename.order)
+      assert.equal(6, other.delete.order)
     end)
 
     -- Same widening the D30 tree tests guard: db.global is shared across characters, so the pack is
@@ -4753,14 +5377,16 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal("execute", header.rename.type)
         assert.equal("Rename", header.rename.name)
         assert.equal("execute", header.delete.type)
-        assert.equal("Delete", header.delete.name)
+        -- PE4-D4: red, because it throws a whole rotation away once and globally.
+        assert.equal(ns.Colors.wrap(ns.Colors.BAD, "Delete"), header.delete.name)
         assert.is_true(header.delete.confirm)
         assert.equal("execute", header.use.type)
         assert.equal(1, header.name.order)
         assert.equal(2, header.from.order)
         assert.equal(3, header.use.order)
-        assert.equal(4, header.rename.order)
-        assert.equal(5, header.delete.order)
+        assert.equal(4, header.edit.order)
+        assert.equal(5, header.rename.order)
+        assert.equal(6, header.delete.order)
       end)
 
     -- F1b (2026-09-07 bug round): the owner's per-fork override, over plain class-wide visibility.
@@ -4788,6 +5414,8 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.same({ { "USER_SCRATCH", false } }, calls)
     end)
 
+    -- PE5-D2: in the HEADER row now, beside Rename and Delete -- it used to be the last thing on the
+    -- page, below the whole rotation listing. The behaviour below is unchanged by the move.
     it("gives a fork's page an Edit button that activates it and jumps to the Builder", function()
       installPack()
       ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
@@ -4797,8 +5425,10 @@ describe("Options/Rotation (the Rotation section)", function()
       }
       local selected
       ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
-      local edit = Rotation.group().args.USER_SCRATCH.args.edit
+      local edit = Rotation.group().args.USER_SCRATCH.args.header.args.edit
       assert.equal("Opens this rotation in the Builder.", edit.desc)
+      assert.is_nil(Rotation.group().args.USER_SCRATCH.args.edit,
+        "Edit is still stranded at the bottom of the page")
       edit.func()
       assert.equal("USER_SCRATCH", ns.db.profile.activeBuild)
       assert.same({ "Elmira", "rotation", "builder" }, selected)
@@ -4816,7 +5446,7 @@ describe("Options/Rotation (the Rotation section)", function()
       ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
       local realUse = Rotation.use
       Rotation.use = function(...) used = used + 1; return realUse(...) end
-      Rotation.group().args.USER_SCRATCH.args.edit.func()
+      Rotation.group().args.USER_SCRATCH.args.header.args.edit.func()
       Rotation.use = realUse
       assert.equal(0, used, "Use ran again on the rotation already active")
       assert.same({ "Elmira", "rotation", "builder" }, selected)
@@ -4836,7 +5466,7 @@ describe("Options/Rotation (the Rotation section)", function()
       ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
       local said = {}
       ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
-      Rotation.group().args.USER_SCRATCH.args.edit.func()
+      Rotation.group().args.USER_SCRATCH.args.header.args.edit.func()
       assert.is_nil(selected, "Edit navigated to the Builder despite a failed activation")
       assert.equal(1, #said)
       assert.equal("warning", said[1][1])
@@ -4940,8 +5570,14 @@ describe("Options/Rotation (the Rotation section)", function()
       local detail = Rotation.group().args.detail
       assert.equal("group", detail.type)
       assert.is_true(detail.inline)
-      assert.is_truthy(detail.name:find("Exodin", 1, true))
-      assert.is_truthy(detail.name:find("in use", 1, true))
+      -- PE1-D4: the BOX is a stable landmark, not an echo of the name the inner header already
+      -- prints one line below it.
+      assert.equal("Details", detail.name)
+      assert.is_falsy(detail.name:find("Exodin", 1, true))
+      assert.is_falsy(detail.name:find("in use", 1, true))
+      -- Identity and the badge stay on the inner header, next to the buttons that act on it.
+      assert.is_truthy(detail.args.header.args.name.name:find("Exodin", 1, true))
+      assert.is_truthy(detail.args.header.args.name.name:find("in use", 1, true))
       assert.equal("Fast 2H.", detail.args.about.args.summary.name)
       assert.equal("What this rotation needs", detail.args.needs.name)
       assert.equal("Rotation, top to bottom", detail.args.lines.name)
@@ -4962,9 +5598,14 @@ describe("Options/Rotation (the Rotation section)", function()
         }
         Rotation.select("USER_MINE")
         local detail = Rotation.group().args.detail
-        assert.is_truthy(detail.name:find("My Exodin", 1, true))
+        -- PE1-D4: same stable box title for the fork branch...
+        assert.equal("Details", detail.name)
+        assert.is_falsy(detail.name:find("My Exodin", 1, true))
+        -- ...with the fork's own name still on its inner header.
+        assert.is_truthy(detail.args.header.args.name.name:find("My Exodin", 1, true))
         assert.equal("toggle", detail.args.private.type)
-        assert.equal("execute", detail.args.edit.type)
+        -- PE5-D2: the Edit button rides in the header row now, not at the foot of the panel.
+        assert.equal("execute", detail.args.header.args.edit.type)
         assert.is_nil(detail.args.about, "a fork's detail must not show the template page's own about block")
       end)
 
@@ -4981,6 +5622,34 @@ describe("Options/Rotation (the Rotation section)", function()
       local args = Rotation.group().args
       assert.is_true(args.detail.order > args.playstyles.order)
       assert.is_true(args.detail.order < args.builder.order)
+    end)
+
+    -- PE1-D3 depends on this being an INVARIANT, not a coincidence: the scroll lookup finds the
+    -- detail panel as the LAST child of the page's scroll content, so anything ordered below it
+    -- that is not a tree sub-page (a non-inline group, which AceConfigDialog renders as its own
+    -- page and never as content here) would silently break that lookup. This fails the suite
+    -- instead.
+    it("is the last element on the root page, which is what the scroll lookup depends on", function()
+      installPack()
+      installUserBuilds{ list = function() return { "USER_MINE" } end,
+        find = function(pk, key)
+          if key == "USER_MINE" then return { entries = {} }, "fork", { name = "Mine" } end
+          if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
+        end }
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
+      ns.Display.activeBuild = function() return {}, "PALADIN_EXODIN", nil end
+      local args = Rotation.group().args
+      assert.is_not_nil(args.detail)
+      local checked = 0
+      for key, row in pairs(args) do
+        local isSubPage = row.type == "group" and not row.inline
+        if key ~= "detail" and not isSubPage then
+          checked = checked + 1
+          assert.is_true(row.order < args.detail.order,
+            key .. " renders below the detail panel, which breaks the D3 scroll lookup")
+        end
+      end
+      assert.is_true(checked >= 4, "sanity: the page must actually have had rows to compare")
     end)
   end)
 
@@ -5054,6 +5723,7 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_true(args.card1.arg.active)
       assert.is_nil(args.card1.arg.actions.use)
       assert.is_falsy(args.card2.arg.active)
+      -- PE5-D3: green, from the same `useButtonArgs` label the detail panel's own button uses.
       assert.equal("Use", args.card2.arg.actions.use.name)
     end)
 

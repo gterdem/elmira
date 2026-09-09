@@ -18,6 +18,8 @@ local Transition = {}
 -- `base` is the projected-slot size and the unit everything else is expressed in. `firstScale` is
 -- the whole hierarchy: slot 1 is bigger, not brighter. The alpha ramp continues the same sentence
 -- past the size step -- by slot 5 the icon is a hint, which is all a fifth-cast projection is worth.
+-- PE10-D3: `gap` is the DEFAULT spacing now, not a constant -- Transition.spacing decides what a
+-- profile's own value means and Transition.layout reads it from there.
 Transition.LAYOUT = {
   base = 40,
   gap = 4,
@@ -44,23 +46,85 @@ function Transition.ghostScale(kind)
   return 1, Transition.LEAVE_SCALE
 end
 
--- Slot geometry for a given depth. Positions are LEFT-anchored offsets with a shared vertical
--- centre, so mixed sizes line up on their middles rather than their bottoms.
+-- PE10-D1. Which way the queue after slot 1 goes. "right" is what shipped and stays the default;
+-- the order is the order the options dropdown offers them. Growth direction is a statement about
+-- where slots 2..n GO, never about where slot 1 is -- Display/Queue keeps slot 1's centre on the
+-- same pixel in all four, which is the whole point of offering the choice at all.
+Transition.GROW = { "right", "left", "down", "up" }
+Transition.DEFAULT_GROW = "right"
+
+-- PE10-D3. `LAYOUT.gap` is now the DEFAULT spacing rather than the only one; 0 is a legitimate
+-- answer (a strip that reads as one block) so the floor is 0, not 1.
+Transition.MAX_GAP = 20
+
+-- Anything not one of the four reads as the default rather than as an error: a profile written by a
+-- newer version must never leave someone with an unlayoutable strip.
+function Transition.growth(grow)
+  if grow == "left" or grow == "down" or grow == "up" then return grow end
+  return Transition.DEFAULT_GROW
+end
+
+function Transition.spacing(gap)
+  gap = tonumber(gap)
+  if not gap or gap < 0 then return Transition.LAYOUT.gap end
+  if gap > Transition.MAX_GAP then return Transition.MAX_GAP end
+  return gap
+end
+
+-- Is this direction a column rather than a row? Asked by everything that has to choose an axis.
+function Transition.isVertical(grow)
+  grow = Transition.growth(grow)
+  return grow == "down" or grow == "up"
+end
+
+-- Slot geometry for a given depth, direction and spacing.
 --
--- Returns the per-slot rows plus the container size. Height is the FIRST slot's size, not `base`:
--- sizing the container to the small icons clips the big one, which is the one that matters.
-function Transition.layout(depth)
+-- `x`/`y` are each slot's CENTRE, measured from the CONTAINER'S centre. Centres rather than the
+-- old left-anchored offsets because slot 1 is a different size from the rest: on a vertical strip
+-- (and for the ghosts and the slides on a horizontal one) the only offset that means the same
+-- thing in all four directions is the middle of the icon.
+--
+-- Returns the per-slot rows plus the container's width and height. The cross-axis measurement is
+-- the FIRST slot's size, not `base`: sizing the container to the small icons clips the big one,
+-- which is the one that matters.
+function Transition.layout(depth, grow, gap)
   local L = Transition.LAYOUT
   local n = math.max(1, math.min(#L.alpha, depth or 1))
+  grow = Transition.growth(grow)
+  gap = Transition.spacing(gap)
+
+  local first = L.base * L.firstScale
+  -- Computed rather than accumulated: the loop that added a gap after every icon then subtracted
+  -- one at the end was correct on one axis and one direction, and there are now eight combinations.
+  local along = first + (n - 1) * (L.base + gap)
   local slots = {}
-  local x = 0
+  local run = 0
   for i = 1, n do
-    local size = (i == 1) and (L.base * L.firstScale) or L.base
-    slots[i] = { x = x, size = size, alpha = L.alpha[i] }
-    x = x + size + L.gap
+    local size = (i == 1) and first or L.base
+    -- How far this slot's centre is along the growth axis, from the middle of the whole strip.
+    local d = run + size / 2 - along / 2
+    local x, y
+    if grow == "right" then x, y = d, 0
+    elseif grow == "left" then x, y = -d, 0
+    elseif grow == "down" then x, y = 0, -d
+    else x, y = 0, d end
+    slots[i] = { x = x, y = y, size = size, alpha = L.alpha[i] }
+    run = run + size + gap
   end
-  -- One gap too many was added by the loop's last pass; the width is where the last icon ends.
-  return slots, x - L.gap, L.base * L.firstScale
+
+  if Transition.isVertical(grow) then return slots, first, along end
+  return slots, along, first
+end
+
+-- Where a promoted icon drops in FROM, as an offset from its own slot.
+--
+-- The entrance exists to read as "this arrived from outside the strip", which on the original
+-- horizontal strip meant one icon height ABOVE. On a vertical strip that direction IS the growth
+-- axis, so the drop would be indistinguishable from an ordinary shift. The intent is preserved
+-- rather than the literal direction: always perpendicular to the axis the strip grows on.
+function Transition.promoteOffset(grow, size)
+  if Transition.isVertical(grow) then return -size, 0 end
+  return 0, size
 end
 
 -- What a slot IS, for the purpose of "is this the same icon as before". Deliberately the same

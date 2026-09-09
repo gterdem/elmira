@@ -253,8 +253,10 @@ describe("Elmira/Options/CardWidget.lua (W1, the card widget)", function()
     assert.equal("", card.meta:GetText())
     for i = 1, 2 do assert.is_false(card.buttons[i].frame:IsShown()) end
     -- PA2: already sized to its own (minimal, blank) content on acquire, not left at whatever
-    -- height the frame happened to have before -- PAD*2 + three empty lines' worth of gaps.
-    assert.equal(32, card.frame:GetHeight())
+    -- height the frame happened to have before. PE1-D2: PAD*2 + title + GAP + summary -- an EMPTY
+    -- `meta` reserves neither its own height nor a GAP above it any more, which is 6px less than
+    -- the blank card used to claim.
+    assert.equal(10 * 2 + 6, card.frame:GetHeight())
   end)
 
   it("draws a bordered panel with the given colours", function()
@@ -290,11 +292,50 @@ describe("Elmira/Options/CardWidget.lua (W1, the card widget)", function()
   it("anchors the difficulty line and meta to the card's own bottom edge, bottom-up, with no buttons",
     function()
       local card = newCard()
+      card:SetCustomData({ title = "T", meta = "Unproven" })
       assert.same({ "BOTTOMLEFT", card.frame, "BOTTOMLEFT", 10, 10 }, card.meta.points[1])
       assert.same({ "BOTTOMRIGHT", card.frame, "BOTTOMRIGHT", -10, 10 }, card.meta.points[2])
       assert.same({ "BOTTOMLEFT", card.meta, "TOPLEFT", 0, 6 }, card.difficultyLine.points[1])
       assert.same({ "BOTTOMRIGHT", card.meta, "TOPRIGHT", 0, 6 }, card.difficultyLine.points[2])
     end)
+
+  -- PE1-D2: with the recommended/Unproven bits folded onto the difficulty line, a template card's
+  -- `meta` is usually EMPTY -- and an empty line still claimed a GAP and its own measured height,
+  -- leaving a blank row under every card. An empty `meta` reserves NOTHING now: the difficulty line
+  -- takes over the bottom slot itself, at the card's own PAD, not GAP above a zero-height sibling.
+  describe("PE1-D2: an empty meta line reserves no row at all", function()
+    it("hands the bottom slot to the difficulty line when meta is empty", function()
+      local card = newCard()
+      card:SetCustomData({ title = "T", difficultyLevel = 1, difficultyLabel = "Easy" })
+      assert.same({ "BOTTOMLEFT", card.frame, "BOTTOMLEFT", 10, 10 }, card.difficultyLine.points[1])
+      assert.same({ "BOTTOMRIGHT", card.frame, "BOTTOMRIGHT", -10, 10 }, card.difficultyLine.points[2])
+    end)
+
+    it("anchors the difficulty line above the topmost button, not above an empty meta", function()
+      local card = newCard()
+      card:SetCustomData({ title = "T", difficultyLevel = 1, difficultyLabel = "Easy",
+        actions = { use = { name = "Use", func = function() end } } })
+      assert.same({ "BOTTOMLEFT", card.buttons[1].frame, "TOPLEFT", 0, 10 },
+        card.difficultyLine.points[1])
+    end)
+
+    it("counts neither the empty meta's height nor a gap for it", function()
+      local card = newCard()
+      card.meta.stringHeight = 12 -- a FontString that would still measure tall while showing ""
+      card:SetCustomData({ title = "T" })
+      local blank = card.frame:GetHeight()
+      card:SetCustomData({ title = "T", meta = "recommended" })
+      assert.equal(blank + 6 + 12, card.frame:GetHeight(),
+        "a meta line with text costs GAP + its height; an empty one must cost nothing")
+    end)
+
+    it("goes back to reserving the row when meta is filled in again", function()
+      local card = newCard()
+      card:SetCustomData({ title = "T" })
+      card:SetCustomData({ title = "T", meta = "recommended" })
+      assert.same({ "BOTTOMLEFT", card.meta, "TOPLEFT", 0, 6 }, card.difficultyLine.points[1])
+    end)
+  end)
 
   -- PB2: `meta` and `difficultyLine` move to a DIFFERENT anchor (a button's edge instead of the
   -- frame's own) once a button appears -- proving `ClearAllPoints` actually runs, not just that a
@@ -303,8 +344,8 @@ describe("Elmira/Options/CardWidget.lua (W1, the card widget)", function()
   it("re-anchors meta and the difficulty line, not just adds to their old points, when a button appears",
     function()
       local card = newCard()
-      card:SetCustomData({ title = "T" }) -- no buttons: meta/difficultyLine anchor to the frame
-      card:SetCustomData({ title = "T", actions = {
+      card:SetCustomData({ title = "T", meta = "m" }) -- no buttons: meta anchors to the frame
+      card:SetCustomData({ title = "T", meta = "m", actions = {
         use = { name = "Use", func = function() end } } })
       assert.equal(2, #card.meta.points)
       assert.equal(2, #card.difficultyLine.points)
@@ -320,11 +361,12 @@ describe("Elmira/Options/CardWidget.lua (W1, the card widget)", function()
   -- case above.
   it("does not move meta or the difficulty line when the description grows taller", function()
     local card = newCard()
-    card:SetCustomData({ title = "T", summary = "Short." })
+    card:SetCustomData({ title = "T", summary = "Short.", meta = "m" })
     local shortMeta, shortDifficulty = card.meta.points[1], card.difficultyLine.points[1]
 
     card.summary.stringHeight = 300 -- simulates a long, wrapped description
-    card:SetCustomData({ title = "T", summary = "A much, much longer description that wraps." })
+    card:SetCustomData({ title = "T", meta = "m",
+                         summary = "A much, much longer description that wraps." })
     assert.same(shortMeta, card.meta.points[1])
     assert.same(shortDifficulty, card.difficultyLine.points[1])
   end)

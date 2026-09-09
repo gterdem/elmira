@@ -47,6 +47,12 @@ local function defaults()
     inCombat = false,
     affectingCombat = false,   -- UnitAffectingCombat: the real "is the player fighting" answer
     targetExists = true,       -- was hardcoded true, so "no target" could never be tested
+    -- PE9-D6: UnitCanAttack. Separate from targetExists because that is the whole point -- a bank
+    -- NPC exists and cannot be attacked, and the visibility rule has to be able to tell them apart.
+    targetAttackable = true,
+    -- PE9-D2: the SECOND value IsUsableSpell returns (`noMana`). [spellID] = true means the spell
+    -- is unusable for a resource reason rather than a range one.
+    noMana = {},
     itemCooldowns = {},        -- [slot] = { start, duration }; was hardcoded (0,0)
     -- Weapon tooltips live in tooltipLines too; base speed is only readable there.
     -- World-server round trip in ms, what GetNetStats reports 4th. Non-zero by default would make
@@ -102,7 +108,13 @@ function GetSpellCooldown(id)
   return 0, 0, 1
 end
 
-function IsUsableSpell(id) return M.knownSpells[id] == true, false end
+-- Two returns, like the client: `usable, noMana`. The second used to be a flat `false` here, which
+-- made the out-of-mana case unrepresentable -- so a mock that lied was the reason a strip could
+-- confidently suggest a spell you could not pay for.
+function IsUsableSpell(id)
+  local noMana = M.noMana[id] == true
+  return M.knownSpells[id] == true and not noMana, noMana
+end
 function IsPlayerSpell(id) return M.knownSpells[id] == true end
 function IsSpellKnown(id) return M.knownSpells[id] == true end
 
@@ -166,6 +178,12 @@ function UnitCreatureType(u) return M.creatureType end
 function UnitExists(u)
   if u == "target" then return M.targetExists end
   return true
+end
+-- Answers false when there is no target at all, exactly as the client does -- which is what lets
+-- the adapter use this one reading instead of pairing it with UnitExists.
+function UnitCanAttack(unit, other)
+  if other ~= "target" then return true end
+  return M.targetExists == true and M.targetAttackable == true
 end
 function UnitHealth(u) return M.health[1] end
 function UnitHealthMax(u) return M.health[2] end

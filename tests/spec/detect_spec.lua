@@ -177,11 +177,77 @@ describe("Setup.Detect", function()
       end)
     end)
 
+    -- PE1-D6: `readableName` asks the CLIENT first, through the adapter -- our prettifier cannot
+    -- know "and" is a minor word, so it can only ever produce "Shock And Awe" where the spellbook
+    -- says "Shock and Awe". Reached through `ns.Adapter`, never a WoW global (hard rule 3 forbids
+    -- the direct call, not the adapter read), and gated on the same `spellNameLookup` capability
+    -- the Abilities page's own id lookup uses.
+    describe("readableName and the client's own spell names (PE1-D6)", function()
+      local function installAdapter(caps, byID)
+        helper.ns().Adapter = { capabilities = function() return caps end,
+                                spellNameByID = byID }
+      end
+
+      it("prefers the client's name over both the record's own name and the prettifier", function()
+        installAdapter({ spellNameLookup = true },
+          function(id) return id == 7 and "Shock and Awe" or nil end)
+        assert.equal("Shock and Awe",
+          Detect.readableName("RUNE_SHOCK_AND_AWE", { id = 7, name = "Shock And Awe (data)" }))
+      end)
+
+      it("falls back to the record's name when the client has never seen the id", function()
+        installAdapter({ spellNameLookup = true }, function() return nil end)
+        assert.equal("Art of War", Detect.readableName("RUNE_ART_OF_WAR", { id = 7, name = "Art of War" }))
+      end)
+
+      it("does not ask the adapter at all on a client that cannot look a name up", function()
+        local asked = false
+        installAdapter({ spellNameLookup = false },
+          function() asked = true; return "Shock and Awe" end)
+        assert.equal("Shock And Awe", Detect.readableName("RUNE_SHOCK_AND_AWE", { id = 7 }))
+        assert.is_false(asked, "the spellNameLookup capability is what guards this call")
+      end)
+
+      it("ignores an adapter that offers no name lookup at all", function()
+        helper.ns().Adapter = { capabilities = function() return { spellNameLookup = true } end }
+        assert.equal("Shock And Awe", Detect.readableName("RUNE_SHOCK_AND_AWE", { id = 7 }))
+      end)
+
+      -- A `sets` record carries a `name` and no `id`, so the client branch must never fire for one.
+      it("skips the client lookup for a record with no id, such as a set", function()
+        installAdapter({ spellNameLookup = true }, function() return "Wrong Name" end)
+        assert.equal("Radiant Judgement",
+          Detect.readableName("PALADIN_T2_JUDGEMENT", { name = "Radiant Judgement" }))
+      end)
+
+      -- The existing specs call this with no adapter loaded at all; that path must stay exactly as
+      -- deterministic as it was.
+      it("returns the prettified key with no adapter present", function()
+        assert.is_nil(helper.ns().Adapter)
+        assert.equal("Hand Of Reckoning", Detect.readableName("RUNE_HAND_OF_RECKONING", nil))
+      end)
+    end)
+
     it("counts set pieces against the threshold", function()
       local checks = Detect.check({ sets = { PALADIN_T2_JUDGEMENT = 2 } },
         { sets = { PALADIN_T2_JUDGEMENT = 4 } }, PACK)
       assert.is_false(checks[1].ok)
       assert.truthy(checks[1].text:find("2/4", 1, true))
+    end)
+
+    -- PE1-D6: the set row used to leak its raw key -- "T3_5_HOLY: 2/4 pieces".
+    it("names the set readably rather than leaking its catalog key", function()
+      local pack = { sets = { PALADIN_T2_JUDGEMENT = { name = "Radiant Judgement" } } }
+      local checks = Detect.check({ sets = { PALADIN_T2_JUDGEMENT = 2 } },
+        { sets = { PALADIN_T2_JUDGEMENT = 4 } }, pack)
+      assert.equal("Radiant Judgement: 2/4 pieces", checks[1].text)
+      assert.is_nil(checks[1].text:find("PALADIN_T2_JUDGEMENT", 1, true))
+    end)
+
+    it("prettifies a set key when the pack ships no name for it", function()
+      local checks = Detect.check({ sets = { T3_5_HOLY = 2 } },
+        { sets = { T3_5_HOLY = 4 } }, { sets = { T3_5_HOLY = {} } })
+      assert.equal("T3 5 Holy: 2/4 pieces", checks[1].text)
     end)
 
     describe("requires.spells", function()
@@ -206,6 +272,26 @@ describe("Setup.Detect", function()
         assert.is_nil(c.ok)
         assert.truthy(c.text:find("could not read", 1, true))
         assert.is_nil(c.text:find("NOT known", 1, true))
+      end)
+
+      -- PE1-D6, the actual in-game defect: a SHIPPED spell record has no `name` field at all (the
+      -- client owns names), so `pack.spells[key].name or key` fell through to the raw key and the
+      -- panel read "HOLY_SHOCK known". All three states, because the bug was in all three.
+      it("reads a shipped spell that carries no name readably, never as its raw key", function()
+        local pack = { spells = { HOLY_SHOCK = { id = 20473 } } }
+        local req = { spells = { "HOLY_SHOCK" } }
+        assert.equal("Holy Shock known",
+          Detect.check({ spells = { HOLY_SHOCK = true } }, req, pack)[1].text)
+        assert.equal("Holy Shock NOT known",
+          Detect.check({ spells = { HOLY_SHOCK = false } }, req, pack)[1].text)
+        assert.equal("Holy Shock: could not read your spellbook",
+          Detect.check({}, req, pack)[1].text)
+      end)
+
+      it("still prefers a name the pack does ship", function()
+        local c = Detect.check({ spells = { EXORCISM = true } }, { spells = { "EXORCISM" } },
+          { spells = { EXORCISM = { id = 3, name = "Exorcism" } } })[1]
+        assert.equal("Exorcism known", c.text)
       end)
     end)
 

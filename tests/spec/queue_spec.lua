@@ -35,6 +35,14 @@ describe("Display.Queue", function()
     function f:GetAlpha() return self.alpha end
     function f:SetText(t) self.text = t end
     function f:GetText() return self.text end
+    -- PE9-D3: an outline is the whole point of the keybind change, and the catch-all below would
+    -- make "outlined at 16pt" and "never re-fonted at all" the same observation.
+    function f:SetFont(file, size, flags) self.font = { file, size, flags } end
+    function f:GetFont() local ft = self.font or {}; return ft[1] or "Fonts\\FRIZQT__.TTF", ft[2], ft[3] end
+    function f:SetTextColor(r, g, b) self.textColor = { r, g, b } end
+    -- PE9-D2: the dimming is a texture call, and a swallowed one is exactly this project's
+    -- "looks right, does nothing".
+    function f:SetDesaturated(v) self.desaturated = v and true or false end
     function f:StartMoving() self.moving = true end
     function f:StopMovingOrSizing() self.moving = false end
     function f:SetPoint(p, rel, rp, x, y)
@@ -223,6 +231,33 @@ describe("Display.Queue", function()
       icon.scripts.OnDragStart(icon)
       assert.is_false(container().moving)
       assert.is_false(Queue.StartMoving())
+    end)
+
+    -- PE13-D2. The on-screen message's move mode overrides the SAME lock this writes, so locking or
+    -- unlocking has to end it here -- /elm lock goes nowhere near the options panel, and it used to
+    -- leave a mouse-enabled frame across the middle of the screen with nothing to explain it.
+    it("ends the on-screen message's move mode on any lock decision", function()
+      local stopped = 0
+      ns.Announcers = { StopMoving = function() stopped = stopped + 1 end }
+      Queue.SetLocked(true)
+      assert.equal(1, stopped)
+      Queue.SetLocked(false)
+      assert.equal(2, stopped, "unlocking left the message frame in move mode")
+    end)
+
+    it("still stores the lock when leaving move mode errors, and says so", function()
+      local logged = {}
+      ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+      ns.Announcers = { StopMoving = function() error("MessageFrame has no Clear()") end }
+      assert.is_true(Queue.SetLocked(true))
+      assert.is_true(ns.db.profile.locked)
+      assert.equal(1, #logged)
+      assert.is_truthy(logged[1]:find("move mode", 1, true))
+    end)
+
+    it("locks without an Announcers module loaded at all", function()
+      ns.Announcers = nil
+      assert.is_true(Queue.SetLocked(true))
     end)
 
     it("the grip reflects the saved lock state at creation, not always hidden", function()
@@ -468,6 +503,227 @@ describe("Display.Queue", function()
       assert.equal("3", b[1].keybind.text)
       assert.equal("", b[2].keybind.text)
     end)
+
+    -- PE9-D4: the restriction above is now the default of a setting, not a law.
+    it("puts it on every icon, or on none, when the player says so", function()
+      ns.BarGlow = { keybindFor = function() return "3" end }
+      Queue.Create()
+      ns.db.profile.keybinds = "all"
+      Queue.Render({ { spell = "EXORCISM" }, { spell = "JUDGEMENT" } }, "PALADIN_EXODIN", true)
+      assert.equal("3", icons()[2].keybind.text)
+
+      ns.db.profile.keybinds = "off"
+      Queue.Render({ { spell = "JUDGEMENT" }, { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.equal("", icons()[1].keybind.text)
+      assert.equal("", icons()[2].keybind.text)
+    end)
+
+    -- PE9-D3. Three separate defects in one label: no outline (illegible over bright spell art),
+    -- the palette's "must not compete" grey, and one fixed font object across slots of two sizes --
+    -- so the biggest icon carried the proportionally smallest text.
+    it("outlines the keybind in near-white and sizes it to the slot it sits on", function()
+      Queue.Create()
+      local b = icons()
+      assert.equal("OUTLINE", b[1].keybind.font[3])
+      assert.equal("OUTLINE", b[1].wait.font[3])
+      -- Slot 1 is 52px and slot 2 is 40px, so its keybind must be the LARGER of the two.
+      assert.is_true(b[1].keybind.font[2] > b[2].keybind.font[2],
+                     "slot 1's keybind is not larger than slot 2's")
+      assert.same({ ns.Colors.LABEL.r, ns.Colors.LABEL.g, ns.Colors.LABEL.b }, b[1].keybind.textColor)
+      assert.is_not.same({ ns.Colors.MUTED.r, ns.Colors.MUTED.g, ns.Colors.MUTED.b },
+                         b[1].keybind.textColor)
+    end)
+  end)
+
+  -- PE9-D1. Every slot already carried `slot.t` -- the simulation's projected offset -- and the
+  -- strip read it nowhere: the engine knew and the display threw it away.
+  describe("how long until it happens", function()
+    local function withT(...)
+      local out = {}
+      for i, t in ipairs({ ... }) do out[i] = { spell = "EXORCISM", t = t } end
+      return out
+    end
+
+    it("prints a wait longer than one GCD, and stays silent about one that is not", function()
+      Queue.Create()
+      Queue.Render(withT(0, 4, 1.5), "PALADIN_EXODIN", true)
+      local b = icons()
+      assert.equal("4.0s", b[2].wait.text)
+      assert.equal("", b[3].wait.text, "a next-GCD slot is not worth a number")
+
+      -- The trap this feature dies of. `slot.t` is CUMULATIVE from now, so a perfectly smooth
+      -- rotation reads 0 / 1.5 / 3.0 -- and testing the cumulative value against one GCD makes slot
+      -- 3 clear the bar on every render and print "3.0s" forever, which is exactly the always-on
+      -- countdown the design exists to avoid. WHETHER to speak is the slot's own GAP; WHAT is shown
+      -- is still the time from now.
+      Queue.Render(withT(0, 1.5, 3.0), "PALADIN_EXODIN", true)
+      local smooth = icons()
+      assert.equal("", smooth[2].wait.text, "a smooth queue says nothing")
+      assert.equal("", smooth[3].wait.text, "and slot 3 of a smooth queue says nothing either")
+
+      Queue.Render(withT(0, 1.5, 5.0), "PALADIN_EXODIN", true)
+      local gap = icons()
+      assert.equal("", gap[2].wait.text, "slot 2 follows on the next global")
+      assert.equal("5.0s", gap[3].wait.text, "the real gap is announced, timed from NOW not from slot 2")
+    end)
+
+    it("never puts one on slot 1: slot 1 is 'press this now'", function()
+      Queue.Create()
+      ns.db.profile.waits = "always"
+      Queue.Render(withT(0, 1.5), "PALADIN_EXODIN", true)
+      assert.equal("", icons()[1].wait.text)
+      assert.equal("1.5s", icons()[2].wait.text, "'Always' must print the next-GCD slot too")
+    end)
+
+    it("says nothing at all when it is switched off", function()
+      Queue.Create()
+      ns.db.profile.waits = "off"
+      Queue.Render(withT(0, 4), "PALADIN_EXODIN", true)
+      assert.equal("", icons()[2].wait.text)
+    end)
+
+    -- THE point of the feature. Renderers only run when the queue CHANGES, which in a steady
+    -- rotation is seconds apart, so a number painted once and left alone freezes -- which looks
+    -- alive and is not, and is worse than showing nothing.
+    it("keeps counting down between queue changes, without a second ticker", function()
+      Queue.Create()
+      Queue.Render(withT(0, 4), "PALADIN_EXODIN", true)
+      assert.equal("4.0s", icons()[2].wait.text)
+      clockNow = 1.4
+      assert.is_true(Queue.Tick(clockNow))
+      assert.equal("2.6s", icons()[2].wait.text)
+      -- And it stops rather than going negative: the cast should already have happened.
+      clockNow = 9
+      Queue.Tick(clockNow)
+      assert.equal("", icons()[2].wait.text)
+    end)
+
+    it("one decimal below ten seconds, whole seconds above, never a bare number", function()
+      assert.equal("2.4s", Queue.formatWait(2.4))
+      assert.equal("12s", Queue.formatWait(12.7))
+      assert.equal("10s", Queue.formatWait(10))
+    end)
+
+    it("forgets a captured countdown when the strip leaves the screen", function()
+      Queue.Create()
+      Queue.Render(withT(0, 4), "PALADIN_EXODIN", true)
+      Queue.Render(nil, nil, false)            -- out of combat, no target
+      assert.is_false(Queue.Tick(clockNow), "the tick still painted a hidden strip")
+      ns.db.profile.waits = "off"              -- proves the text below is not a fresh render's
+      Queue.Render(withT(0, 4), "PALADIN_EXODIN", true)
+      assert.equal("", icons()[2].wait.text)
+    end)
+  end)
+
+  -- PE9-D5. The rule name was the valuable third of Learning mode, and the only way to have it was
+  -- to give up the lookahead entirely -- so the only way to see reasons in combat was to blind
+  -- yourself to what was coming.
+  describe("the name of the rule that chose it", function()
+    it("is off by default, and appears on its own at any icon count", function()
+      Queue.Create()
+      Queue.Render({ { spell = "EXORCISM", label = "Seal expiring" }, { spell = "JUDGEMENT" } },
+                   "PALADIN_EXODIN", true)
+      assert.is_false(icons()[1].reason:IsShown())
+
+      ns.db.profile.showReason = true
+      Queue.Render({ { spell = "JUDGEMENT", label = "Seal expiring" }, { spell = "EXORCISM" } },
+                   "PALADIN_EXODIN", true)
+      assert.is_true(icons()[1].reason:IsShown())
+      assert.equal("Seal expiring", icons()[1].reason.text)
+      assert.is_false(ns.db.profile.learning, "it must not need Learning mode any more")
+    end)
+
+    it("Learning mode still works, and now switches the rule name on too", function()
+      Queue.Create()
+      local applied = Queue.ApplyLearningPreset(true)
+      assert.equal(1, ns.db.profile.depth)
+      assert.equal(1.4, ns.db.profile.scale)
+      assert.is_true(ns.db.profile.learning)
+      assert.is_true(ns.db.profile.showReason)
+      assert.is_true(applied.showReason)
+    end)
+
+    -- PE12: the owner hit this twice. Turning it ON was a one-way door -- you looked at a couple of
+    -- suggestions and then had to remember, by hand, what your strip used to be.
+    it("puts your settings back when you switch it off", function()
+      Queue.Create()
+      ns.db.profile.depth, ns.db.profile.scale, ns.db.profile.showReason = 4, 0.9, false
+
+      Queue.ApplyLearningPreset(true)
+      assert.equal(1, ns.db.profile.depth)
+      assert.equal(1.4, ns.db.profile.scale)
+
+      local restored = Queue.ApplyLearningPreset(false)
+      assert.is_false(ns.db.profile.learning)
+      assert.equal(4, ns.db.profile.depth, "the icon count was not put back")
+      assert.equal(0.9, ns.db.profile.scale, "the size was not put back")
+      assert.is_false(ns.db.profile.showReason)
+      assert.is_truthy(restored and restored.restored, "the caller cannot say what came back")
+      assert.is_nil(ns.db.profile.learningPrior, "the remembered values outlived their use")
+    end)
+
+    -- The other half of the design: a setting the player CHANGED while learning is theirs, and
+    -- handing it back to the pre-learning value would be this toggle overwriting a deliberate choice.
+    it("keeps what you changed yourself while it was on", function()
+      Queue.Create()
+      ns.db.profile.depth, ns.db.profile.scale = 4, 0.9
+      Queue.ApplyLearningPreset(true)
+      ns.db.profile.scale = 1.8            -- the player widens it themselves, mid-lesson
+
+      Queue.ApplyLearningPreset(false)
+      assert.equal(4, ns.db.profile.depth, "an untouched setting is ours to restore")
+      assert.equal(1.8, ns.db.profile.scale, "a setting they changed is theirs to keep")
+    end)
+
+    -- Turning it on while already on must not capture the PRESET's own values as the "prior" --
+    -- that would quietly destroy the real ones and make the restore a no-op.
+    it("survives being switched on twice", function()
+      Queue.Create()
+      ns.db.profile.depth, ns.db.profile.scale = 3, 0.8
+      Queue.ApplyLearningPreset(true)
+      Queue.ApplyLearningPreset(true)
+      Queue.ApplyLearningPreset(false)
+      assert.equal(3, ns.db.profile.depth)
+      assert.equal(0.8, ns.db.profile.scale)
+    end)
+  end)
+
+  -- PE9-D2. Nothing in the strip reacted to resources: on low mana it confidently told you to cast
+  -- something, you pressed it, and it failed.
+  describe("what you cannot actually cast", function()
+    local function stateWhere(usable, noResource)
+      ns.API = { GetState = function()
+        return FakeState.new{ now = clockNow, usable = { EXORCISM = usable },
+                              noResource = { EXORCISM = noResource } }
+      end }
+    end
+
+    it("dims slot 1 when the reason is a resource one", function()
+      Queue.Create()
+      stateWhere(false, true)
+      Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.is_true(icons()[1].icon.desaturated)
+    end)
+
+    -- A melee player running at a target is out of range for a second or two on every pull, and an
+    -- icon strobing through that teaches you to stop looking at it.
+    it("leaves it alone when you are merely out of range", function()
+      Queue.Create()
+      stateWhere(false, false)
+      Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.is_false(icons()[1].icon.desaturated)
+    end)
+
+    it("undims again as soon as you can pay for it, on the tick, not on the next queue change",
+      function()
+        Queue.Create()
+        stateWhere(false, true)
+        Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+        assert.is_true(icons()[1].icon.desaturated)
+        stateWhere(true, false)
+        Queue.Tick(clockNow)
+        assert.is_false(icons()[1].icon.desaturated)
+      end)
   end)
 
   describe("motion", function()
@@ -492,7 +748,8 @@ describe("Display.Queue", function()
       local b = icons()[1]
       local slide = b.groups[1]
       assert.equal(1, slide.played)
-      assert.same({ -56, -0 }, slide.anims.Translation.offset)  -- leftward from slot 2's x, no rise
+      -- Centre to centre: 20 (half of slot 2) + 4 (the gap) + 26 (half of slot 1), leftward.
+      assert.same({ -50, 0 }, slide.anims.Translation.offset)
     end)
 
     it("drops a promotion in from one icon height above", function()
@@ -604,9 +861,9 @@ describe("Display.Queue", function()
       Queue.Render(slotsOf("EXORCISM", "JUDGEMENT"), "PALADIN_EXODIN", true)
       Queue.Render(slotsOf("JUDGEMENT", "EXORCISM"), "PALADIN_EXODIN", true)
       local b = icons()[1]
-      assert.equal(56, b.point[4])                 -- parked at the old home while it slides
+      assert.equal(6, b.point[4])                  -- parked at slot 2's centre while it slides
       b.groups[1].scripts.OnFinished()
-      assert.equal(0, b.point[4])
+      assert.equal(-44, b.point[4])                -- and settled on slot 1's
     end)
 
     it("forgets the strip while hidden, so it arrives rather than teleports", function()
@@ -665,8 +922,13 @@ describe("Display.Queue", function()
     it("anchors, sizes and dims each visible slot", function()
       Queue.Create()
       local b = icons()
-      assert.equal(0, b[1].point[4])
-      assert.equal(56, b[2].point[4])
+      -- PE10-D1: every slot is anchored CENTRE-to-CENTRE now, so one set of offsets works for all
+      -- four growth directions. Slot 1's centre is 44px left of the middle of a 140-wide strip.
+      assert.equal("CENTER", b[1].point[1])
+      assert.equal("CENTER", b[1].point[3])
+      assert.equal(-44, b[1].point[4])
+      assert.equal(0, b[1].point[5])
+      assert.equal(6, b[2].point[4])
       assert.same({ 52, 52 }, b[1].size)
       assert.equal(0.7, b[2].alpha)
     end)
@@ -712,7 +974,7 @@ describe("Display.Queue", function()
       Queue.Render(slotsOf("JUDGEMENT", "EXORCISM"), "K", true)
       local b = icons()[2]
       b.groups[1].scripts.OnFinished()
-      assert.equal(56, b.point[4])
+      assert.equal(6, b.point[4])
     end)
 
     it("clears the old anchor when a slide settles", function()
@@ -732,7 +994,8 @@ describe("Display.Queue", function()
       local g = ghosts()[2]
       assert.equal("icon", g.icon.texture)
       assert.equal("CENTER", g.point[1])
-      assert.equal(76, g.point[4])            -- slot 2's centre: 56 + 40/2
+      assert.equal("CENTER", g.point[3])
+      assert.equal(6, g.point[4])             -- slot 2's centre, from the strip's centre
       assert.equal(1, g.alpha)                -- reset, or a ghost fades once and never again
     end)
 

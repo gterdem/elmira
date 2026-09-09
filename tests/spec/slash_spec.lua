@@ -1000,6 +1000,46 @@ describe("Core.Slash", function()
       assert.is_truthy(lines[2]:find("needs the 4%-set; level 60"))
       assert.is_truthy(lines[3]:find("7. item 13"))
     end)
+
+    -- PE15-D2. A rune ability the owner does not have was announced as gained and lost three times
+    -- in one fight, and nothing could say whether the reading behind it had wobbled or held steady.
+    -- EVERY gated spell, not only the dimmed ones: a row the client could not read stays LIVE, so
+    -- listing the dimmed rows alone would hide the one case this exists to catch.
+    it("says what the client answers right now for every gated spell", function()
+      helper.ns().Display = {
+        inactiveRows = function() return {}, "PALADIN_EXODIN" end,
+        gateRows = function()
+          return {}, { { index = 1, spell = "JUDGEMENT", active = true, reasons = {} },
+                       { index = 2, spell = "DIVINE_STORM", active = true, reasons = {} },
+                       { index = 3, spell = "DIVINE_STORM", active = true, reasons = {} },
+                       { index = 4, item = 13, active = true, reasons = {} } }, "PALADIN_EXODIN"
+        end,
+      }
+      helper.ns().API = { GetState = function()
+        return { known = function(_, spell)
+          if spell == "JUDGEMENT" then return true end
+          return nil
+        end }
+      end }
+      local lines = Slash.run("debug gates")
+      assert.equal(4, #lines)
+      assert.is_truthy(lines[2]:find("cannot tell", 1, true))
+      -- Sorted and de-duplicated: one line per spell, in the same order every time.
+      assert.equal("  DIVINE_STORM = cannot tell", lines[3])
+      assert.equal("  JUDGEMENT = true", lines[4])
+    end)
+
+    it("says it has nothing to ask when there is no state", function()
+      helper.ns().Display = {
+        inactiveRows = function() return {}, "PALADIN_EXODIN" end,
+        gateRows = function()
+          return {}, { { index = 1, spell = "JUDGEMENT", active = true, reasons = {} } }, "PALADIN_EXODIN"
+        end,
+      }
+      helper.ns().API = { GetState = function() return nil end }
+      local lines = Slash.run("debug gates")
+      assert.equal("known: no state to ask.", lines[#lines])
+    end)
   end)
 
   it("'debug cues' degrades with a designed line when the overlay is not loaded", function()

@@ -49,7 +49,7 @@ describe("Display.Glow", function()
     helper.load("Elmira/Core/Colors.lua")
     helper.load("Elmira/Core/DB.lua")
     Glow = helper.load("Elmira/Display/Glow.lua")
-    ns.db = { profile = { glow = { enabled = true, style = "PIXEL", barGlow = false } } }
+    ns.db = { profile = { glow = { style = "PIXEL", barGlow = false } } }
   end)
 
   after_each(function() _G.LibStub = nil end)
@@ -314,32 +314,29 @@ describe("Display.Glow", function()
       ns.db.profile.glow.secondaryAlpha = nil
     end)
 
-    -- Shape, not just brightness: two glows of the same style are hard to tell apart however dim
-    -- one is, and Proc drives its own alpha so dimming does not read there at all.
-    it("draws the hint in its own style when one is chosen", function()
-      assert.equal("PIXEL", Glow.styleFor(false))
-      assert.equal("PIXEL", Glow.styleFor(true))
+    -- PE7: the next-cast glow has no style of its own. Once each ability carries its own glow
+    -- style, a global override here would silently replace what the player set for that ability --
+    -- so brightness is the only difference the second glow is allowed to make.
+    it("draws the next-cast glow in the SAME style as the main one", function()
+      assert.equal("PIXEL", Glow.styleFor())
       ns.db.profile.glow.style = "AUTOCAST"
-      assert.equal("AUTOCAST", Glow.styleFor(true), "unset means the same as the main glow")
-      ns.db.profile.glow.secondaryStyle = "PROC"
-      assert.equal("AUTOCAST", Glow.styleFor(false), "the main glow must not follow the hint")
-      assert.equal("PROC", Glow.styleFor(true))
-      -- A style the loaded library does not have falls back rather than drawing nothing.
-      ns.db.profile.glow.secondaryStyle = "NONSENSE"
-      assert.equal("AUTOCAST", Glow.styleFor(true))
-      ns.db.profile.glow.secondaryStyle = nil
+      assert.equal("AUTOCAST", Glow.styleFor())
+      -- One answer for both glows: there is no argument to ask for the second one's shape, so a
+      -- future override cannot be smuggled back in without this line failing.
+      ns.db.profile.glow.style = "NONSENSE"
+      assert.equal("PIXEL", Glow.styleFor(), "an unknown style falls back rather than drawing nothing")
       ns.db.profile.glow.style = "PIXEL"
     end)
 
-    it("lights the hint with the style that was chosen for it", function()
+    it("lights the next-cast glow with the main style", function()
       ns.db.profile.glow.secondary = true
-      ns.db.profile.glow.secondaryStyle = "BUTTON"
+      ns.db.profile.glow.style = "BUTTON"
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
       local second
       for _, c in ipairs(calls) do if c.r == later then second = c end end
-      assert.is_not_nil(second, "the hint was never lit")
+      assert.is_not_nil(second, "the next-cast glow was never lit")
       assert.equal("ButtonGlow_Start", second.fn)
-      ns.db.profile.glow.secondaryStyle = nil
+      ns.db.profile.glow.style = "PIXEL"
     end)
 
     it("lights the second button under its own key, dimmed", function()
@@ -440,7 +437,7 @@ describe("Display.Glow", function()
 
     before_each(function()
       missing = {}
-      ns.db = { profile = { glow = { enabled = true, style = "PIXEL", barGlow = true } } }
+      ns.db = { profile = { glow = { style = "PIXEL", barGlow = true } } }
       ns.BarGlow = {
         buttonsFor = function() return {}, nil end,
         noteMissing = function(key) missing[#missing + 1] = key end,
@@ -490,7 +487,7 @@ describe("Glow.Render", function()
     helper.load("Elmira/Core/Colors.lua")
     helper.load("Elmira/Core/DB.lua")
     Glow = helper.load("Elmira/Display/Glow.lua")
-    ns.db = { profile = { glow = { enabled = true, style = "PIXEL", barGlow = true } } }
+    ns.db = { profile = { glow = { style = "PIXEL", barGlow = true } } }
     ns.BarGlow = { buttonsFor = function() return { frame("bar") }, "ElvUI" end }
   end)
 
@@ -537,7 +534,7 @@ describe("Glow.isRendererFrame", function()
     helper.load("Elmira/Core/DB.lua")
     G = helper.load("Elmira/Display/Glow.lua")
     now, later = { name = "now" }, { name = "later" }
-    ns.db = { profile = { glow = { enabled = true, style = "PIXEL", barGlow = true, secondary = true } } }
+    ns.db = { profile = { glow = { style = "PIXEL", barGlow = true, secondary = true } } }
     ns.BarGlow = {
       buttonsFor = function(key)
         if key == "NOW" then return { now }, "ElvUI" end

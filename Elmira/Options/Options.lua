@@ -22,6 +22,39 @@ local LABELS = {
   combat = "In combat only",
 }
 
+-- PE9-D4. Same split as LABELS above: Display/Queue.lua decides what these strings DO, this side
+-- decides what they are called and in what order the dropdown offers them. Loosest last in both,
+-- so "Off" is always the first entry.
+local WAIT_LABELS = {
+  off = "Off",
+  gcd = "Only when longer than a GCD",
+  always = "Always",
+}
+local WAIT_ORDER = { "off", "gcd", "always" }
+local KEYBIND_LABELS = {
+  off = "Off",
+  first = "On the first icon only",
+  all = "On every icon",
+}
+local KEYBIND_ORDER = { "off", "first", "all" }
+
+-- PE10-D1. Core/Transition.GROW is the authority on which directions exist and in what order the
+-- dropdown offers them; this only names them, so a direction added there cannot appear unnamed.
+local GROW_LABELS = {
+  right = "Right",
+  left = "Left",
+  down = "Down",
+  up = "Up",
+}
+
+-- AceConfig wants `values` as a map and `sorting` as a list; building both from one ordered list
+-- means a mode can never appear in the dropdown without a name or in the wrong place.
+local function choices(labels, order)
+  local values = {}
+  for _, key in ipairs(order) do values[key] = L[labels[key]] end
+  return values
+end
+
 -- Screen edges, named for humans. Overlay.EDGES is the authority on which ones exist; this only
 -- names them, so adding an edge there cannot leave an unnamed entry here.
 local EDGE_LABELS = { left = "Left", right = "Right", top = "Top", bottom = "Bottom" }
@@ -79,6 +112,32 @@ local BAR_BLURB = {
 
 local BAR_NAMES = { Blizzard = "Blizzard default bars" }
 
+-- PE6-D5 (2026-09-08 owner ruling): which of the shipped mark textures stands for each bar state.
+-- The ASCII `>>`/`--` this replaces was a workaround for a constraint that no longer exists: the
+-- client's font has no U+25CF/U+25CB, so glyph dots rendered as identical empty squares -- but a
+-- TEXTURE draws where a glyph does not, which is why PE2 shipped `Elmira/media/mark_*.tga` and the
+-- Builder's status column reads them. Referenced through `Rotation.MARKS` rather than rebuilt here,
+-- so the two status columns in the panel can never disagree about what green means.
+--
+-- `fallback` shares `waiting` with `inactive` on purpose: from the player's side both mean "these
+-- bars are not the ones being glowed right now, but they could be", which is one state, not two.
+local BAR_MARKS = {
+  active   = "firing",
+  inactive = "waiting",
+  fallback = "waiting",
+  absent   = "blocked",
+}
+
+-- The addon NAME keeps its white/grey treatment (D5: only the STATE words gained colour), so this
+-- answers for the state half alone. Degrades to the old grey when Rotation has not loaded, because
+-- a panel that renders unmarked rows is better than one that errors.
+local function barMark(state)
+  local marks = ns.Rotation and ns.Rotation.MARKS
+  local look = marks and marks[BAR_MARKS[state] or ""]
+  if not look then return "", "|cff9AA0A6" end
+  return look.mark .. " ", look.colour
+end
+
 local function barRows()
   local args, order = {}, 0
   for _, r in ipairs((ns.BarProviders and type(ns.BarProviders.status) == "function" and ns.BarProviders.status()) or {}) do
@@ -87,14 +146,11 @@ local function barRows()
     local state = r.state == "inactive"
       and string.format(L[BAR_STATE.inactive], tostring(r.activeName))
       or L[BAR_STATE[r.state]]
-    -- ASCII, not glyphs. The client's font has no U+25CF/U+25CB and renders both as an empty box, so
-    -- the first in-game run showed a column of identical squares -- exactly the "every state looks
-    -- the same" failure this list was designed to avoid, reintroduced by the decoration.
-    local mark = (r.state == "active") and "|cff40c057>>|r" or "|cff9AA0A6--|r"
+    local mark, stateColour = barMark(r.state)
     local grey = (r.state == "absent") and "|cff9AA0A6" or "|cffFFFFFF"
     args["row" .. order] = {
       type = "description", fontSize = "medium", order = order, width = "full",
-      name = string.format("%s %s%s|r  |cff9AA0A6%s|r", mark, grey, label, state),
+      name = string.format("%s%s%s|r  %s%s|r", mark, grey, label, stateColour, state),
     }
     if r.state == "active" and BAR_BLURB[r.name] then
       order = order + 1
@@ -274,13 +330,14 @@ local CHECK_FAILED = {
   spell   = "not part of your current playstyle, so it is never suggested",
 }
 
--- Three different switches can leave a perfectly placed, perfectly visible button dark, and the
+-- Two different switches can leave a perfectly placed, perfectly visible button dark, and the
 -- panel used to blame the same one every time -- telling people to turn on a toggle that was
 -- already on. `detail` says which.
 local GLOW_OFF = {
   addon = "Elmira itself is switched off — turn on \"Show the queue\"",
-  queue = "the glow is switched off — turn on \"Glow the next cast\" under Glow",
-  bars  = "switched off above — turn on \"Also glow your action bar\"",
+  -- PE6-D4.3 renamed the toggle; this sentence names it, so it moves with it. A cure that names a
+  -- control the panel no longer has is worse than no cure at all.
+  bars  = "switched off above — turn on \"Enable action bar glow\"",
 }
 
 -- Why the display is hidden, in the player's words. Display.shouldShow's reasons are internal.
@@ -337,6 +394,20 @@ local function checkRows()
   return args
 end
 
+-- PE7-D1 retired the second master switch: `glow.enabled` said nothing `glow.barGlow` did not
+-- already say once ADR-0015 took the queue strip out of the glow set, and two switches for one
+-- effect is how a player turns the wrong one on and sees nothing. `barGlow` is now the only gate
+-- (`Display/Glow.lua`, `Display/BarGlow.lua`), which is why PE6's grey-out of this very toggle is
+-- gone with it: nothing sits above it any more.
+--
+-- What survives is the level below. The cast-after-next controls moved onto this panel (PE7-D3) and
+-- they DO have a master here, so they go `disabled` when it is off -- `disabled` only, never a get()
+-- that lies or a set() that writes, so turning the bar glow back on restores what the player chose.
+local function barGlowOff()
+  local p = profile()
+  return not (p and p.glow and p.glow.barGlow)
+end
+
 local function actionBarsGroup()
   previewNote = ""
   return {
@@ -345,39 +416,86 @@ local function actionBarsGroup()
       name = L["Elmira glows the button holding your next suggested spell."],
     },
     bars = {
-      type = "group", inline = true, order = 1, name = L["Bar addon"],
+      type = "group", inline = true, order = 1, name = L["Bar Addons"],
       args = barRows(),
     },
-    barGlow = {
-      type = "toggle", order = 2, width = "full", name = L["Also glow your action bar"],
-      desc = L["Highlights the button on your bars, not just the queue icon."],
-      get = function() return profile().glow.barGlow end,
-      set = function(_, v)
-        profile().glow.barGlow = v
-        if ns.Glow then ns.Glow.StopAll() end   -- drop glows we will no longer be refreshing
-        redraw()
-      end,
-    },
-    preview = {
-      type = "execute", order = 3, name = L["Preview glow"],
-      desc = L["Glows the button for your current suggestion for a few seconds, so you can see the effect without waiting for a fight."],
-      func = function() Options.previewGlow() end,
-    },
-    previewNote = {
-      type = "description", fontSize = "medium", order = 4, width = "full",
-      name = function() return previewNote end,
-    },
+    -- PE6-D4.4: the master toggle and its preview moved INTO this panel, because they are what the
+    -- panel is about -- the check rows below diagnose exactly the switch that now sits above them.
+    -- The pair share one row (`width = "relative"`, relWidths summing to exactly 1.0 -- AceGUI's
+    -- Flow scales only that shape, AceGUI-3.0.lua:709-711) so the button reads as belonging to the
+    -- toggle rather than as a third setting.
     check = {
-      type = "group", inline = true, order = 5, name = L["Is my spell showing?"],
+      type = "group", inline = true, order = 2, name = L["Action bar glow"],
       args = {
+        barGlow = {
+          type = "toggle", order = 1, width = "relative", relWidth = 0.75,
+          name = L["Enable action bar glow"],
+          desc = L["Highlights the button on your bars, not just the queue icon."],
+          get = function() return profile().glow.barGlow end,
+          set = function(_, v)
+            profile().glow.barGlow = v
+            if ns.Glow then ns.Glow.StopAll() end   -- drop glows we will no longer be refreshing
+            redraw()
+          end,
+        },
+        preview = {
+          type = "execute", order = 2, width = "relative", relWidth = 0.25,
+          name = L["Preview Glow"],
+          desc = L["Glows the button for your current suggestion for a few seconds, "
+                .. "so you can see the effect without waiting for a fight."],
+          func = function() Options.previewGlow() end,
+        },
+        previewNote = {
+          type = "description", fontSize = "medium", order = 3, width = "full",
+          name = function() return previewNote end,
+        },
+
+        -- PE7-D3: the cast-after-next cluster moved here from the Glow page, whole. It is a second
+        -- glow ON THE BARS, so it belongs beside the switch that decides whether the bars glow at
+        -- all; left behind, its three companions appeared on one page only when a toggle on another
+        -- page was set. The header stays, because "the next cast" and "the cast after next" are one
+        -- word apart and the toggle's name alone does not separate them.
+        hintHeader = { type = "header", order = 4, name = L["The cast after next"] },
+        secondary = {
+          type = "toggle", order = 5, width = "full",
+          name = L["Glow the next cast"],
+          desc = L["A second, quieter glow on the suggestion after the current one. Off by "
+                .. "default: two lit buttons compete for the same glance, which is the reason "
+                .. "the queue itself stopped glowing."],
+          disabled = barGlowOff,
+          get = function() return profile().glow.secondary == true end,
+          set = function(_, v) profile().glow.secondary = v; restyle() end,
+        },
+        secondaryAlpha = {
+          type = "range", order = 7, name = L["How dim it is"],
+          desc = L["A fraction of the main glow. Some styles drive their own brightness, so a "
+                .. "value that looks clearly dimmer on one can look identical on another -- "
+                .. "compare them with the two preview buttons."],
+          min = 0.05, max = 1, step = 0.05,
+          hidden = function() return profile().glow.secondary ~= true end,
+          disabled = barGlowOff,
+          get = function() return ns.Glow and ns.Glow.secondaryAlpha() or 0.35 end,
+          set = function(_, v) profile().glow.secondaryAlpha = v; restyle() end,
+        },
+        -- The same button as the ordinary preview, so the two are directly comparable. Two
+        -- different buttons would put the comparison at the mercy of where they sit.
+        previewDim = {
+          type = "execute", order = 8, name = L["Preview"],
+          desc = L["Flashes the SAME button as the preview above, dimmed, so you can compare "
+                .. "the two brightnesses without waiting for a fight."],
+          hidden = function() return profile().glow.secondary ~= true end,
+          disabled = barGlowOff,
+          func = function() Options.previewGlow(true) end,
+        },
+
         pick = {
-          type = "select", order = 0, name = L["Test with"],
+          type = "select", order = 9, name = L["Test with"],
           desc = L["Defaults to whatever Elmira is suggesting right now."],
           values = spellChoices,
           get = function() return Options.checkSpell() end,
           set = function(_, v) Options.setCheckSpell(v) end,
         },
-        rows = { type = "group", inline = true, order = 1, name = "", args = checkRows() },
+        rows = { type = "group", inline = true, order = 10, name = "", args = checkRows() },
       },
     },
   }
@@ -539,22 +657,29 @@ end
 
 -- ============================================================ Notifications (F37, D21-D29)
 -- One page, not a tab of its own (2026-09-07 Notifications pass): the whole of what used to be the
--- "Announcements" sub-page is now the content of Notifications itself, with the Log at the bottom.
--- The Log first among that content, then where each kind of message goes: a player who has just
--- been told something and missed it looks here, and finds the message before finding the switches
--- that would have made it louder. Peripheral cues and Cue sounds stay exactly where they were
--- (siblings under Notifications) until the Rotations overhaul gives them a home of their own.
+-- "Announcements" sub-page is now the content of Notifications itself. Peripheral cues and Cue
+-- sounds stay exactly where they were (siblings under Notifications) until the Rotations overhaul
+-- gives them a home of their own.
+--
+-- PE13-D1: the Log is the LAST thing on the page, inside a panel of its own. It used to be the
+-- first, one row per message, which meant the settings below it started at a different height every
+-- time the addon said something -- the page moved under the player as the log filled up. A group
+-- has ONE order however many rows are inside it, so the switches now sit where they sat last time.
 local LOG_LINES = 20
+-- After every setting on the page (the highest of which is 67), with room left over: this number is
+-- the whole point of the panel, so it is a constant rather than a literal buried in the table.
+local LOG_ORDER = 90
 
 -- D22: the same sentence, on every toggle in a category's row -- chat, screen, sound, party and
 -- raid alike -- because what a user needs to know before flipping a switch is WHEN this kind of
 -- message happens, not which pipe carries it. Verbatim from the "When it fires" column of the
 -- Notifications artifact (e1fc0af9), not authored here.
+--
+-- PE14-D3: no `cooldown` sentence -- that row is off this page (Core/Announce.OFF_PAGE) and its
+-- "when it fires" belongs to the per-ability tab that will own it.
 local WHEN_IT_FIRES = {
   rotation = "Your gear, runes or buffs change and a line in your rotation becomes usable or stops "
           .. "being usable",
-  cooldown = "You cast a spell with a cooldown of 2 minutes or longer (the threshold slider sits "
-          .. "under this row)",
   warning  = "Elmira cannot do its job: no visible bar button holds the spell, or a display "
           .. "component errored",
   status   = "First login before setup, after a catalog update, and when Learning mode rewrites "
@@ -571,40 +696,50 @@ local function announceGroup()
           .. "sound, or nothing at all, for each kind."],
   }
 
-  args.logHeader = {
+  -- PE13-D1. Same keys as before, one level deeper: the rows keep their newest-first order INSIDE
+  -- the panel, and the panel's own order is the fixed thing nothing can shift.
+  local logArgs = {}
+  logArgs.logHeader = {
     type = "description", order = 1, fontSize = "medium",
-    name = ns.Colors.wrap(ns.Colors.BRAND, L["Log"]) .. "  " ..
-           ns.Colors.wrap(ns.Colors.MUTED,
-             L["everything Elmira has said, newest first — kept whatever the routing below says"]),
+    name = ns.Colors.wrap(ns.Colors.MUTED,
+             L["everything Elmira has said, newest first — kept whatever the routing above says"]),
   }
   local rows = (A and A.log(LOG_LINES)) or {}
   if #rows == 0 then
-    args.logEmpty = {
+    logArgs.logEmpty = {
       type = "description", fontSize = "medium", order = 2,
       name = ns.Colors.wrap(ns.Colors.MUTED, L["Nothing yet."]),
     }
   end
   for i, row in ipairs(rows) do
     local cat = A.category(row.category)
-    args["log" .. i] = {
+    logArgs["log" .. i] = {
       type = "description", fontSize = "medium", order = 1 + i,
       name = ns.Colors.wrap(ns.Colors.MUTED, L[(cat and cat.label) or row.category]) .. "  " ..
              ns.Colors.wrap((cat and ns.Colors[cat.color]) or ns.Colors.MUTED, A.plain(row.text)),
     }
   end
-  args.logClear = {
-    type = "execute", order = 30, name = L["Clear messages"],
+  logArgs.logClear = {
+    type = "execute", order = 30, name = L["Clear Messages"],
     func = function() if A then A.clear() end end,
+  }
+  args.log = {
+    type = "group", inline = true, order = LOG_ORDER, name = L["Notifications Log"],
+    args = logArgs,
   }
 
   args.routing = {
     type = "header", order = 40, name = L["Where each kind of message goes"],
   }
-  for i, cat in ipairs((A and A.CATEGORIES) or {}) do
+  -- PE14-D3: `listed()`, not `CATEGORIES` -- one list in Core decides which kinds this page routes
+  -- AND which kinds `Test Each Kind` sends, so the button cannot demonstrate a row that is not
+  -- here. `cooldown` is the only one left out today, and with it go the Party/Raid toggles (it is
+  -- the only shareable category) and the cooldown-length slider: announcing a long cooldown is a
+  -- property of the ability, and the Abilities redesign owns it. The engine side is untouched.
+  for i, cat in ipairs((A and A.listed()) or {}) do
     local channels = {}
     local when = WHEN_IT_FIRES[cat.key]
-    -- The Log is not offered: it is the record, not a channel. Party/Raid are offered only where
-    -- the category is shareable IN CODE -- a rotation change is about your bars, not the group's.
+    -- The Log is not offered: it is the record, not a channel.
     --
     -- Ordered by Announce.CHANNELS rather than by pairs(), which put the toggles in a different
     -- order for every category and a different order again on another Lua build.
@@ -648,50 +783,23 @@ local function announceGroup()
               local a = profile().announce
               a.sounds = a.sounds or {}
               a.sounds[cat.key] = v
+              -- PE14-D2: hear what you just picked. The list is whatever media packs the player
+              -- runs, so a name alone tells them nothing and the only other way to audition one
+              -- was to go and trigger a real notification. Stored FIRST, then played through the
+              -- sink itself (Announcers.sound reads the same stored value the real announcement
+              -- will) rather than a second fetch-and-play written here -- one path, so what you
+              -- hear now is what you will hear then. "None" is silence, and that file degrades
+              -- rather than errors when LibSharedMedia is absent or the name no longer resolves.
+              if ns.Announcers and ns.Announcers.sound then ns.Announcers.sound(cat) end
             end,
           }
         end
       end
     end
-    if cat.shareable then
-      -- D22: two flags, not one -- "cooldowns used" reaching a five-man says nothing about whether
-      -- it belongs in a twenty-man raid.
-      order = order + 1
-      channels.party = {
-        type = "toggle", order = order, name = L["Party"], width = 0.7, desc = when,
-        get = function() return A.routes(cat.key).party == true end,
-        set = function(_, v)
-          local a = profile().announce
-          local stored = a.routes[cat.key]
-          if not stored then stored = A.routes(cat.key); a.routes[cat.key] = stored end
-          stored.party = v
-        end,
-      }
-      order = order + 1
-      channels.raid = {
-        type = "toggle", order = order, name = L["Raid"], width = 0.7, desc = when,
-        get = function() return A.routes(cat.key).raid == true end,
-        set = function(_, v)
-          local a = profile().announce
-          local stored = a.routes[cat.key]
-          if not stored then stored = A.routes(cat.key); a.routes[cat.key] = stored end
-          stored.raid = v
-        end,
-      }
-    end
-    if cat.key == "cooldown" then
-      -- D23: the same slider as before, moved to sit directly under the row it answers for.
-      order = order + 1
-      channels.floor = {
-        type = "range", order = order, name = L["Only cooldowns longer than"],
-        desc = L["Cooldowns used is only said for abilities with at least this long a cooldown. "
-              .. "Below about two minutes it is a line almost every fight -- Crusader Strike would "
-              .. "announce itself every six seconds."],
-        min = 0, max = 600, step = 15,
-        get = function() return A.cooldownFloor() end,
-        set = function(_, v) profile().announce.cooldownFloor = v end,
-      }
-    end
+    -- PE14-D3: no Party/Raid toggles and no cooldown-length slider are built here any more. Both
+    -- existed for `cooldown` alone -- the only `shareable` category, and the only one the slider
+    -- answered for -- and that row is off this page. Announce.routes still carries `party`/`raid`
+    -- for every category and Announcers.party still reads them; nothing on THIS page writes them.
     args["cat" .. cat.key] = {
       type = "group", order = 40 + i, name = ns.Colors.wrap(ns.Colors[cat.color], L[cat.label]),
       inline = true, args = channels,
@@ -730,21 +838,29 @@ local function announceGroup()
       if ns.Announcers then ns.Announcers.ApplyFont() end
     end,
   }
-  -- Locking on the General page also ends move mode (see `locked.set`), but the toggle still has
-  -- to say why it refuses to turn back on rather than silently doing nothing while locked.
-  local function positionsLocked() return ns.Queue and ns.Queue.isLocked() == true end
+  -- PE13-D2/D3. The Queue page's "Position the Strip" and this button do the same job, so they are
+  -- the same control: an execute that relabels while the mode is on, never disabled, and no lock to
+  -- go and undo somewhere else first. `locked` defaults to true, so as a toggle with
+  -- `disabled = positionsLocked` this was grey out of the box and sent the player to another page.
+  --
+  -- Move mode never writes `locked` -- not written and restored, WRITTEN NOWHERE (Announcers.lua):
+  -- a /reload or a disconnect mid-drag would otherwise leave the temporary value on disk as the
+  -- player's setting. An explicit lock decision still wins, because Queue.SetLocked ends this mode
+  -- before it stores anything, whether it came from "Lock all positions" or /elm lock.
+  local function movingNow() return (ns.Announcers and ns.Announcers.isMoving()) == true end
   args.move = {
-    type = "toggle", order = 66, name = L["Move the on-screen message"],
-    desc = function()
-      if positionsLocked() then return L["Unlock all positions on the General page first."] end
-      return L["Shows one sample of every kind so you can see how tall it gets, and lets you drag it."]
+    type = "execute", order = 66,
+    name = function() return movingNow() and L["Done Moving"] or L["Move screen messages"] end,
+    desc = L["Shows one sample of every kind so you can see how tall it gets, and lets you drag it. "
+          .. "Press it again when it is where you want it. Your lock setting is left exactly as it "
+          .. "was, and closing this window ends it too."],
+    func = function()
+      if not ns.Announcers then return end
+      if movingNow() then ns.Announcers.StopMoving() else ns.Announcers.SetMoving(true) end
     end,
-    disabled = positionsLocked,
-    get = function() return ns.Announcers and ns.Announcers.isMoving() or false end,
-    set = function(_, v) if ns.Announcers then ns.Announcers.SetMoving(v) end end,
   }
   args.test = {
-    type = "execute", order = 67, name = L["Test each kind"],
+    type = "execute", order = 67, name = L["Test Each Kind"],
     desc = L["Sends one message of every kind, through whatever you have switched on above."],
     func = function() if A then A.test() end end,
   }
@@ -1114,6 +1230,16 @@ local function chainClose(dialog)
         ns.log("could not leave move mode when the panel closed: %s", tostring(err))
       end
     end
+    -- PE11-D5, the same guard for the same reason. Positioning mode holds the strip on screen with
+    -- sample icons and the render loop deliberately leaves it alone, so a panel closed mid-drag
+    -- would strand it there -- visible in town, draggable while locked, with the button that ends
+    -- it now behind a window the player has just shut.
+    if ns.Queue and ns.Queue.StopPositioning then
+      local ok, err = pcall(ns.Queue.StopPositioning)
+      if not ok then
+        ns.log("could not leave the strip's positioning mode when the panel closed: %s", tostring(err))
+      end
+    end
     -- Where and how big it was left. Same pcall discipline, and for the same reason: the dialog's
     -- own cleanup below runs whatever happens here. AceGUI wipes the status table when the widget
     -- goes back to the pool, so this is the last moment the numbers exist.
@@ -1189,6 +1315,15 @@ end
 -- but `TreeOnButtonEnter` (AceConfigDialog-3.0.lua:1485-1524), registered as this SAME widget's
 -- `OnButtonEnter` callback (line 1730), is a SECOND, unconditional tooltip that ignores that flag --
 -- so it is the callback itself that has to go, on this one widget.
+--
+-- PE3-D6 (2026-09-08, owner's second look -- the tooltip was STILL covering the page): this hook
+-- passed `nil` and AceGUI DROPS a non-function silently (`WidgetBase.SetCallback`,
+-- AceGUI-3.0.lua:292-296, `if type(func) == "function" then`), so the D31 fix ran, changed nothing,
+-- and the spec's stand-in tree accepted the nil its real counterpart refuses. A callback that does
+-- nothing is the only thing AceGUI will accept in place of one that draws -- and it is still ours
+-- alone, because AceGUI wipes `widget.events` on Release (AceGUI-3.0.lua:188-190), so the next
+-- addon to be handed this pooled TreeGroup gets its own tooltip back.
+local function noTooltip() end
 local function installTreeHook(dialog)
   if not (dialog and hooksecurefunc) then return end
   if not dialog.elmiraTreeHooked then
@@ -1197,7 +1332,7 @@ local function installTreeHook(dialog)
       if appName ~= "Elmira" then return end
       local tree = findTreeWidget(container)
       if not tree then return end
-      if tree.SetCallback then tree:SetCallback("OnButtonEnter", nil) end
+      if tree.SetCallback then tree:SetCallback("OnButtonEnter", noTooltip) end
       -- Clicking a row only SELECTS it (AceGUIContainer-TreeGroup.lua's `Button_OnClick`, ~181-191);
       -- only the tiny "+" or a double-click flips `status.groups[value]` open (`Expand_OnClick` /
       -- `Button_OnDoubleClick`, ~173-198) -- so a template with forks nested under it looked
@@ -1235,6 +1370,313 @@ local function slashRows()
   return args
 end
 
+-- ============================================================ The Queue page
+--
+-- PE11. Thirteen controls in one flat list, with `Show the queue strip` at the top and `Show the
+-- queue` five rows below it, was a page you had to read twice to change something once. Three
+-- inline panels now -- when you see it, how big it is and where, what it tells you -- and the two
+-- colliding names are gone (PE11-D1). Three sibling panels and no outer wrapper: an AceConfig
+-- inline group is always the full width of the page, so nesting them inside a fourth would buy a
+-- second frame edge and nothing else.
+--
+-- TOOLTIPS ONLY, no `description` rows (PE11-D3), and there is a hard reason as well as a taste
+-- one: the tooltip is an AceGUI OnEnter/OnLeave callback (AceConfigDialog-3.0.lua:1084-1085) and a
+-- `description` is drawn as a Label, which never fires either. Prose on this page could therefore
+-- never carry a tooltip of its own -- it would be permanent clutter where a hover would do.
+
+-- PE11-D4. With the strip switched off the other twelve controls still looked live and did nothing;
+-- this is the third page this session with that defect (PE6's glow master, PE7's), so it is written
+-- once here rather than per row. The reason a Queue row is dead right now, or nil -- in the order a
+-- player would fix them.
+local function queueBlocked(needsOutOfCombat)
+  local p = profile() or {}
+  if p.showQueue == false then
+    return L["Turn \"Enable the queue strip\" on, at the top of this page, to use this."]
+  end
+  local fallback = ns.Visibility and ns.Visibility.DEFAULT
+  if needsOutOfCombat and (p.visibility or fallback) == "combat" then
+    return L["\"When to show it\" is set to combat only, so there is no out-of-combat strip to fade."]
+  end
+  return nil
+end
+
+-- A row's own tooltip, plus WHY it is greyed out when it is. Both halves matter: a dead control with
+-- no explanation is the same dead end as a live one that does nothing.
+local function queueDesc(text, needsOutOfCombat)
+  return function()
+    local why = queueBlocked(needsOutOfCombat)
+    if why then return text .. "|n|n" .. ns.Colors.wrap(ns.Colors.WARN, why) end
+    return text
+  end
+end
+
+-- Deliberately NOT the `get = function() return false end` shape a disabled row elsewhere in this
+-- file uses: these rows keep their real getters, so a greyed control still shows the value that is
+-- stored. Greying a toggle that reads `false` for a stored `true` tells the player their setting was
+-- thrown away when it was only paused.
+local function queueDisabled(needsOutOfCombat)
+  return function() return queueBlocked(needsOutOfCombat) ~= nil end
+end
+local function stripDisabled() return queueBlocked(false) ~= nil end
+
+-- PE11-D5. Whether the strip is in positioning mode this instant. Read through Queue rather than
+-- kept here: the mode lives with the frame it moves, and the options window is not the only thing
+-- that can end it (`Queue.SetLocked` does, and so does the panel closing).
+local function positioningNow()
+  return (ns.Queue and ns.Queue.isPositioning and ns.Queue.isPositioning()) == true
+end
+
+local function queueGroup()
+  return {
+    -- 1. Whether the strip is on screen at all, and how solid. The master switch first, then the
+    --    two questions that only exist once it is on.
+    when = {
+      type = "group", inline = true, order = 1, name = L["When you see it"],
+      args = {
+        -- Separate from `enabled` on purpose (ADR-0015 §3). Hekili players routinely watch only
+        -- the glowing button; before this the only way to lose the strip was to lose the glow too.
+        -- PE11-D1: named for the switch it is ("Enable the queue strip", matching "Enable action
+        -- bar glow" on General) rather than for the question the dropdown below it answers.
+        showQueue = {
+          type = "toggle", order = 1, name = L["Enable the queue strip"],
+          desc = L["The row of icons showing what to press now and what comes after it. Turning it "
+                .. "off hides the icons and keeps the action-bar glow, for players who watch only "
+                .. "the highlighted button."],
+          get = function() return profile().showQueue ~= false end,
+          set = function(_, v) profile().showQueue = v; redraw() end,
+        },
+        visibility = {
+          type = "select", order = 2, width = "full", name = L["When to show it"],
+          desc = queueDesc(L["Which moments the strip and its bar glow are on screen. Hiding it "
+                .. "also stops the update loop, so a hidden queue costs nothing at all. The "
+                .. "default keeps it out of your way in town and up the moment you have something "
+                .. "to fight."]),
+          disabled = stripDisabled,
+          values = function()
+            local out = {}
+            for _, mode in ipairs(ns.Visibility.MODES) do out[mode] = L[LABELS[mode]] end
+            return out
+          end,
+          sorting = function()
+            local out = {}
+            for i, mode in ipairs(ns.Visibility.MODES) do out[i] = mode end
+            return out
+          end,
+          get = function() return profile().visibility or ns.Visibility.DEFAULT end,
+          set = function(_, v)
+            profile().visibility = v
+            if ns.Glow then ns.Glow.StopAll() end   -- a mode change must not strand a lit button
+            redraw()
+          end,
+        },
+        -- PE10-D2. Not the same question as "When to show it" above, and the desc says so: this is
+        -- for people who keep the strip up out of combat and want it quieter, not gone.
+        -- PE11-D4: also dead when the strip is set to combat only, because then there is no
+        -- out-of-combat strip for it to act on.
+        oocAlpha = {
+          type = "range", order = 3, name = L["Out-of-combat opacity"],
+          min = 0.1, max = 1.0, step = 0.05, isPercent = true,
+          desc = queueDesc(L["How solid the strip is while you are not fighting. It goes back to "
+                .. "full the moment you enter combat. To hide it entirely out of combat, use "
+                .. "\"When to show it\" above instead."], true),
+          disabled = queueDisabled(true),
+          get = function() return tonumber(profile().oocAlpha) or 1 end,
+          set = function(_, v) profile().oocAlpha = v; redraw() end,
+        },
+      },
+    },
+    -- 2. How big it is, which way it grows, and where it sits. Most-reached-for first: the two
+    --    numbers everyone changes, then the shape, then the button that puts it somewhere.
+    size = {
+      type = "group", inline = true, order = 2, name = L["Size and position"],
+      args = {
+        depth = {
+          type = "range", order = 1, name = L["Casts to show"], min = 1, max = 5, step = 1,
+          desc = queueDesc(L["How many casts ahead the strip shows. The first icon is what to press "
+                .. "now; the rest are what the rotation projects after it. One is the whole answer "
+                .. "with nothing to read past it; five is a plan."]),
+          disabled = stripDisabled,
+          get = function() return profile().depth end,
+          set = function(_, v) profile().depth = v; redraw() end,
+        },
+        -- PE11-D1: "Strip scale" was named to tell it apart from the window's scale, which is on
+        -- another page. In a panel called "Size and position" the qualifier is noise.
+        scale = {
+          type = "range", order = 2, name = L["Size"], min = 0.5, max = 2.0, step = 0.05,
+          desc = queueDesc(L["How large the queue icons are drawn on your screen. If you want them "
+                .. "the size of the buttons you already read, use \"Match my action bars\" below "
+                .. "rather than hunting for the number."]),
+          disabled = stripDisabled,
+          isPercent = true,
+          get = function() return profile().scale end,
+          set = function(_, v) profile().scale = v; redraw() end,
+        },
+        -- PE10-D4. Beside the slider it writes, because that is where someone who has just
+        -- dragged the slider around looking for "the same size as my bars" is looking.
+        matchBars = {
+          type = "execute", order = 3, name = L["Match my action bars"],
+          desc = queueDesc(L["Measures a button on your action bars and sets the size above so the "
+                .. "first icon is drawn the same. Needs one of the rotation's spells to be on a "
+                .. "bar you can see."]),
+          disabled = stripDisabled,
+          func = function()
+            local scale = ns.Queue.matchBarScale()
+            redraw()
+            -- Say what happened either way. A button that computes nothing and reports nothing is
+            -- indistinguishable from one that is broken.
+            local text = scale
+              and string.format("Strip scale set to %d%% to match your action bars.",
+                                math.floor(scale * 100 + 0.5))
+              or ("Could not measure an action button — put one of this rotation's spells on "
+                  .. "a bar you can see, then try again.")
+            if ns.Announce then ns.Announce.emit("status", text) else ns.log("%s", text) end
+          end,
+        },
+        -- PE10-D1. Where slots 2..n go from slot 1. Slot 1 itself stays exactly where it is in
+        -- every direction, which is why this can be changed after positioning the strip.
+        grow = {
+          type = "select", order = 4, name = L["Direction"],
+          desc = queueDesc(L["Which way the strip lays out after the first icon. The first icon "
+                .. "does not move, so you can position the strip first and pick a direction "
+                .. "afterwards. Down or Up suits a strip beside your character; Left suits one "
+                .. "anchored to the right of the screen."]),
+          disabled = stripDisabled,
+          values = function() return choices(GROW_LABELS, ns.Transition.GROW) end,
+          sorting = function() return ns.Transition.GROW end,
+          get = function() return ns.Transition.growth(profile().grow) end,
+          set = function(_, v) profile().grow = v; redraw() end,
+        },
+        -- PE10-D3. Zero is a real answer: some players want the strip to read as one block.
+        spacing = {
+          type = "range", order = 5, name = L["Spacing"],
+          min = 0, max = 20, step = 1,
+          desc = queueDesc(L["How many pixels apart the icons sit. Zero makes the strip read as "
+                .. "one block; a wide gap makes the first icon easier to pick out of the corner "
+                .. "of your eye."]),
+          disabled = stripDisabled,
+          get = function() return ns.Transition.spacing(profile().spacing) end,
+          set = function(_, v) profile().spacing = v; redraw() end,
+        },
+        -- PE11-D5. The strip is hidden out of combat with no target by default, so "unlock and drag
+        -- it" asked the player to drag something they cannot see. Relabelled while active rather
+        -- than paired with a second button: there is one mode, so there is one control for it.
+        -- AceConfigDialog re-Opens the frame after every execute (AceConfigDialog-3.0.lua:867-872),
+        -- which is what makes the label change land without anything asking it to refresh.
+        position = {
+          type = "execute", order = 6,
+          name = function()
+            return positioningNow() and L["Done Positioning"] or L["Position the Strip"]
+          end,
+          desc = queueDesc(L["Puts the strip on screen with sample icons and lets you drag it, even "
+                .. "in the moments it would normally be hidden. Press it again when the strip is "
+                .. "where you want it. Nothing is saved except the position: your lock setting is "
+                .. "left exactly as it was, and closing this window ends it too."]),
+          disabled = stripDisabled,
+          func = function()
+            if positioningNow() then ns.Queue.StopPositioning() else ns.Queue.StartPositioning() end
+          end,
+        },
+      },
+    },
+    -- 3. What the icons say beyond which spell they are. `animate` belongs here rather than with
+    --    size: motion IS information on this strip. ADR-0015 §3 forbids it to glow, so movement is
+    --    how it says "something changed" -- turning it off costs a signal, not a decoration.
+    tells = {
+      type = "group", inline = true, order = 3, name = L["What it tells you"],
+      args = {
+        -- PE9-D4. The number is drawn in the icon's bottom-left corner.
+        waits = {
+          type = "select", order = 1, name = L["Show waits"],
+          desc = queueDesc(L["Prints how many seconds until each later suggestion happens, in the "
+                .. "icon's bottom-left corner. Most of the time the answer is just the next global "
+                .. "cooldown, so by default the number only appears when the wait is longer than "
+                .. "that -- which is exactly when it is worth knowing."]),
+          disabled = stripDisabled,
+          values = function() return choices(WAIT_LABELS, WAIT_ORDER) end,
+          sorting = function() return WAIT_ORDER end,
+          get = function() return profile().waits or "gcd" end,
+          set = function(_, v) profile().waits = v; redraw() end,
+        },
+        keybinds = {
+          type = "select", order = 2, name = L["Keybinds"],
+          desc = queueDesc(L["Prints the key each suggestion is bound to on your action bars, in "
+                .. "the icon's top-right corner. Nothing appears for an ability you have not put "
+                .. "on a bar. On the first icon only by default: on a later icon it is a key NOT "
+                .. "to press yet."]),
+          disabled = stripDisabled,
+          values = function() return choices(KEYBIND_LABELS, KEYBIND_ORDER) end,
+          sorting = function() return KEYBIND_ORDER end,
+          get = function() return profile().keybinds or "first" end,
+          set = function(_, v) profile().keybinds = v; redraw() end,
+        },
+        -- PE9-D5. Split out of Learning mode, which used to be the only way to see it -- and
+        -- which cost you the whole lookahead to get it.
+        showReason = {
+          type = "toggle", order = 3, width = "full", name = L["Show the rule name"],
+          desc = queueDesc(L["Writes the name of the rule that chose the first suggestion "
+                .. "underneath it, so you learn why rather than memorising an order. Works at any "
+                .. "number of icons; Learning mode below switches it on for you."]),
+          disabled = stripDisabled,
+          get = function() return profile().showReason == true end,
+          set = function(_, v) profile().showReason = v; redraw() end,
+        },
+        animate = {
+          type = "toggle", order = 4, name = L["Animate changes"],
+          desc = queueDesc(L["Icons slide when the queue moves and pop when you cast the "
+                .. "suggestion. The strip never glows, so movement is how it says something "
+                .. "changed: with this off, a new first suggestion simply appears and is easy to "
+                .. "miss."]),
+          disabled = stripDisabled,
+          get = function() return profile().animate ~= false end,
+          set = function(_, v) profile().animate = v; redraw() end,
+        },
+        -- PE11-D3: the tooltip names all three settings the preset moves. A preset that rewrites
+        -- controls the player can see in the same panel without saying which is how a settings
+        -- page loses their trust.
+        learning = {
+          type = "toggle", order = 5, width = "full", name = L["Learning mode"],
+          desc = queueDesc(L["Shows one suggestion at a time, larger, with the name of the rule "
+                .. "that chose it. It writes three settings on this page for you: \"Casts to "
+                .. "show\" to 1, \"Size\" to 140% and \"Show the rule name\" on -- and puts all "
+                .. "three back the way they were when you switch it off again. Anything you change "
+                .. "yourself while it is on is yours and stays. Does not turn on any screen-edge "
+                .. "cues; those stay your choice."]),
+          disabled = stripDisabled,
+          get = function() return profile().learning end,
+          set = function(_, v)
+            local applied = ns.Queue.ApplyLearningPreset(v)
+            redraw()
+            -- Say what a preset changed. A toggle that silently rewrites three other settings the
+            -- user can see in the same panel is how a settings screen loses trust.
+            if applied and not applied.restored then
+              -- PE9-D5's third setting is named only when the preset reports it, so the sentence
+              -- stays true of what the preset did rather than of what it used to do.
+              local text = string.format("Learning mode on: icons set to %d, scale to %d%%%s.",
+                                         applied.depth, math.floor(applied.scale * 100),
+                                         applied.showReason and ", rule names on" or "")
+              if ns.Announce then ns.Announce.emit("status", text) else ns.log("%s", text) end
+            elseif applied then
+              -- PE12: say what came BACK too. Silently rewriting three settings is no better on the
+              -- way out than on the way in. Only the ones the player left alone are named, because
+              -- only those were restored -- anything they changed while learning stayed theirs.
+              local parts = {}
+              if applied.depth then
+                parts[#parts + 1] = string.format("icons back to %d", applied.depth)
+              end
+              if applied.scale then
+                parts[#parts + 1] = string.format("scale back to %d%%", math.floor(applied.scale * 100))
+              end
+              if applied.showReason ~= nil then parts[#parts + 1] = "rule names off" end
+              local text = "Learning mode off: " .. table.concat(parts, ", ") .. "."
+              if ns.Announce then ns.Announce.emit("status", text) else ns.log("%s", text) end
+            end
+          end,
+        },
+      },
+    },
+  }
+end
+
 function Options.table()
   return {
     type = "group",
@@ -1245,8 +1687,26 @@ function Options.table()
       general = {
         type = "group", order = 1, name = L["General"], inline = false,
         args = {
+          -- PE6-D1 (2026-09-08): the four front controls are ONE row, and the two lesser toggles sit
+          -- PE8 (owner, 2026-09-09: "still not right aligned"). Width arithmetic CANNOT right-align a
+          -- toggle. AceGUI's CheckBox anchors its box at the LEFT of whatever cell it is given
+          -- (`checkbg` left, `text` LEFT-of-checkbg's-RIGHT, AceGUIWidget-CheckBox.lua:22-26,45-47),
+          -- so a wider cell only adds empty space to its right -- which is exactly the gap the owner
+          -- can see. A Button is the opposite: its frame fills the cell and the label centres inside
+          -- it (AceGUIWidget-Button.lua:87-88), so a button IS flush with the edge it ends on.
+          -- Hence the row order: the three switches (same kind of thing) sit together on the left and
+          -- `Choose Your Rotation`, the only widget that can honour a right edge, ends the row.
+          -- as a group against its right edge. `width = "relative"` + `relWidth` is the only shape
+          -- AceGUI's Flow layout scales to the row (`framewidth = width * child.relWidth`,
+          -- AceGUI-3.0.lua:709-711); left-packed defaults sized every control at a flat 170px and
+          -- left the row ending wherever the fourth happened to land.
+          -- SIXTEENTHS, not decimals: Flow starts a new row the instant `framewidth + usedwidth >
+          -- width` (:730), so a floating-point crumb over 1.0 would drop "Lock all positions" onto a
+          -- line of its own. 3/16 + 5/16 + 4/16 + 4/16 is exactly 1.0 in binary. The button gets the
+          -- widest share because its label is the longest and a Button does not wrap.
           enabled = {
-            type = "toggle", order = 1, name = L["Enable Elmira"],
+            type = "toggle", order = 1, width = "relative", relWidth = 0.1875,
+            name = L["Enable Elmira"],
             desc = L["Turns the whole display off: no queue, no bar glow, no update loop."],
             get = function() return profile().enabled end,
             set = function(_, v)
@@ -1255,6 +1715,10 @@ function Options.table()
               -- it: without this the bar button lit by the last suggestion stays lit forever,
               -- while the panel promises "no bar glow". Three lesser switches already do this.
               if ns.Glow then ns.Glow.StopAll() end
+              -- PE11-D5, the same class of stranding: Disable() stops the ticks, and positioning
+              -- mode is deliberately immune to the render loop, so a strip left mid-positioning
+              -- would sit on screen under a switch that says "no queue".
+              if not v and ns.Queue and ns.Queue.StopPositioning then ns.Queue.StopPositioning() end
               if v then ns.Display.Enable() else ns.Display.Disable() end
               redraw()
             end,
@@ -1266,12 +1730,14 @@ function Options.table()
           -- D39: "Run setup again" is gone along with the wizard window. Choosing or changing a
           -- rotation IS the Rotations tree now; this button is the only front-door needed.
           chooseRotation = {
-            type = "execute", order = 2, name = L["Choose your rotation"],
+            type = "execute", order = 4, width = "relative", relWidth = 0.3125,
+            name = L["Choose Your Rotation"],
             desc = L["Jumps straight to picking or editing your rotation."],
             func = function() Options.Open("rotation") end,
           },
           minimap = {
-            type = "toggle", order = 3, name = L["Show minimap button"],
+            type = "toggle", order = 2, width = "relative", relWidth = 0.25,
+            name = L["Show minimap button"],
             desc = L["Shows Elmira's launcher button on the minimap."],
             get = function()
               local m = ns.db and ns.db.global and ns.db.global.minimap
@@ -1283,36 +1749,39 @@ function Options.table()
             end,
           },
           locked = {
-            type = "toggle", order = 4, name = L["Lock all positions"],
+            type = "toggle", order = 3, width = "relative", relWidth = 0.25,
+            name = L["Lock all positions"],
             desc = L["Locks the queue strip and the on-screen message. Same as /elm lock."],
             get = function() return (ns.Queue and ns.Queue.isLocked()) == true end,
+            -- PE13-D2: ending the on-screen message's move mode used to be done HERE, so /elm lock
+            -- left a mouse-eating frame across the middle of the screen that the panel would have
+            -- cleared. Queue.SetLocked ends both temporary modes now, so every lock decision does.
             set = function(_, v)
               if ns.Queue then ns.Queue.SetLocked(v) end
-              -- Locking with the on-screen message still in move mode would leave a mouse-eating
-              -- frame across the middle of the screen with no obvious way back to it -- the same
-              -- failure the options-window OnClose already guards against on close.
-              if v and ns.Announcers then
-                local ok, err = pcall(ns.Announcers.StopMoving)
-                if not ok then
-                  ns.log("could not leave move mode when positions were locked: %s", tostring(err))
-                end
-              end
             end,
           },
-          window = {
-            type = "group", inline = true, order = 10, name = L["Options window"],
-            args = {
-              scale = {
-                type = "range", order = 1, name = L["Panel scale"],
-                -- Whole-window scale, not a font size: AceGUI row heights are fixed, so a bigger
-                -- font clips inside the same 24px row. Scale is the one lever that grows the text
-                -- and the rows it sits in together.
-                desc = L["How large this settings window is drawn. Applies as you drag."],
-                min = SCALE_MIN, max = SCALE_MAX, step = SCALE_STEP, isPercent = true,
-                get = function() return Options.windowScale() end,
-                set = function(_, v) Options.SetWindowScale(v) end,
-              },
-            },
+          -- PE6-D2: a plain row, not a titled box. An AceConfig inline group is ALWAYS the full
+          -- width of the page, so a panel around a single slider draws a full-width frame to hold
+          -- one 170px control -- pure chrome, and "Panel scale" already says what it scales.
+          scale = {
+            type = "range", order = 10, name = L["Panel scale"],
+            -- Whole-window scale, not a font size: AceGUI row heights are fixed, so a bigger
+            -- font clips inside the same 24px row. Scale is the one lever that grows the text
+            -- and the rows it sits in together.
+            desc = L["How large this settings window is drawn. Applies as you drag."],
+            min = SCALE_MIN, max = SCALE_MAX, step = SCALE_STEP, isPercent = true,
+            get = function() return Options.windowScale() end,
+            set = function(_, v) Options.SetWindowScale(v) end,
+          },
+          -- PE6-D3: Action Bars was a top-level tree page of its own; it is one panel's worth of
+          -- content and it answers a General question ("why is nothing glowing"), so it lives here.
+          -- Nothing navigated to the old page: every `Options.Open` call site passes no path,
+          -- "rotation" or "spells", and every `SelectGroup` names "general", "rotation" or "spells"
+          -- (Core/Slash.lua, Core/Init.lua, Display/Queue.lua, Setup/Wizard.lua, Options/Spells.lua,
+          -- Options/Rotation.lua), so removing the node breaks no path.
+          bars = {
+            type = "group", inline = true, order = 15, name = L["Action Bars"],
+            args = actionBarsGroup(),
           },
           slash = {
             type = "group", inline = true, order = 20, name = L["Slash commands"],
@@ -1322,99 +1791,27 @@ function Options.table()
           },
         },
       },
-      -- The strip alone. "Scale" here is the STRIP's, and it used to be the only scale in the panel;
-      -- it is named for what it scales now that the window has one of its own, because two sliders
-      -- both labelled Scale on two adjacent pages is a settings screen guessing game.
+      -- The strip alone (PE11). Built by queueGroup() above rather than written out here: it is
+      -- three inline panels of thirteen controls, and inlining that in the middle of the page list
+      -- buried General and Glow under it.
       queue = {
         -- M1a: 4 of the owner's 1-8 top-level order.
         type = "group", order = 4, name = L["Queue"], inline = false,
-        args = {
-          -- Separate from `enabled` on purpose (ADR-0015 §3). Hekili players routinely watch only
-          -- the glowing button; before this the only way to lose the strip was to lose the glow too.
-          showQueue = {
-            type = "toggle", order = 1, name = L["Show the queue strip"],
-            desc = L["Off keeps the action-bar glow and hides the icons."],
-            get = function() return profile().showQueue ~= false end,
-            set = function(_, v) profile().showQueue = v; redraw() end,
-          },
-          depth = {
-            type = "range", order = 2, name = L["Icons"], min = 1, max = 5, step = 1,
-            desc = L["How many casts ahead to show. Slot 1 is what to press now."],
-            get = function() return profile().depth end,
-            set = function(_, v) profile().depth = v; redraw() end,
-          },
-          scale = {
-            type = "range", order = 3, name = L["Strip scale"], min = 0.5, max = 2.0, step = 0.05,
-            desc = L["How large the queue icons are drawn on your screen."],
-            isPercent = true,
-            get = function() return profile().scale end,
-            set = function(_, v) profile().scale = v; redraw() end,
-          },
-          animate = {
-            type = "toggle", order = 4, name = L["Animate changes"],
-            desc = L["Icons slide when the queue moves and pop when you cast the suggestion."],
-            get = function() return profile().animate ~= false end,
-            set = function(_, v) profile().animate = v; redraw() end,
-          },
-          visibility = {
-            type = "select", order = 5, width = "full", name = L["Show the queue"],
-            desc = L["When the queue and its bar glow are on screen. Hiding it also stops the "
-                  .. "update loop, so a hidden queue costs nothing."],
-            values = function()
-              local out = {}
-              for _, mode in ipairs(ns.Visibility.MODES) do out[mode] = L[LABELS[mode]] end
-              return out
-            end,
-            sorting = function()
-              local out = {}
-              for i, mode in ipairs(ns.Visibility.MODES) do out[i] = mode end
-              return out
-            end,
-            get = function() return profile().visibility or ns.Visibility.DEFAULT end,
-            set = function(_, v)
-              profile().visibility = v
-              if ns.Glow then ns.Glow.StopAll() end   -- a mode change must not strand a lit button
-              redraw()
-            end,
-          },
-          learning = {
-            type = "toggle", order = 6, width = "full", name = L["Learning mode"],
-            desc = L["Shows one suggestion at a time, larger, with the name of the rule that chose "
-                  .. "it. Sets icons to 1 and scale to 140% — both remain yours to change afterwards. "
-                  .. "Does not turn on any screen-edge cues; those stay your choice."],
-            get = function() return profile().learning end,
-            set = function(_, v)
-              local applied = ns.Queue.ApplyLearningPreset(v)
-              redraw()
-              -- Say what a preset changed. A toggle that silently rewrites two other settings the
-              -- user can see in the same panel is how a settings screen loses trust.
-              if applied then
-                local text = string.format("Learning mode on: icons set to %d, scale to %d%%.",
-                                           applied.depth, math.floor(applied.scale * 100))
-                if ns.Announce then ns.Announce.emit("status", text) else ns.log("%s", text) end
-              end
-            end,
-          },
-        },
+        args = queueGroup(),
       },
-      -- M1a: 5 of the owner's 1-8 top-level order. Wording unchanged ("Action bars", not "Action
-      -- Bars") -- the owner's list capitalised it in passing, this is read as ordering feedback only.
-      bars = {
-        type = "group", order = 5, name = L["Action bars"],
-        args = actionBarsGroup(),
-      },
-      -- M1a: 6 of 8. Wording unchanged ("Glow", not "Glows") for the same reason as Action bars above.
+      -- PE6-D3: "Action bars" was 5 of the owner's M1a 1-8 top-level order. It is now an inline
+      -- panel on General; order 5 is left unused rather than renumbered, because these numbers only
+      -- have to sort and shifting them would touch four unrelated pages.
+      -- M1a: 6 of 8. Wording unchanged ("Glow", not "Glows").
       glow = {
         type = "group", order = 6, name = L["Glow"],
         args = {
-          enabled = {
-            type = "toggle", order = 1, name = L["Glow the next cast"],
-            get = function() return profile().glow.enabled end,
-            set = function(_, v) profile().glow.enabled = v; redraw() end,
-          },
-          -- "Also glow your action bar" used to live here. It moved to Action Bars, where the rest
-          -- of the bar settings and the diagnostics are: a toggle whose effect is invisible without
-          -- the status list next to it is where "I turned it on and nothing happened" starts.
+          -- "Also glow your action bar" used to live here, and so did a "Glow the next cast"
+          -- master above it. Both are on Action Bars now: the bar toggle because a switch whose
+          -- effect is invisible without the status list beside it is where "I turned it on and
+          -- nothing happened" starts, and the master because PE7-D1 found it was the same switch
+          -- twice -- ADR-0015 had already taken the queue strip out of the glow set, leaving
+          -- `glow.enabled` gating nothing `glow.barGlow` did not gate.
           style = {
             type = "select", order = 3, name = L["Style"],
             -- Derived from Glow.STYLES rather than repeated: a literal here silently drifts the
@@ -1450,69 +1847,17 @@ function Options.table()
           speed = numberRow(8, L["Pulse length"], "speed", 0.2, 3, 0.1,
             L["How long one pulse of the proc animation lasts, in seconds."]),
           preview = {
-            type = "execute", order = 9, name = L["Preview glow"],
+            type = "execute", order = 9, name = L["Preview Glow"],
             desc = L["Flashes your current suggestion's button with these settings."],
             func = function() Options.previewGlow() end,
           },
           reset = {
-            type = "execute", order = 10, name = L["Reset these to defaults"],
-            desc = L["Puts every glow setting on this page back the way it shipped, including the "
-                  .. "colour."],
+            type = "execute", order = 10, name = L["Reset These to Defaults"],
+            desc = L["Puts every glow setting back the way it shipped, including the colour and "
+                  .. "the action-bar switches."],
             confirm = true,
             confirmText = L["Put every glow setting back to its default?"],
             func = function() Options.resetGlow() end,
-          },
-
-          -- The hint sits at the BOTTOM, after everything that describes the main glow, because it
-          -- is a separate signal rather than another property of that one (owner, 2026-09-05).
-          hintHeader = { type = "header", order = 20, name = L["The cast after next"] },
-          secondary = {
-            type = "toggle", order = 21, width = "full",
-            name = L["Also hint the cast after next"],
-            desc = L["A second, quieter glow on the suggestion after the current one. Off by "
-                  .. "default: two lit buttons compete for the same glance, which is the reason "
-                  .. "the queue itself stopped glowing."],
-            get = function() return profile().glow.secondary == true end,
-            set = function(_, v) profile().glow.secondary = v; restyle() end,
-          },
-          -- Its own style, not just its own brightness. Two glows of the same shape are hard to
-          -- tell apart however dim one is -- and on Proc, which drives its own alpha animation,
-          -- dimming alone does not read at all.
-          secondaryStyle = {
-            type = "select", order = 22, name = L["Hint style"],
-            desc = L["Use a different shape for the hint so it cannot be mistaken for the real "
-                  .. "suggestion. 'Same as above' uses the main style, told apart by brightness "
-                  .. "alone, which some styles do not show well."],
-            hidden = function() return profile().glow.secondary ~= true end,
-            values = function()
-              local out = { [""] = L["Same as above"] }
-              for key, label in pairs(Options.glowStyleNames()) do out[key] = label end
-              return out
-            end,
-            get = function() return profile().glow.secondaryStyle or "" end,
-            set = function(_, v)
-              profile().glow.secondaryStyle = (v ~= "" and v) or false
-              restyle()
-            end,
-          },
-          secondaryAlpha = {
-            type = "range", order = 23, name = L["How dim the hint is"],
-            desc = L["A fraction of the main glow. Some styles drive their own brightness, so a "
-                  .. "value that looks clearly dimmer on one can look identical on another -- "
-                  .. "compare them with the two preview buttons."],
-            min = 0.05, max = 1, step = 0.05,
-            hidden = function() return profile().glow.secondary ~= true end,
-            get = function() return ns.Glow and ns.Glow.secondaryAlpha() or 0.35 end,
-            set = function(_, v) profile().glow.secondaryAlpha = v; restyle() end,
-          },
-          -- The same button as the ordinary preview, so the two are directly comparable. Two
-          -- different buttons would put the comparison at the mercy of where they sit.
-          previewDim = {
-            type = "execute", order = 24, name = L["Preview the hint"],
-            desc = L["Flashes the SAME button as the preview above, with the hint's style and "
-                  .. "brightness, so you can compare the two without waiting for a fight."],
-            hidden = function() return profile().glow.secondary ~= true end,
-            func = function() Options.previewGlow(true) end,
           },
         },
       },

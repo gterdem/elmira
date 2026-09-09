@@ -53,11 +53,76 @@ describe("Core.Transition", function()
       assert.equal(40, slots[3].size)
     end)
 
+    -- PE10-D1: x/y are each slot's CENTRE measured from the CONTAINER'S centre, because that is
+    -- the only offset that means the same thing in all four growth directions. Slot 1 is 52 wide
+    -- in a 140-wide strip, so its centre sits 44px left of the middle; slot 2's is 50px further on
+    -- (26 + 4 + 20), which is the two half-widths plus the gap.
     it("places each slot after the previous one plus the gap", function()
       local slots = T.layout(3)
-      assert.equal(0, slots[1].x)
-      assert.equal(56, slots[2].x)    -- 52 + 4
-      assert.equal(100, slots[3].x)   -- 56 + 40 + 4
+      assert.equal(-44, slots[1].x)
+      assert.equal(6, slots[2].x)
+      assert.equal(50, slots[3].x)
+      for i = 1, 3 do assert.equal(0, slots[i].y) end
+    end)
+
+    -- The hard requirement of PE10-D1 lives in Display/Queue (the container's anchor), but this is
+    -- the half of it that is geometry: every direction is the SAME strip, mirrored or turned, with
+    -- slot 1 at the start of it and the cross axis untouched.
+    it("mirrors the strip when it grows left and turns it when it grows down or up", function()
+      local right = T.layout(3, "right")
+      local left = T.layout(3, "left")
+      local down = T.layout(3, "down")
+      local up = T.layout(3, "up")
+      for i = 1, 3 do
+        assert.equal(-right[i].x, left[i].x)
+        assert.equal(0, down[i].x)
+        assert.equal(-right[i].x, down[i].y)
+        assert.equal(right[i].x, up[i].y)
+      end
+      assert.equal(44, down[1].y)     -- slot 1 at the TOP when the rest grows down
+      assert.equal(-44, up[1].y)      -- and at the BOTTOM when it grows up
+    end)
+
+    it("turns the container on its side for a vertical strip", function()
+      local _, width, height = T.layout(3, "up")
+      assert.equal(52, width)
+      assert.equal(140, height)
+    end)
+
+    -- PE10-D3. Zero is a legitimate choice, so it must not read as "unset" and fall back to 4.
+    it("lays the strip out at whatever spacing it is given, including none", function()
+      local _, tight = T.layout(3, "right", 0)
+      assert.equal(132, tight)        -- 52 + 40 + 40, no gaps at all
+      local _, wide = T.layout(3, "right", 20)
+      assert.equal(172, wide)         -- 52 + 20 + 40 + 20 + 40
+      local _, _, tall = T.layout(3, "down", 0)
+      assert.equal(132, tall)
+    end)
+
+    it("falls back to the shipped spacing for a value it cannot use, and clamps a silly one", function()
+      assert.equal(4, T.spacing(nil))
+      assert.equal(4, T.spacing("wide"))
+      assert.equal(4, T.spacing(-3))
+      assert.equal(0, T.spacing(0))
+      assert.equal(20, T.spacing(999))
+    end)
+
+    it("falls back to growing right for a direction it does not have", function()
+      assert.equal("right", T.growth(nil))
+      assert.equal("right", T.growth("sideways"))
+      assert.equal("up", T.growth("up"))
+      assert.is_true(T.isVertical("down"))
+      assert.is_false(T.isVertical("left"))
+    end)
+
+    -- The promote entrance means "this arrived from outside the strip". Keeping it literally
+    -- vertical on a vertical strip would put it ON the growth axis, where it reads as an ordinary
+    -- shift; the intent is preserved instead of the direction.
+    it("drops a promotion in across the strip, never along it", function()
+      local x, y = T.promoteOffset("right", 52)
+      assert.same({ 0, 52 }, { x, y })
+      local vx, vy = T.promoteOffset("up", 52)
+      assert.same({ -52, 0 }, { vx, vy })
     end)
 
     it("carries the alpha ramp onto the slots", function()

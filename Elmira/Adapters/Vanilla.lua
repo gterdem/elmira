@@ -542,13 +542,20 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
 
   -- Range and mana move within a fight but not within a frame, and the lookahead asks about the
   -- same spell once per simulated slot.
-  local usableAt, usableStamp = {}, {}
+  --
+  -- PE9-D2: `IsUsableSpell` answers `usable, noMana`, and the second value was thrown away here.
+  -- The two failures it separates look identical through the first return and must not be drawn
+  -- the same way: out of MANA is a fact about you that will not change by itself, out of RANGE is
+  -- one that changes as you take two steps. The strip dims on the resource case only; a range
+  -- reading would strobe the icon of every melee player running at a target.
+  local usableAt, usableNoResource, usableStamp = {}, {}, {}
   local function usableRead(id)
     local stamp = frame()
     if usableStamp[id] ~= stamp then
-      usableAt[id], usableStamp[id] = IsUsableSpell(id) == true, stamp
+      local ok, noResource = IsUsableSpell(id)
+      usableAt[id], usableNoResource[id], usableStamp[id] = ok == true, noResource == true, stamp
     end
-    return usableAt[id]
+    return usableAt[id], usableNoResource[id]
   end
 
   -- Gear cannot change mid-frame either, and `setCount` walked all nineteen slots once PER SET --
@@ -633,9 +640,12 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
     return observed[key] or 0
   end
 
+  -- Second return is PURELY additive (PE9-D2): the first keeps meaning exactly what it always has,
+  -- so every Core caller (Engine's cast filter, Slash's diagnostics, Rotation's status line) is
+  -- untouched -- all of them read it in single-value position.
   function S:usable(key)
     local id = resolve(key)
-    if not id then return false end
+    if not id then return false, false end
     return usableRead(id)
   end
 
@@ -778,6 +788,16 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
 
   function S:targetType() return UnitCreatureType("target") end
   function S:targetExists() return UnitExists("target") == true end
+
+  -- PE9-D6. "Do you have a target" and "do you have something to fight" are different questions,
+  -- and Core/Visibility was asking the first while meaning the second -- so clicking a bank NPC in
+  -- Ironforge popped the rotation strip up. UnitCanAttack answers the second, and answers false
+  -- for no target at all, so it subsumes targetExists here rather than needing both.
+  --
+  -- No capability flag: UnitCanAttack has been in the client since 1.12 and is present on every
+  -- flavour this addon can run on. `targetExists` stays on the contract because it is a genuinely
+  -- different question -- the Rotation panel's context line reports it as "target: yes/no".
+  function S:targetAttackable() return UnitCanAttack("player", "target") == true end
 
   function S:targetHPPct()
     if not UnitExists("target") then return nil end

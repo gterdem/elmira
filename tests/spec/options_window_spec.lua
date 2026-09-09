@@ -166,12 +166,29 @@ describe("Options window", function()
     return d
   end
 
-  -- A TreeGroup widget, reduced to what the D31 hook touches: it is found by `.type`, its
-  -- OnButtonEnter callback can be cleared, and it can be told to redraw.
+  -- A TreeGroup widget, reduced to what the D31/PE3-D6 hook touches: it is found by `.type`, its
+  -- OnButtonEnter callback can be replaced, and it can be told to redraw.
+  --
+  -- `SetCallback` carries AceGUI's OWN guard (`WidgetBase.SetCallback`, AceGUI-3.0.lua:292-296:
+  -- `if type(func) == "function" then`). Without it this stand-in accepted a nil the real widget
+  -- silently drops -- which is exactly how the D31 suppression shipped green and left the tooltip
+  -- covering the page in game. `hover()` fires the callback the way the tree does on mouseover, so
+  -- what a test asserts is whether anything was DRAWN, never which function is installed.
   local function fakeTree()
-    local t = { type = "TreeGroup", callbacks = {} }
-    function t:SetCallback(name, fn) self.callbacks[name] = fn end
+    local t = { type = "TreeGroup", callbacks = {}, drew = nil }
+    function t:SetCallback(name, fn)
+      if type(fn) == "function" then self.callbacks[name] = fn end
+    end
     function t:RefreshTree() self.refreshed = (self.refreshed or 0) + 1 end
+    -- Stands in for AceConfigDialog's TreeOnButtonEnter, whose whole body is "draw a tooltip".
+    function t:showsATooltip()
+      self.drew = nil
+      if self.callbacks.OnButtonEnter then
+        self.callbacks.OnButtonEnter(self, "OnButtonEnter", "rotation", {})
+      end
+      return self.drew == true
+    end
+    t:SetCallback("OnButtonEnter", function(widget) widget.drew = true end)
     return t
   end
 
@@ -776,22 +793,31 @@ describe("Options window", function()
       Options.dialog.FeedGroup(Options.dialog, appName, {}, container, {}, path or {})
     end
 
-    it("clears the tree's own OnButtonEnter callback, container == the tree itself", function()
+    it("stops the tree drawing a tooltip at all, container == the tree itself", function()
       open()
       local tree = fakeTree()
-      tree:SetCallback("OnButtonEnter", function() end)
+      assert.is_true(tree:showsATooltip(), "the stand-in never drew one to begin with")
       feed("Elmira", tree, { "rotation" })
-      assert.is_nil(tree.callbacks.OnButtonEnter,
-        "TreeOnButtonEnter (AceConfigDialog-3.0.lua:1485-1524/1730) is still wired")
+      assert.is_false(tree:showsATooltip(),
+        "TreeOnButtonEnter (AceConfigDialog-3.0.lua:1485-1524/1730) still covers the page")
+    end)
+
+    -- PE3-D6: the callback must still BE a function. `SetCallback(name, nil)` is dropped on the
+    -- floor by AceGUI, which is how this suppression shipped and did nothing.
+    it("leaves a real function installed, never a nil AceGUI would refuse", function()
+      open()
+      local tree = fakeTree()
+      feed("Elmira", tree, { "rotation" })
+      assert.is_function(tree.callbacks.OnButtonEnter,
+        "AceGUI drops a non-function, so the original tooltip callback would survive")
     end)
 
     it("finds the tree among a container's children, container == the root Frame", function()
       open()
       local tree = fakeTree()
-      tree:SetCallback("OnButtonEnter", function() end)
       local root = { children = { { type = "SimpleGroup" }, tree } }
       feed("Elmira", root, {})
-      assert.is_nil(tree.callbacks.OnButtonEnter)
+      assert.is_false(tree:showsATooltip())
     end)
 
     -- The click-selects-but-does-not-expand bug ("menu click never activates"): only the tiny "+"
@@ -828,9 +854,8 @@ describe("Options window", function()
     it("is a no-op for another addon's FeedGroup call, tooltip and status left alone", function()
       open()
       local tree = fakeTree()
-      tree:SetCallback("OnButtonEnter", function() end)
       feed("ElvUI", tree, { "something" })
-      assert.is_function(tree.callbacks.OnButtonEnter, "cleared another addon's tooltip callback")
+      assert.is_true(tree:showsATooltip(), "silenced another addon's tree tooltip")
       assert.is_nil(tree.refreshed)
     end)
 

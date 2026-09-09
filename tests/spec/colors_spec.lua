@@ -11,7 +11,9 @@ local function hexToFloats(hex)
   return r, g, b
 end
 
-local NAMES = { "BRAND", "HIGHLIGHT", "MUTED", "OK", "WARN", "BAD" }
+-- PE9-D3 added LABEL: near-white, for text that is READ over arbitrary art (the strip's keybind)
+-- rather than glanced at, which is what MUTED is for.
+local NAMES = { "BRAND", "HIGHLIGHT", "MUTED", "LABEL", "OK", "WARN", "BAD" }
 
 describe("Core.Colors", function()
   local Colors

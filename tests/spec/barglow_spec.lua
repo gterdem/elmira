@@ -376,9 +376,8 @@ describe("Display.BarGlow", function()
       helper.ns().db.profile.glow.barGlow = false
       assert.is_false(BarGlow.noteMissing("EXORCISM"))
       helper.ns().db.profile.glow.barGlow = true
-      helper.ns().db.profile.glow.enabled = false
       BarGlow.resetAnnouncements()
-      assert.is_false(BarGlow.noteMissing("JUDGEMENT"))
+      assert.is_true(BarGlow.noteMissing("JUDGEMENT"))
     end)
 
     it("will speak again after the bars change, because the spell may have been placed", function()
@@ -557,7 +556,7 @@ describe("BarGlow.check", function()
     helper3.load("Elmira/Core/API.lua")
     BarGlow3 = helper3.load("Elmira/Display/BarGlow.lua")
     ns3.Display = { currentPack = function() return { spells = { EXORCISM = { id = 415073 } } } end }
-    ns3.db = { profile = { glow = { enabled = opts.enabled ~= false, barGlow = opts.barGlow ~= false } } }
+    ns3.db = { profile = { glow = { barGlow = opts.barGlow ~= false } } }
     return BarGlow3
   end
 
@@ -625,11 +624,7 @@ describe("BarGlow.check", function()
     local rows = BarGlow3.check("EXORCISM")
     assert.is_true(stage(rows, "visible").ok)
     assert.is_false(stage(rows, "glow").ok)
-
-    load3{ enabled = false }
-    ns3.API.RegisterBarProvider{ name = "ElvUI",
-      buttonsForSpell = function() return { frame3(true, "ElvUI_Bar1Button1") } end }
-    assert.is_false(stage(BarGlow3.check("EXORCISM"), "glow").ok)
+    assert.equal("bars", stage(rows, "glow").detail)
   end)
 
   it("falls back to the Blizzard bars when no provider holds the spell", function()
@@ -691,14 +686,14 @@ describe("BarGlow.check", function()
       assert.equal("addon", g.detail)
     end)
 
-    it("distinguishes the queue glow being off from the bar glow being off", function()
-      load3(); ns3.db.profile.glow.enabled = false
-      placedAndVisible()
-      assert.equal("queue", stage(BarGlow3.check("EXORCISM"), "glow").detail)
-
+    -- PE7-D1 deleted the second glow master, so "the glow is off" now has exactly one cause the
+    -- player can fix here, and it must be named as that one rather than as the addon being off.
+    it("names the bar glow switch when it is the thing that is off", function()
       load3{ barGlow = false }
       placedAndVisible()
-      assert.equal("bars", stage(BarGlow3.check("EXORCISM"), "glow").detail)
+      local g = stage(BarGlow3.check("EXORCISM"), "glow")
+      assert.is_false(g.ok)
+      assert.equal("bars", g.detail)
     end)
 
     -- Being hidden is not a misconfiguration -- it is the display doing what it was told -- but a

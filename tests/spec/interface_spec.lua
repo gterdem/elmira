@@ -20,6 +20,9 @@ describe("Adapters.Interface (State contract)", function()
       "gcdDuration",
       "baseCooldown", "powerCost",
       "known",
+      -- PE9-D6. Appended rather than slotted next to `targetExists`: this list is chronological by
+      -- the block comments in Adapters/Interface.lua, and the two are genuinely different readings.
+      "targetAttackable",
     }
     assert.same(expected, Interface.CONTRACT)
   end)

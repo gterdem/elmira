@@ -421,7 +421,10 @@ function NA:StartDisplay()
     ns.Announcers.Create()
     ns.Announcers.Register()
   end
-  ns.Display.register("queue", ns.Queue.Render)
+  -- Third argument is the strip's TICK (PE9-D1): the countdown on slots 2+ and the "you cannot
+  -- afford this" dimming on slot 1 are functions of the passing moment, not of the queue, so they
+  -- have to be redrawn on ticks where the queue came back unchanged. Same loop, no second timer.
+  ns.Display.register("queue", ns.Queue.Render, ns.Queue.Tick)
   -- The bar glow is its own renderer, not something the strip does on the side (ADR-0015 §3): the
   -- two were joined, so hiding the strip took the glow with it and the player lost the half of the
   -- display they were actually watching.

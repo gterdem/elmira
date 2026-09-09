@@ -17,9 +17,12 @@ describe("Display.Driver", function()
 
   -- One state table per stub, not one per GetState call: the allocation specs below measure the
   -- driver, and a stub that allocated on every read would be charged to it.
+  -- PE9-D6: the visibility reading is targetAttackable (UnitCanAttack), not targetExists. Both are
+  -- stubbed from the one argument because every scenario in this file means "a mob".
   local function stubState(inCombat, hasTarget)
     local state = { inCombat = function() return inCombat end,
-                    targetExists = function() return hasTarget end }
+                    targetExists = function() return hasTarget end,
+                    targetAttackable = function() return hasTarget end }
     ns.API = { GetState = function() return state end }
   end
 
@@ -233,6 +236,7 @@ describe("Display.Driver", function()
     local function setBonus(held)
       ns.API = { GetState = function()
         return { inCombat = function() return false end, targetExists = function() return false end,
+                 targetAttackable = function() return false end,
                  bonus = function(_, key) return held and key == "HOLY_POWER_CONSUME" end,
                  known = function() return true end }
       end }
@@ -304,6 +308,39 @@ describe("Display.Driver", function()
       Display.checkGates()
       assert.equal(2, #said)
       assert.is_truthy(said[2].text:find("no longer active"))
+    end)
+
+    -- PE15. The owner's report: a rune ability the character does not have, announced three times
+    -- at the start of every fight. `known` is three-valued -- true / false / "this client would not
+    -- say" -- and the third answer used to leave the row ACTIVE, so a reading that wobbled read as
+    -- the character gaining and losing the ability. Both halves are pinned here: nothing is said,
+    -- AND the uncertain reading does not overwrite what was known, which is what would otherwise
+    -- make the next readable answer look like a change and announce anyway.
+    local function knownAnswers(answer)
+      ns.API = { GetState = function()
+        return { inCombat = function() return false end, targetExists = function() return false end,
+                 targetAttackable = function() return false end,
+                 bonus = function() return true end,
+                 known = function() return answer end }
+      end }
+    end
+
+    it("says nothing while the client cannot say whether the spell is learned", function()
+      knownAnswers(false)
+      Display.checkGates()
+      for _ = 1, 3 do
+        knownAnswers(nil)
+        assert.is_nil(Display.checkGates())
+        knownAnswers(false)
+        assert.is_nil(Display.checkGates())
+      end
+      assert.equal(0, #said)
+
+      -- And the row is still remembered as blocked, so a real change is still news.
+      knownAnswers(true)
+      assert.is_truthy(Display.checkGates())
+      assert.equal(1, #said)
+      assert.is_truthy(said[1].text:find("Divine Storm is now active"))
     end)
 
     -- An ordinary gear swap changes nothing about which rows can fire, and must be silent.
@@ -590,6 +627,53 @@ describe("Display.Driver", function()
       local gateCtx = Display.gateContext()
       assert.equal(900, gateCtx.spells.SLICE.id)
       assert.is_not_nil(gateCtx.spells.DIVINE_STORM, "the pack's own spells must still be there")
+    end)
+  end)
+
+  -- PE9-D1. A renderer runs only when the queue CHANGES, which in a steady rotation is seconds
+  -- apart -- so anything it draws that is a function of TIME (the strip's "in 3.4s" countdown)
+  -- freezes between renders. The optional tick is what keeps it moving, on the loop that already
+  -- exists: no second frame, no second timer, no extra recompute.
+  describe("the optional per-renderer tick", function()
+    it("runs on a tick whose queue came back unchanged, and is handed the clock", function()
+      local ticks, lastNow, renders = 0, nil, 0
+      Display.register("test", function() renders = renders + 1 end,
+                       function(now) ticks = ticks + 1; lastNow = now end)
+      assert.equal("rendered", tick())
+      assert.equal(1, renders)
+      local before = ticks
+      assert.equal("unchanged", tick())
+      assert.equal(before + 1, ticks, "an unchanged tick left the countdown frozen")
+      assert.is_number(lastNow)
+    end)
+
+    it("does not run when the display is hidden: there is nothing on screen to count down", function()
+      local ticks = 0
+      Display.register("test", function() end, function() ticks = ticks + 1 end)
+      ns.db.profile.visibility = "combat"
+      assert.equal("hidden", tick())
+      assert.equal("hidden", tick())
+      assert.equal(0, ticks)
+    end)
+
+    -- Registering is how a renderer opts in; re-registering without one is how it opts out. A stale
+    -- closure left running would be a callback nothing can reach to stop.
+    it("a re-registration with no tick clears the old one", function()
+      local ticks = 0
+      Display.register("test", function() end, function() ticks = ticks + 1 end)
+      tick(); tick()
+      assert.is_true(ticks > 0)
+      local seen = ticks
+      Display.register("test", function() end)
+      tick(); tick()
+      assert.equal(seen, ticks)
+    end)
+
+    it("a throwing tick does not take the update loop down with it", function()
+      Display.register("test", function() end, function() error("kaboom") end)
+      assert.equal("rendered", tick())
+      assert.equal("unchanged", tick())
+      assert.equal("unchanged", tick())
     end)
   end)
 

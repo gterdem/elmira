@@ -75,10 +75,29 @@ function Detect.gather(state, adapter, pack)
   return d
 end
 
+-- PE1-D6: the client's own name for a record that carries an id, which is the only source that
+-- spells "Shock and Awe" the way the spellbook does (our prettifier below can only ever produce
+-- "Shock And Awe", since it has no way to know which words are minor ones). Read through the
+-- ADAPTER, never a WoW global -- `Setup/` may reach the adapter, and hard rule 3 forbids only the
+-- direct client call -- and gated on the same `spellNameLookup` capability Options/Spells.lua's own
+-- id lookup uses, because a client without `GetSpellInfo` answers nil for every id. A `sets` record
+-- carries no `id`, so this never fires for one and set names come from their own `name` field.
+local function clientSpellName(spell)
+  local adapter = ns.Adapter
+  if not (spell and spell.id and adapter and adapter.spellNameByID) then return nil end
+  local caps = adapter.capabilities and adapter.capabilities()
+  if not (caps and caps.spellNameLookup) then return nil end
+  return safe(adapter.spellNameByID, spell.id)
+end
+
 -- A shipped spell record carries an id and a src, not a display name (the client owns names), so a
 -- shopping list built from keys would read "RUNE_HAND_OF_RECKONING". Derive something a person can
--- act on: an explicit `name` wins; otherwise strip the RUNE_ prefix and title-case the words.
+-- act on: the CLIENT's own name wins, then an explicit `name`, then strip the RUNE_ prefix and
+-- title-case the words. The last two keep this deterministic with no adapter present at all, which
+-- is how every headless caller (and every spec) reaches it.
 function Detect.readableName(key, spell)
+  local fromClient = clientSpellName(spell)
+  if fromClient then return fromClient end
   if spell and type(spell.name) == "string" then return spell.name end
   local s = tostring(key):gsub("^RUNE_", ""):lower():gsub("_", " ")
   return (s:gsub("(%a)([%w]*)", function(a, b) return a:upper() .. b end))
@@ -152,18 +171,25 @@ function Detect.check(detection, requires, pack)
     -- spellbook; rendering that as "not known" states a fact we do not have, which is how the wizard
     -- told a level-60 paladin it lacked an ability it has had since level 10.
     local known = detection.spells and detection.spells[key]
-    local name = pack.spells and pack.spells[key] and pack.spells[key].name or key
-    local text
-    if known == true then text = name .. " known"
-    elseif known == false then text = name .. " NOT known"
-    else text = name .. ": could not read your spellbook" end
+    -- PE1-D6: `pack.spells[key].name` alone read the RAW KEY back out for every shipped spell,
+    -- because a shipped record has no `name` at all (the client owns names) -- "HOLY_SHOCK known".
+    -- The rune loop above has always gone through `readableName`; this one simply never did.
+    local name = Detect.readableName(key, pack.spells and pack.spells[key])
+    local text -- mutants: equivalent deleting the declaration leaves a global write the suite cannot see; luacheck catches it
+    if known == true then text = string.format(L["%s known"], name)
+    elseif known == false then text = string.format(L["%s NOT known"], name)
+    else text = string.format(L["%s: could not read your spellbook"], name) end
     out[#out + 1] = { key = key, ok = known, text = text }
   end
 
   for key, min in pairs(requires.sets or {}) do
     local count = (detection.sets and detection.sets[key]) or 0
+    -- PE1-D6, same defect: this leaked "T3_5_HOLY: 2/4 pieces". A set record DOES carry a `name`
+    -- ("Radiant Judgement"), so `readableName` finds one for every shipped set and prettifies the
+    -- key only for a pack that ships none.
     out[#out + 1] = { key = key, ok = count >= min,
-      text = string.format("%s: %d/%d pieces", key, count, min) }
+      text = string.format(L["%s: %d/%d pieces"],
+                           Detect.readableName(key, pack.sets and pack.sets[key]), count, min) }
   end
 
   return out

@@ -1,5 +1,164 @@
 # Changelog
 ## Unreleased
+- **Fixed: Elmira no longer announces its own uncertainty as a change to your character.** When the
+  client would not say whether a spell is learned, a gated line counted as available again, so a
+  reading that wobbled read as the ability being gained and lost — several messages a fight about a
+  rune that had not moved. A verdict Elmira could not actually read is now neither announced nor
+  remembered: whatever was last known stands until the client answers again. Real changes — a rune
+  engraved, a set piece equipped, a spell trained — are announced exactly as before.
+- **New: `/elm debug gates` now lists what the client answers for every gated spell** — `true`,
+  `false` or `cannot tell` — so a message about a line coming or going can be checked against the
+  reading behind it.
+- **Changed: two kinds of notification are named for what they carry.** "Rotation changes" is now
+  "What just changed" — it fires mid-fight when a line of your rotation becomes usable or stops
+  being usable, which the old name made sound like settings chatter — and "Status" is now "Settings
+  and setup". The new names appear on the Notifications page and in front of every line in the log.
+- **New: picking a sound on the Notifications page plays it.** The list is whatever your media packs
+  provide, so choosing by name alone was guesswork; you now hear the sound as you select it.
+  "None" stays silent.
+- **Changed: "Long cooldowns used" is no longer on the Notifications page.** Whether a long cooldown
+  is worth announcing depends on the ability — a defensive save and a burst cooldown are not the same
+  message — so it is becoming a per-ability setting instead of one routing row. The Party and Raid
+  checkboxes and the cooldown-length slider go with it, and "Test Each Kind" no longer sends a sample
+  of it.
+- **Changed: the Notifications log is a "Notifications Log" panel at the bottom of the page.** It
+  used to sit at the top, one row per message, so every switch below it moved further down as Elmira
+  talked. The settings stay where you left them now, whatever is in the log, and the log still reads
+  newest first with its own Clear Messages button.
+- **Changed: "Move screen messages" always works.** It was greyed out whenever positions were
+  locked — which they are by default — and told you to go and unlock them on another page. It is now
+  a button that works like "Position the Strip": press it to show a sample of every kind of message
+  and drag it where you want, press "Done Moving" when you are finished. Your lock setting is never
+  changed, and locking positions (or `/elm lock`) ends it, as does closing the settings window.
+- **Changed: the Queue page is three panels instead of one long list** — "When you see it", "Size and
+  position" and "What it tells you". The two settings whose names read the same are gone with it:
+  the switch at the top is "Enable the queue strip" and the dropdown is "When to show it". "Icons" is
+  now "Casts to show", "Strip scale" is "Size" and "Grow" is "Direction". Every control's tooltip has
+  been rewritten to say what it does and when you would want it, and Learning mode's now names all
+  three settings it changes for you.
+- **Fixed: with the queue strip switched off, the twelve settings under it still looked live.** They
+  are greyed out now and say which switch turns them back on, while still showing the values you
+  saved. "Out-of-combat opacity" is greyed out the same way when the strip is set to combat only.
+- **New: "Position the Strip" on the Queue page.** Puts the strip on screen with sample icons and
+  lets you drag it, even in the moments it is normally hidden, so you no longer need a target dummy
+  to place it. Press it again when you are done — closing the settings window ends it too — and your
+  lock setting is left exactly as it was.
+- **New: the queue strip can grow left, down or up as well as right.** Pick a direction with "Grow"
+  on the Queue page. The first icon does not move when you change it, so you can position the strip
+  where you want it and then decide which way the rest of the queue lays out; the slide and drop
+  animations follow the new direction.
+- **New: the strip can fade while you are out of combat.** "Out-of-combat opacity" on the Queue page
+  dims the whole strip and goes back to full the moment a fight starts. It is for keeping the strip
+  visible but quiet; hiding it entirely out of combat is still "Show the queue".
+- **New: the space between the icons is a setting.** "Spacing" on the Queue page, 0 to 20 pixels;
+  zero makes the strip read as one solid block.
+- **New: "Match my action bars" beside the strip scale.** Measures a button on your action bars and
+  sets the strip's scale so the first icon is drawn the same size. It needs one of the rotation's
+  spells to be on a bar you can see, and says so rather than guessing if it cannot find one.
+- **New: the queue strip says how long until each later suggestion happens.** A small countdown in
+  the icon's bottom-left corner, ticking down live. It stays quiet when the wait is just the next
+  global cooldown — which is most of the time — so the number only appears when there is a real gap
+  worth knowing about. "Show waits" on the Queue page can silence it or show it on every icon.
+- **New: the first icon dims when you cannot afford the suggestion.** Only for a resource you are
+  short of; being out of range deliberately changes nothing, so an icon does not flicker while you
+  run at a target.
+- **Changed: the keybind on the queue icons is readable now.** It is outlined, near-white instead of
+  grey, and sized to the icon it sits on, so the big first icon carries the bigger key. A new
+  "Keybinds" setting puts it on the first icon (as before), on every icon, or on none.
+- **New: "Show the rule name" is its own setting on the Queue page.** The name of the rule that
+  chose the suggestion used to come only with Learning mode, which meant giving up the queue to see
+  it. Learning mode still works exactly as it did, and now switches this on for you.
+- **Fixed: clicking a bank NPC, a vendor or a flight master made the queue appear.** "In combat, or
+  when you have a target" now means a target you can actually fight.
+- **Changed: Action bars is no longer a section of its own** — everything it held now sits on the
+  General page, under a heading called Action Bars, between the panel scale and the slash-command
+  list. It is renamed Bar Addons and Action bar glow inside, with "Also glow your action bar" now
+  reading "Enable action bar glow" and moved next to Preview Glow, above the checks that explain it.
+- **Fixed: "Enable action bar glow" could be switched on and still glow nothing.** There were two
+  switches for one effect; the second one, "Glow the next cast" on the Glow page, is gone and
+  "Enable action bar glow" is now the only thing that decides whether your bars light up.
+- **Changed: the cast-after-next glow moved to General, under Action Bars.** Its toggle is called
+  "Glow the next cast" now, with "How dim it is" and Preview beside it, and all three are greyed out
+  while the action bar glow is off. The Glow page keeps the glow's style and colour.
+- **Removed: the second glow no longer has a style of its own.** It always draws in the same style
+  as the main glow, just dimmer, so it cannot override the per-ability look you are about to be able
+  to set. Brightness stays adjustable.
+- **Changed: the bar addon list uses the same status pictures as the Builder**, so "in use",
+  "another addon is handling your bars", "available" and "not installed" each look different
+  instead of sharing one grey dash, and the status wording is coloured to match.
+- **Changed: the General page's Enable Elmira, Choose Your Rotation, minimap and lock controls sit
+  on one row**, with the last two against the right edge, and the panel scale is a plain slider
+  rather than a boxed section of its own.
+- **Changed: a rotation's buttons sit together against the right edge of its detail panel**, and the
+  name beside them grows to fill whatever they leave — including on the rotation you are already
+  using, which shows no Use button.
+- **Changed: Edit moved to the top of your own rotation's panel**, next to Rename and Delete, so you
+  no longer scroll past the whole rotation to reach it. It still switches to that rotation before
+  opening the Builder, and still stops and tells you why if it cannot.
+- **Changed: Use is green and Edit is purple** on the rotation pages and on the cards, matching the
+  Builder's rule that a button's colour says what it does. Rename and Copy Source Link stay plain.
+- **New: a Reset button in the Builder puts the original template's lines back.** It works on your
+  unsaved draft, so nothing is written until you press Save and Discard undoes it — which is why it
+  asks no confirmation. It is greyed out for a rotation you started from scratch (there is no
+  original to go back to) and for one that already matches its template.
+- **Changed: Save, Discard and Reset sit together against the right edge of the Builder**, and
+  buttons are now coloured by what they do: green for Save, red for Discard, Reset and Delete,
+  purple for the ones that take you to another page. A greyed-out button stays grey. The Remove
+  button on each rotation line deliberately stays plain.
+- **Changed: "Right now" reads as two blocks**, the queue and its context above a blank line and
+  the key to the symbols below it. "Status is as of the last time the queue changed." is gone.
+- **Changed: the Abilities section has no Search box** until the list is longer than 30 abilities,
+  which no shipped class pack is — it comes back by itself for a bigger list or once you have added
+  a lot of spells of your own.
+- **Fixed: the arrow between the spells in "Right now" drew as an empty box.** It is a small
+  chevron image now, the same way the Builder's status marks are.
+- **Fixed: the condition editor's Value dropdown listed internal keys** — "HOLY_POWER_CONSUME_HOLY",
+  "JUDICATOR_SOUL", "CRUSADER_STRIKE_150". Each entry now reads as what the bonus actually does
+  ("Divine Storm/Holy Shock/Holy Wrath consume Holy Power"), tier sets and shoulder souls read by
+  name, and hovering the dropdown says where the selected bonus comes from — which set and how many
+  pieces, or which Soul of the ... shoulder enchant, naming both when either will do.
+- **Fixed: a condition said "the item in slot 13 is ready".** It now says "Trinket 1 is off
+  cooldown", and every other equipment slot is named rather than numbered.
+- **Fixed: the Value dropdown's label drew on top of the dropdown above it.** It has a row to
+  itself now, which also gives the longer set-bonus wording room.
+- **Fixed: the Search box and the first ability button shared a row** in the Abilities section, with
+  the button sitting lower than the box. Search takes the whole row, so the grid starts below it.
+- **Fixed: the tooltip on the left-hand menu covered the page.** It only ever repeated the menu
+  entry's own name, and the change meant to remove it never took effect.
+- **New: the Builder's status marks are six different shapes, not three grey dots.** "Cannot fire
+  for your character", "switched off" and "changed but not saved" used to look identical. Each state
+  now has its own symbol and colour, and hovering a line's +/- button says which one it is in words.
+- **Changed: a rotation line is far shorter.** The reorder buttons are readable rather than
+  truncated to "...", Top and Bottom join Up and Down, the repeated "Ability" label above every
+  dropdown is gone, and the sentence under a line is now just its condition ("mana at least 40%")
+  with nothing at all shown for a line that has no conditions. An item line no longer claims to be
+  "cast". Opening a line draws its conditions in a titled box below the line instead of alongside it.
+- **Changed: the Abilities and Items lists are a three-across grid.** The greyed-out reason
+  ("engrave Aura Mastery", "empty") moved into the tooltip, the Search box moved inside the
+  Abilities section so it is clearly a filter on that list, and "Add from Spellbook…" sits on its
+  own highlighted row because it opens a page instead of adding a line.
+- **Changed: "Right now" no longer numbers the live queue.** It reads
+  "Seal of Righteousness > Holy Shock > Exorcism" with a small chevron between the spells, so it
+  cannot be mistaken for the numbered rotation list below it. Save and Discard moved to the top of the Builder next to the "Editing …"
+  status, and the unsaved Preview only appears when there really are unsaved changes.
+- **Changed: the top of the Rotations page is now one line.** It reads what you are — "Level 60
+  Paladin · 1H · SoD P8" — with the New Rotation button beside it, and anything Elmira cannot read
+  about your character is left out rather than printed as a question mark. The playstyle cards
+  below lost the phase and the Copy link button (the phase is on that line now, and the detail
+  section has a Copy Source Link button), and "recommended"/"Unproven" moved onto the difficulty
+  line so a card no longer carries a blank row.
+- **Changed: clicking a playstyle card scrolls the detail section into view** if it was below the
+  bottom of the window — the least amount needed to bring its header on screen, and not at all when
+  it is already visible. The section is titled "Details" rather than repeating the rotation's name
+  directly above the copy of it inside.
+- **New: "What this rotation needs" shows each ability's icon** before its name. Set and gear
+  requirements, which have no icon, are unchanged.
+- **Fixed: requirement rows showed raw internal keys** — "HOLY_SHOCK known", "T3_5_HOLY: 2/4
+  pieces". They now read "Holy Shock known" and "Radiant Judgement: 2/4 pieces", using the client's
+  own spelling of an ability's name wherever it can be read.
+- **Changed: button labels are Title Case throughout the settings window** ("Copy and Edit", "New
+  Rotation", "Reset These to Defaults"), matching the rest of the interface. Headings and
+  explanatory text are unchanged.
 - **Changed: clicking a playstyle card on the Rotations page now opens its detail in a section below
   the cards, instead of a separate page in the menu.** Your own rotations now also appear as their
   own row of cards on the same page, next to the shipped playstyles, so you can jump straight to one

@@ -25,7 +25,12 @@ end
 
 Colors.BRAND     = rgb("C08CF0")  -- the addon's identity: chat prefix, options title, minimap icon
 Colors.HIGHLIGHT = rgb("FFD37A")  -- the now-slot: warm, reads as "this one", pairs with the brand
-Colors.MUTED     = rgb("9AA0A6")  -- keybinds, secondary labels, anything that must not compete
+Colors.MUTED     = rgb("9AA0A6")  -- secondary labels, anything that must not compete
+-- PE9-D3: text that is READ rather than glanced at, drawn over arbitrary spell art -- the queue
+-- strip's keybind. It used to be MUTED, which is the palette's designated "must not compete" grey:
+-- exactly wrong for a label whose whole job is to be legible at a glance. Near-white rather than
+-- pure white so it still sits below an icon's own highlights instead of glaring off them.
+Colors.LABEL     = rgb("F0F0F0")
 Colors.OK        = rgb("5CC46C")
 Colors.WARN      = rgb("E8A33D")
 Colors.BAD       = rgb("E5544B")

@@ -467,7 +467,14 @@ end
 WORDS.cooldown_gt = function(cond, ctx, L)
   return string.format(L["%s has more than %ss of cooldown left"], named(cond[2], ctx), num(cond[3]))
 end
-WORDS.item_ready = function(cond, _, L)
+-- PE3-D5 (2026-09-08 owner ruling, in-game): "the item in slot 13 is ready" is an API detail read
+-- aloud. Slot 13 is Trinket 1 and that is what the sentence says -- through `ctx.slotName`, because
+-- Core decides what a slot IS and Options decides what it is CALLED (the same split Options.lua
+-- states for Core/Visibility's modes). The number is only ever reached by a caller that supplied no
+-- namer at all; every panel that shows this sentence builds its ctx from `Rotation.wordCtx`.
+WORDS.item_ready = function(cond, ctx, L)
+  local slot = ctx and ctx.slotName and ctx.slotName(cond[2])
+  if slot then return string.format(L["%s is off cooldown"], slot) end
   return string.format(L["the item in slot %s is ready"], num(cond[2]))
 end
 WORDS.swing = function(cond, _, L)

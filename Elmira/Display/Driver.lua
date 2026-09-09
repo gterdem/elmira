@@ -32,12 +32,20 @@ local gateSnapshot, gateKey
 
 -- Renderers subscribe rather than the driver naming them: the queue strip, the bar glow and the
 -- overlay all want the same queue and must never each run their own loop.
-function Display.register(name, render)
+--
+-- `tick` is optional and is what a renderer registers when part of what it draws is a function of
+-- TIME rather than of the queue (PE9-D1: the strip's "in 3.4s" countdown). Renders happen only when
+-- the queue changes, which can be seconds apart, so anything counting down would freeze between
+-- them -- a number that looks alive and is not. It is emphatically not a second loop: same
+-- OnUpdate, same Ticker cap, and it only runs on ticks that were going to happen anyway.
+function Display.register(name, render, tick)
   if type(name) ~= "string" or type(render) ~= "function" then return false end
   for _, r in ipairs(renderers) do
-    if r.name == name then r.render = render; return true end   -- re-register replaces, no duplicates
+    -- re-register replaces, no duplicates. `tick` is written unconditionally, so a re-register
+    -- with no tick clears a stale one rather than leaving the old closure running.
+    if r.name == name then r.render, r.tick = render, tick; return true end
   end
-  renderers[#renderers + 1] = { name = name, render = render, phase = "render:" .. name }
+  renderers[#renderers + 1] = { name = name, render = render, tick = tick, phase = "render:" .. name }
   return true
 end
 
@@ -169,6 +177,24 @@ function Display.checkGates()
 
   local now = ns.Gates.snapshot(ns.Gates.evaluate(compiled, state, Display.gateContext()))
   local before, wasKey = gateSnapshot, gateKey
+
+  -- PE15: uncertainty is not information -- it must be neither announced NOR REMEMBERED.
+  --
+  -- This is the load-bearing half. Suppressing the announcement alone still lets an uncertain
+  -- verdict overwrite the remembered one, and then the next reading the client DOES give looks
+  -- like a real change and announces anyway: the symptom moves one call later and the fix looks
+  -- like it is in place. So a spell whose new verdict rests on something unreadable keeps exactly
+  -- what was last known about it, and a spell nothing was ever known about is not recorded at all
+  -- -- its first readable verdict is then a first sighting, which Gates.diff already says nothing
+  -- about. Assigning nil to the key `pairs` is currently on is the one mutation Lua allows.
+  for spell, entry in pairs(now) do
+    if entry.certain == false then
+      local remembered
+      if wasKey == key and before then remembered = before[spell] end
+      now[spell] = remembered
+    end
+  end
+
   gateSnapshot, gateKey = now, key
   if wasKey ~= key then return nil end
 
@@ -242,6 +268,10 @@ end
 -- "Avenging Wrath used." -- the only category that may reach party chat, so the bar for what counts
 -- is deliberately high (Core/Announce.cooldownFloor). Nothing emitted this category at all until
 -- now: it had routing, a colour and the one party toggle, and no code path that fired it.
+--
+-- PE14-D3: KEPT ON PURPOSE, though the Notifications page no longer shows the `cooldown` row. This
+-- is the exact path the Abilities redesign drives as a per-ability "announce when used" setting;
+-- it still runs on every cast and still routes through Core/Announce. Not unreferenced, not dead.
 function Display.announceCooldown(key)
   if not (ns.Announce and ns.Announce.worthAnnouncing) then return false end
   local pack = Display.currentPack()
@@ -265,7 +295,9 @@ end
 local showCtx = {}
 local function readShowCtx(state)
   showCtx.inCombat = state:inCombat() == true
-  showCtx.hasTarget = state:targetExists() == true
+  -- PE9-D6: attackable, not merely present. The hostility half of the reading lives in the adapter
+  -- (hard rule 3); this is the one place the display asks for it.
+  showCtx.targetAttackable = state:targetAttackable() == true
   return showCtx
 end
 
@@ -369,7 +401,15 @@ function Display.tick(now)
   -- A build change must repaint even if the queue happens to look the same: the icons may be
   -- identical while the reasons behind them are not.
   local changed = (key ~= lastBuildKey) or ns.Ticker.queuesDiffer(lastQueue, queue)
-  if not changed then return "unchanged" end
+  if not changed then
+    -- The queue is the same, but a countdown drawn on it is not (PE9-D1). pcall for the same reason
+    -- renderAll uses one: a throwing tick must not kill the OnUpdate handler. Not reported here --
+    -- anything that can break the tick breaks the render too, and that path already says so once.
+    for _, r in ipairs(renderers) do
+      if r.tick then pcall(r.tick, now) end
+    end
+    return "unchanged"
+  end
 
   lastQueue, lastBuildKey = queue, key
   renderAll(queue, key, true)

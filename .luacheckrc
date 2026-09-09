@@ -23,6 +23,8 @@ local WOW_API = {
   -- own, so the spellbook is what answers when IsPlayerSpell says no to a max-rank id.
   "GetSpellBookItemName", "GetSpellBookItemInfo",
   "UnitAura", "UnitPower", "UnitPowerMax", "UnitCreatureType", "UnitExists", "UnitHealth",
+  -- PE9-D6: "is this something I can fight", which UnitExists cannot answer -- a bank NPC exists.
+  "UnitCanAttack",
   "UnitHealthMax", "GetUnitSpeed", "GetInventoryItemID", "GetInventoryItemLink",
   "GetInventoryItemCooldown", "IsUsableItem", "GetItemInfo", "UnitAttackSpeed", "GetTalentTabInfo",
   "GetActiveTalentGroup", "GetActionInfo", "GetMacroSpell", "InCombatLockdown", "UnitAffectingCombat", "WOW_PROJECT_ID",
@@ -68,6 +70,10 @@ files["Elmira/Display/"] = { read_globals = { "CreateFrame", "UIParent", "GameTo
   -- it: a build entry binds to the SLOT, so the icon has to be read from the slot too.
   "GetInventoryItemTexture",
   "GetInventoryItemID", "RANGE_INDICATOR",
+  -- PE9-D3: the client's own localised default font, used as the fallback when a fontstring cannot
+  -- report the font of the template it was built from. A path literal would render nothing on a
+  -- client whose locale ships different glyphs.
+  "STANDARD_TEXT_FONT",
   -- F37 announcements (Display/Announcers.lua). LibStub is here rather than at the top level so it
   -- stays out of Core/, and SendChatMessage is the ONE global in this addon that talks to other
   -- players -- worth being able to grep for.
@@ -134,7 +140,7 @@ files["tests/"] = {
     -- M2 additions, for the adapter surface.
     "IsPlayerSpell", "IsSpellKnown", "GetSpellPowerCost", "AuraUtil", "UnitHealth", "UnitHealthMax",
     "UnitLevel", "UnitClass", "GetUnitSpeed", "GetInventoryItemLink", "GetItemInfo",
-    "GetTalentTabInfo", "C_Engraving", "UIParent", "UnitAffectingCombat",
+    "GetTalentTabInfo", "C_Engraving", "UIParent", "UnitAffectingCombat", "UnitCanAttack",
     -- M3b: the swing adapter reads GetNetStats and reaches its library through LibStub.
     "GetNetStats",
     -- `/elm debug perf`: per-addon memory. C_AddOns already covers loadClassPack/addonVersion above;

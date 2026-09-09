@@ -21,6 +21,12 @@ Visibility.DEFAULT = "combat_or_target"
 -- Why not "combat" as the default: the opener is the cast that most needs advice, and a strip that
 -- appears only once you are already fighting has missed it. Having a target is the earliest honest
 -- signal that a fight is about to happen.
+--
+-- PE9-D6: the signal is `targetAttackable`, not "a target exists". Every city has a bank, an
+-- auctioneer and a flight master, and clicking any of them used to pop a rotation strip up -- the
+-- mode is called "or when you have a target" and means "or when you have something to fight".
+-- The two REASON strings are unchanged: Options/Options.lua's HIDDEN_BECAUSE table is keyed by
+-- them, so they are an interface, not prose.
 function Visibility.shouldShow(mode, ctx)
   ctx = ctx or {}
   if mode == "always" then return true, "always" end
@@ -28,7 +34,7 @@ function Visibility.shouldShow(mode, ctx)
   if mode == "combat" then return false, "out of combat" end
   -- An unrecognised mode falls through to the default rather than hiding: a profile written by a
   -- newer version must never leave someone with a blank screen and no way to find out why.
-  if ctx.hasTarget then return true, "target selected" end
+  if ctx.targetAttackable then return true, "target selected" end
   return false, "out of combat, no target"
 end
 

@@ -143,7 +143,12 @@ local function naturalHeight(self)
   if self.difficultyShown then
     h = h + GAP + self.difficultyLine:GetHeight()
   end
-  h = h + GAP + self.meta:GetStringHeight()
+  -- PE1-D2: after the recommended/Unproven bits folded onto the difficulty line, a template card's
+  -- `meta` is usually EMPTY -- and an empty line still claimed a GAP plus its own measured height,
+  -- so every card carried a blank row it no longer had anything to put in.
+  if self.metaShown then
+    h = h + GAP + self.meta:GetStringHeight()
+  end
   return h + (self.buttonAreaHeight or 0)
 end
 
@@ -242,7 +247,9 @@ local function applyData(self, data)
     self.difficultyLine:SetHeight(0)
   end
 
-  self.meta:SetText(data.meta or "")
+  local meta = data.meta or ""
+  self.meta:SetText(meta)
+  self.metaShown = meta ~= ""
 
   -- PA9: border (and PA9's own "colour alone is a poor sole signal" -- fill too) carries state
   -- instead of a title badge: gold for the rotation in use, dimmed for one that cannot run yet,
@@ -304,9 +311,17 @@ local function applyData(self, data)
   self.meta:SetPoint("BOTTOMLEFT", anchor, anchorSide .. "LEFT", metaXInset, PAD)
   self.meta:SetPoint("BOTTOMRIGHT", anchor, anchorSide .. "RIGHT", -metaXInset, PAD)
 
+  -- PE1-D2: the difficulty line sits above `meta` only when `meta` has something in it. With an
+  -- empty `meta` it takes over the bottom slot itself -- same anchor, same PAD -- so the card
+  -- reserves no blank row, matching `naturalHeight` above. Anchoring it to a zero-height `meta`
+  -- instead would leave the pips floating GAP pixels higher than the card's own padding.
+  local diffAnchor, diffSide, diffXInset, diffGap = anchor, anchorSide, metaXInset, PAD
+  if self.metaShown then
+    diffAnchor, diffSide, diffXInset, diffGap = self.meta, "TOP", 0, GAP
+  end
   self.difficultyLine:ClearAllPoints()
-  self.difficultyLine:SetPoint("BOTTOMLEFT", self.meta, "TOPLEFT", 0, GAP)
-  self.difficultyLine:SetPoint("BOTTOMRIGHT", self.meta, "TOPRIGHT", 0, GAP)
+  self.difficultyLine:SetPoint("BOTTOMLEFT", diffAnchor, diffSide .. "LEFT", diffXInset, diffGap)
+  self.difficultyLine:SetPoint("BOTTOMRIGHT", diffAnchor, diffSide .. "RIGHT", -diffXInset, diffGap)
 end
 
 local methods = {

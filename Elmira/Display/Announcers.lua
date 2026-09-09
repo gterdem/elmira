@@ -167,6 +167,13 @@ end
 
 -- Move mode. Shows one sample per category while it is on, because a frame you position while it is
 -- empty is a frame you position wrongly: the samples are how tall it really gets.
+--
+-- PE13-D2, the same shape as the strip's positioning mode (Queue.lua): a TEMPORARY OVERRIDE OF THE
+-- LOCK, NOT A SETTING. Nothing here reads or writes `locked`, and the drag it enables is gated on
+-- this module-local `moving` alone -- so the mode cannot survive a /reload, and a disconnect
+-- mid-drag cannot leave the temporary value on disk where the player's own lock should be. That is
+-- also why the panel's button is never disabled while locked; an explicit lock decision ends the
+-- mode instead (Queue.SetLocked calls StopMoving), and wins.
 function Announcers.SetMoving(on)
   moving = on and true or false
   if not frame then return moving end
@@ -225,6 +232,11 @@ local function soundNameFor(key)
   return s.sound or "None"
 end
 
+-- Two callers, on purpose: the announcement sink, and the Notifications page's per-category sound
+-- picker, which plays the choice the moment it is made (PE14-D2) by storing it first and then
+-- asking this to speak. One fetch-and-play path means the preview cannot disagree with the real
+-- thing, and every way this can fail -- no media library, a name the player's packs no longer
+-- provide, a client with no PlaySoundFile -- is a quiet `false`, because the options panel calls it.
 function Announcers.sound(cat)
   local name = soundNameFor(cat and cat.key)
   if not name or name == "None" then return false end
@@ -243,6 +255,11 @@ end
 -- decides that, in code, not in a checkbox), the CURRENT group type has to be the one the player
 -- opted this category into, and there has to be a group to say it to at all -- SendChatMessage to
 -- PARTY while solo is an error in the client, not a no-op.
+--
+-- PE14-D3: KEPT ON PURPOSE. `cooldown` is the only shareable category and its row left the
+-- Notifications page, so nothing in the panel can switch `party`/`raid` on today -- the Abilities
+-- redesign will, per ability, which is the only place that can tell a defensive save from a burst.
+-- The stored flags, this sink and its IsInRaid/IsInGroup gating all still work. Do not delete.
 function Announcers.party(cat, row)
   if not (cat and cat.shareable) then return false end
   if not SendChatMessage then return false end

@@ -41,6 +41,25 @@ DB.defaults = {
     -- (ADR-0015 §3), which the single switch could not express.
     showQueue = true,
     animate = true,
+    -- PE10, all three defaulted to exactly what shipped: a player who changes nothing sees the
+    -- strip they had. `grow` is where slots 2..n go from slot 1 (Core/Transition.GROW);
+    -- `spacing` is the pixel gap between icons, and 4 is the constant it replaces; `oocAlpha`
+    -- multiplies the whole strip's opacity while you are NOT in combat, so 1 is no change.
+    grow = "right",
+    spacing = 4,
+    oocAlpha = 1.0,
+    -- PE9-D4, all three defaulted so nothing about today's screen changes except the fixes.
+    -- `waits`: "off" | "gcd" | "always" -- how long until a projected slot happens, printed in its
+    -- bottom-left corner. "gcd" stays quiet whenever the wait is just the next global cooldown,
+    -- which is most of the time; a number that reads 1.5s forever stops being seen.
+    waits = "gcd",
+    -- `keybinds`: "off" | "first" | "all". "first" is what shipped -- a key to press is a fact
+    -- about the cast you are making now -- but people who read the whole strip as a plan want them
+    -- all, and neither answer is wrong for everyone.
+    keybinds = "first",
+    -- PE9-D5: the name of the rule that chose the suggestion, split out of Learning mode so it can
+    -- be had at any icon count. Learning mode is now a preset that switches it on.
+    showReason = false,
     -- The Builder's item palette lists trinkets only until this is on. Most characters have nothing
     -- on-use in the other slots, and a palette of empty rows teaches you to stop reading it.
     paletteAllSlots = false,
@@ -53,17 +72,17 @@ DB.defaults = {
     -- what makes a default install render exactly as it did before these controls existed; the
     -- moment the user moves a slider it becomes a real number. `color = false` means the brand's
     -- highlight. `secondary` ships off: ADR-0015 exists because two things competed for one glance.
-    glow = { enabled = true, style = "PIXEL", barGlow = true, color = false,
+    glow = { style = "PIXEL", barGlow = true, color = false,
              particles = false, frequency = false, thickness = false, speed = false,
              secondary = false,
              -- How dim the "cast after next" hint is, as a fraction of the main glow. A setting
              -- rather than a constant because how dim "dim" needs to be depends on the style: Proc
              -- drives its own alpha animation (SetToFinalAlpha, from 1 to 1), so a value that reads
              -- clearly dimmer on Pixel can look identical there. Reported from a client, 2026-09-05.
-             secondaryAlpha = 0.35,
-             -- nil means "the same style as the main glow". A separate one is offered because two
-             -- glows of the same shape are hard to tell apart however dim one of them is.
-             secondaryStyle = false },
+             -- Brightness is the ONLY difference the hint is allowed to make: it has no style of
+             -- its own. PE7 (owner): per-ability glow style is coming to the Abilities page, and a
+             -- global shape for the second glow would silently overrule what was set on the ability.
+             secondaryAlpha = 0.35 },
     -- ADR-0009: the overlay has no global "on" switch. `cues` maps a cue id to the user's settings
     -- for it, so an empty table is a quiet default install, and a cue only ever exists because the
     -- user opted it in. Reshaped at M1 with no dbVersion migration: the previous

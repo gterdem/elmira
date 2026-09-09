@@ -27,12 +27,44 @@ local Announce = {}
 -- D21 (2026-09-07 Notifications pass): `template` and `mode` are gone -- neither was ever emitted,
 -- and a row nothing can fire only teaches the panel to be ignored. Keys are stable across the
 -- rename (routing is stored by key, DB.lua's migration drops the two stale `routes` entries).
+-- PE14-D1 (2026-09-09): two labels renamed to say what the category actually carries. The label is
+-- read in exactly two places -- the routing table's row heading and the prefix on every Log line --
+-- so this table is the only place either name lives. Keys are unchanged; routing is stored by key.
+-- "Rotation changes" read as "you switched rotation", i.e. config chatter, so the one genuinely
+-- in-combat thing this system says was the thing a player was most likely to switch off unread --
+-- and it is the category that takes the screen by default, which the name has to justify at a
+-- glance. "Status" was equally opaque for the housekeeping it carries: the first-login line, the
+-- not-set-up-yet prompt, Learning-mode confirmations.
 Announce.CATEGORIES = {
-  { key = "rotation", label = "Rotation changes",      color = "HIGHLIGHT", shareable = false },
+  { key = "rotation", label = "What just changed",     color = "HIGHLIGHT", shareable = false },
   { key = "warning",  label = "Problems",              color = "WARN",      shareable = false },
-  { key = "status",   label = "Status",                color = "MUTED",     shareable = false },
+  { key = "status",   label = "Settings and setup",    color = "MUTED",     shareable = false },
   { key = "cooldown", label = "Long cooldowns used",   color = "OK",        shareable = true },
 }
+
+-- PE14-D3 (2026-09-09): categories the Notifications page does NOT offer a routing row for.
+--
+-- KEEP THE COOLDOWN MACHINERY. Announcing a long cooldown is a property of the ABILITY, not a
+-- routing choice -- a 120s floor cannot tell a tank's defensive save from a DPS burst, which is
+-- exactly the distinction that decides whether a group announcement is welcome -- so the owner
+-- moved it into the Abilities redesign as a per-ability setting. Everything below it (the category
+-- itself, `shareable`, DEFAULT_ROUTES.cooldown, COOLDOWN_FLOOR/cooldownFloor/worthAnnouncing,
+-- Display.announceCooldown, Announcers.party) is what that tab will drive and is deliberately
+-- still here: `Announce.emit("cooldown", ...)` works exactly as it did. Only the page-side row is
+-- gone. Do not delete any of it as unreferenced.
+Announce.OFF_PAGE = { cooldown = true }
+
+-- The categories the Notifications page shows a row for -- and therefore the ones `Announce.test()`
+-- sends a sample of. ONE list for both: a test button that announces a kind the page no longer
+-- offers is a control demonstrating a setting nobody can find, and two separate filters would drift
+-- the first time a category moved.
+function Announce.listed()
+  local out = {}
+  for _, cat in ipairs(Announce.CATEGORIES) do
+    if not Announce.OFF_PAGE[cat.key] then out[#out + 1] = cat end
+  end
+  return out
+end
 
 -- Where each kind goes before anyone changes anything. The Log is always on and is not listed.
 --
@@ -171,6 +203,10 @@ end
 -- your own chat and unforgivable in anyone else's. 120s is the owner's line (2026-09-05) and for a
 -- paladin it is a clean one -- it takes Avenging Wrath (180s) and Aura Mastery (120s) and leaves
 -- Holy Shock (30s) and everything below alone.
+--
+-- PE14-D3: the SLIDER for this left the Notifications page with the cooldown row; the rule stayed.
+-- Display.announceCooldown still asks it on every cast, and the Abilities redesign will set it
+-- per ability, which is the only place that can tell a defensive save from a burst cooldown.
 Announce.COOLDOWN_FLOOR = 120
 
 function Announce.cooldownFloor()
@@ -261,14 +297,17 @@ function Announce.clear()
   return true
 end
 
--- One sample of every kind, so the user can see what each channel and colour looks like without
--- waiting for the game to produce one. Deliberately bypasses the combat deferral: the point is to
--- see it now.
+-- One sample of every kind the panel offers, so the user can see what each channel and colour looks
+-- like without waiting for the game to produce one. Deliberately bypasses the combat deferral: the
+-- point is to see it now.
+--
+-- PE14-D3: `listed()`, not `CATEGORIES` -- the same list the routing table is built from, so the
+-- button cannot test a kind the page has no row for.
 function Announce.test()
   local held = clock
   clock = held and { now = held.now, inCombat = function() return false end } or nil
   local n = 0
-  for _, cat in ipairs(Announce.CATEGORIES) do
+  for _, cat in ipairs(Announce.listed()) do
     -- noShare: the point of the button is to see your own settings, not to put six lines in a
     -- group's chat because one category happens to be routed there.
     if Announce.emit(cat.key, "This is a " .. cat.label .. " message.", { noShare = true }) then
