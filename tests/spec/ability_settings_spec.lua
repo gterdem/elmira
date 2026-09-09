@@ -75,9 +75,12 @@ describe("Core.AbilitySettings", function()
       assert.same({ "suggested", "ready", "used", "active", "expiring" }, A.EVENTS)
     end)
 
-    it("declares the six channels and the five with an on/off a player can read", function()
+    -- AB2-D6: GLOW IS NOT A CUE CHANNEL. It ships on for everything, so counting it made every icon
+    -- in the tree full colour and every tooltip say "Glow on" -- a mark that is true of every row
+    -- marks nothing (owner's first look at AB1).
+    it("declares the six channels and the four that count as configured", function()
       assert.same({ "general", "glow", "texture", "edge", "sound", "announce" }, A.CHANNELS)
-      assert.same({ "glow", "texture", "edge", "sound", "announce" }, A.CUE_CHANNELS)
+      assert.same({ "texture", "edge", "sound", "announce" }, A.CUE_CHANNELS)
     end)
 
     it("answers nil for a channel that does not exist", function()
@@ -181,18 +184,31 @@ describe("Core.AbilitySettings", function()
       assert.is_false(A.channelOn("EXORCISM", "sound"))
     end)
 
-    it("says an ability is configured when anything at all is on", function()
-      assert.is_true(A.anyOn("EXORCISM"), "glow ships on for everything")
-      A.setInherit("EXORCISM", "glow", false)
-      A.set("EXORCISM", "glow", "enabled", false)
-      assert.is_false(A.anyOn("EXORCISM"))
+    -- AB2-D6: glow does NOT count, so a fresh character has nothing configured and every icon in
+    -- the tree is greyed until they switch something on.
+    it("says an ability is configured only once one of the four is on", function()
+      assert.is_false(A.anyOn("EXORCISM"), "glow ships on for everything and must not count")
       A.set("EXORCISM", "announce", "enabled", true)
       assert.is_true(A.anyOn("EXORCISM"))
+      A.set("EXORCISM", "announce", "enabled", false)
+      assert.is_false(A.anyOn("EXORCISM"))
+    end)
+
+    -- The tracked set and the mark are now the same question -- every channel worth marking is a
+    -- channel Core/Track has to poll for -- and they must not drift apart silently.
+    it("tracks exactly what it counts as configured", function()
+      assert.equal(A.anyOn("EXORCISM"), A.tracked("EXORCISM"))
+      A.set("EXORCISM", "sound", "enabled", true)
+      A.set(A.ALL, "sound", "ready", "Chime")
+      assert.is_true(A.tracked("EXORCISM"))
+      assert.equal(A.anyOn("EXORCISM"), A.tracked("EXORCISM"))
     end)
 
     -- The tracked set (AB1-D5). Glow is deliberately NOT in it: it follows the now-slot the render
     -- loop already computes, and tracking it would put every ability into a 10 Hz cooldown poll.
     it("tracks only the channels Core/Track has to read the state for", function()
+      assert.is_false(A.tracked("EXORCISM"), "glow alone must not put an ability in the poll")
+      A.set("EXORCISM", "glow", "enabled", true)
       assert.is_false(A.tracked("EXORCISM"), "glow alone must not put an ability in the poll")
       A.set("EXORCISM", "edge", "enabled", true)
       assert.is_true(A.tracked("EXORCISM"))
@@ -264,4 +280,165 @@ describe("Core.AbilitySettings", function()
     assert.equal("PIXEL", A.effective("JUDGEMENT", "glow").style)
     assert.equal("PIXEL", A.DEFAULTS.glow.style)
   end)
+
+  -- AB2-D3: a class pack may say what an ability should do out of the box. The amendment to
+  -- ADR-0009 -- still never a global switch, still per ability, but the people who wrote the
+  -- rotation may name the two spells worth a flash.
+  describe("class-pack defaults", function()
+    local function packWith(defaults)
+      ns.Display = { currentPack = function()
+        return { class = "PALADIN", spells = { EXORCISM = { id = 415073, defaults = defaults } } }
+      end }
+    end
+
+    it("switches a channel on for a fresh character with nothing stored", function()
+      packWith({ edge = { enabled = true, edge = "left", color = { r = 0.9, g = 0.2, b = 0.2 } } })
+      local e = A.effective("EXORCISM", "edge")
+      assert.is_true(e.enabled)
+      assert.equal("left", e.edge)
+      assert.same({ r = 0.9, g = 0.2, b = 0.2 }, e.color)
+      assert.is_true(A.channelOn("EXORCISM", "edge"))
+      assert.is_true(A.anyOn("EXORCISM"))
+      -- ...for that ability alone
+      assert.is_false(A.effective("JUDGEMENT", "edge").enabled)
+    end)
+
+    -- The precedence AB2-D3 names, read from the bottom: shipped, then All abilities, then the
+    -- pack, then the player. The pack outranks All abilities because it is a statement about ONE
+    -- ability while All abilities is a statement about everything.
+    it("outranks the All abilities entry and loses to the ability's own choice", function()
+      packWith({ edge = { enabled = true, edge = "left" } })
+      A.set(A.ALL, "edge", "edge", "top")
+      assert.equal("left", A.effective("EXORCISM", "edge").edge)
+      assert.equal("top", A.effective("JUDGEMENT", "edge").edge, "unnamed abilities still inherit")
+      A.setInherit("EXORCISM", "edge", false)
+      A.set("EXORCISM", "edge", "edge", "bottom")
+      assert.equal("bottom", A.effective("EXORCISM", "edge").edge)
+      -- and the player can switch off what the pack switched on
+      A.set("EXORCISM", "edge", "enabled", false)
+      assert.is_false(A.channelOn("EXORCISM", "edge"))
+    end)
+
+    -- Filtered by the channel's own field list, exactly as `set` filters a write from the panel: a
+    -- typo in shipped data must be inert, not a field nothing will ever read back.
+    it("ignores a field the channel does not declare", function()
+      packWith({ edge = { enabled = true, colour = { 1, 1, 1 } } })
+      assert.is_nil(A.effective("EXORCISM", "edge").colour)
+      assert.is_true(A.effective("EXORCISM", "edge").enabled)
+    end)
+
+    it("ignores a defaults block that is not a table of channels", function()
+      packWith({ edge = "left" })
+      assert.is_false(A.effective("EXORCISM", "edge").enabled)
+      packWith(nil)
+      assert.is_false(A.effective("EXORCISM", "edge").enabled)
+    end)
+
+    -- The standing rule for this pass: nothing may assume a class pack exists.
+    it("leaves a class with no shipped pack on the shipped defaults", function()
+      ns.Display = nil
+      assert.is_false(A.effective("EXORCISM", "edge").enabled)
+      ns.Display = { currentPack = function() return nil end }
+      assert.is_false(A.effective("EXORCISM", "edge").enabled)
+    end)
+  end)
+
+  -- AB2-D5. The store is per character, so this is the only way to carry a setup to an alt.
+  describe("sharing", function()
+    it("exports only what is stored, and copies rather than referencing it", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      A.setInherit("EXORCISM", "edge", false)
+      A.set("EXORCISM", "edge", "color", { r = 1, g = 0, b = 0 })
+      A.set(A.ALL, "glow", "style", "PROC")
+      local out = A.export(nil)
+      assert.is_true(out.EXORCISM.edge.enabled)
+      assert.equal("PROC", out["*"].glow.style)
+      -- The colour is a TABLE inside the row: a copy that stops at the top level would export a
+      -- flash with no colour in it and nobody would notice until it arrived white.
+      assert.same({ r = 1, g = 0, b = 0 }, out.EXORCISM.edge.color)
+      out.EXORCISM.edge.color.r = 0.5
+      assert.equal(1, A.effective("EXORCISM", "edge").color.r, "the store was handed out by reference")
+    end)
+
+    it("exports only the keys it was asked for", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      A.set("JUDGEMENT", "edge", "enabled", true)
+      local out = A.export({ EXORCISM = true })
+      assert.is_table(out.EXORCISM)
+      assert.is_nil(out.JUDGEMENT)
+      assert.is_nil(out["*"], "the All abilities row is not a spell any rotation names")
+    end)
+
+    it("round-trips a row through export and import unchanged", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      A.setInherit("EXORCISM", "edge", false)
+      A.set("EXORCISM", "edge", "intensity", 0.8)
+      local out = A.export(nil)
+      ns.db.char = { abilities = {} }
+      assert.equal(1, A.import(out))
+      assert.same(out, A.export(nil))
+      assert.equal(0.8, A.effective("EXORCISM", "edge").intensity)
+      assert.is_false(A.inherits("EXORCISM", "edge"))
+    end)
+
+    it("overwrites by key and counts what it wrote", function()
+      A.setInherit("EXORCISM", "edge", false)
+      A.set("EXORCISM", "edge", "intensity", 0.2)
+      assert.equal(2, A.import({ EXORCISM = { edge = { intensity = 0.9 } },
+                                 JUDGEMENT = { sound = { enabled = true } } }))
+      A.setInherit("EXORCISM", "edge", false)
+      assert.equal(0.9, A.effective("EXORCISM", "edge").intensity)
+      assert.is_true(A.effective("JUDGEMENT", "sound").enabled)
+    end)
+
+    -- The one other place values arrive from outside the addon. A string must not be able to write
+    -- a channel or a field nothing will ever read back into SavedVariables.
+    it("drops channels and fields this addon does not declare", function()
+      assert.equal(1, A.import({ EXORCISM = { edge = { enabled = true, wobble = 3 }, nonsense = { x = 1 } } }))
+      assert.is_nil(ns.db.char.abilities.EXORCISM.nonsense)
+      assert.is_nil(ns.db.char.abilities.EXORCISM.edge.wobble)
+      assert.is_true(ns.db.char.abilities.EXORCISM.edge.enabled)
+    end)
+
+    -- Display/Driver rebuilds its tracked set when the version moves. An import that wrote rows
+    -- without moving it would leave the render loop watching the OLD set until the next click.
+    it("moves the version counter for what it wrote, and not for what it did not", function()
+      local before = A.version()
+      assert.equal(1, A.import({ EXORCISM = { edge = { enabled = true } } }))
+      assert.is_true(A.version() > before)
+      local after = A.version()
+      assert.equal(0, A.import({}))
+      assert.equal(after, A.version())
+    end)
+
+    it("writes nothing, and counts nothing, for a string with no rows", function()
+      local before = A.version()
+      assert.equal(0, A.import(nil))
+      assert.equal(0, A.import({}))
+      assert.equal(before, A.version())
+      ns.db = nil
+      assert.equal(0, A.import({ EXORCISM = { edge = {} } }))
+    end)
+
+    -- What the tree shows for a key this client cannot resolve, and what a re-export puts back.
+    it("remembers the spell an imported row came from", function()
+      A.import({ MYSTERY = { edge = { enabled = true } } }, { MYSTERY = { id = 999, name = "Mystery" } })
+      assert.same({ id = 999, name = "Mystery" }, A.spellInfo("MYSTERY"))
+      assert.is_nil(A.spellInfo("EXORCISM"))
+      assert.is_nil(A.export(nil).MYSTERY.spell, "the remembered spell is not a channel")
+    end)
+
+    -- Sorted, because the tree and `/elm debug cues` both list these and `pairs` has no order at
+    -- all. The two keys are chosen so that `pairs` really does return them the other way round --
+    -- with alphabetical-by-luck keys, dropping the sort would pass.
+    it("lists every key with a row, sorted, without the All abilities one", function()
+      A.set("AAA_FIRST", "edge", "enabled", true)
+      A.set("ZZZ_LAST", "edge", "enabled", true)
+      A.set(A.ALL, "glow", "style", "PROC")
+      assert.same({ "AAA_FIRST", "ZZZ_LAST" }, A.keys())
+      ns.db = nil
+      assert.same({}, A.keys())
+    end)
+  end)
+
 end)

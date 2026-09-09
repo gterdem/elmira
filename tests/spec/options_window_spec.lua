@@ -914,24 +914,24 @@ describe("Options window", function()
     -- (AceGUIContainer-TreeGroup.lua:92-95), so there is no "greyed" flag to set in the options
     -- table -- it has to happen on the button.
     describe("desaturating the abilities with nothing switched on", function()
-      it("greys a row with every channel off and leaves a configured one alone", function()
+      -- AB2-D6: the mark counts the four non-inherited channels only. Glow is on for everything by
+      -- default, so counting it left every icon full colour in the owner's first look.
+      it("greys a row with nothing switched on and leaves a configured one alone", function()
         open()
         local A = ns.AbilitySettings
-        A.setInherit("QUIET", "glow", false)
-        A.set("QUIET", "glow", "enabled", false)
+        A.set("EXORCISM", "sound", "enabled", true)
+        A.set(A.ALL, "sound", "used", "Chime")
         local tree = fakeTree()
         tree.buttons = { fakeButton("*"), fakeButton("EXORCISM"), fakeButton("QUIET") }
         feed(tree, { "spells", "list" })
         assert.is_false(tree.buttons[1].icon.desaturated, "All abilities is never greyed")
-        assert.is_false(tree.buttons[2].icon.desaturated, "glow ships on for everything")
-        assert.is_true(tree.buttons[3].icon.desaturated)
+        assert.is_false(tree.buttons[2].icon.desaturated, "a sound is switched on for it")
+        assert.is_true(tree.buttons[3].icon.desaturated, "glow alone must not colour a row")
       end)
 
       it("re-runs on every feed, so switching a cue on un-greys the row", function()
         open()
         local A = ns.AbilitySettings
-        A.setInherit("QUIET", "glow", false)
-        A.set("QUIET", "glow", "enabled", false)
         local tree = fakeTree()
         tree.buttons = { fakeButton("QUIET") }
         feed(tree, { "spells", "list" })

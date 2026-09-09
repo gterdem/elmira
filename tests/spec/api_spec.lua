@@ -47,6 +47,41 @@ describe("Elmira.API v1 registry", function()
     assert.is_falsy(logged[1]:find("Elmira:", 1, true), "ns.log already prefixes the addon name")
   end)
 
+  -- AB2-D3: this is the ONE place every pack arrives, shipped class files included, so it is the one
+  -- place a malformed per-ability default can be said out loud. The pack is still registered -- an
+  -- ignored default is inert, and refusing the class's rotations over a typo in a cue colour would
+  -- be worse than the typo. Silent is the only unacceptable answer: an ignored default looks
+  -- exactly like a cue that was never meant to fire.
+  it("registers a pack with a malformed ability default, and logs what it ignored", function()
+    local logged = {}
+    helper.ns().log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+    helper.load("Elmira/Core/AbilitySettings.lua")
+    local Schema = helper.load("Elmira/Core/Schema.lua")
+    assert.is_function(Schema.abilityDefaultErrors)
+    local ok = API.RegisterDataPack{ class = "PALADIN", flavor = "SoD",
+      spells = { EXORCISM = { id = 1, defaults = { edge = { colour = 1 } } } } }
+    assert.is_true(ok)
+    assert.is_table(API.GetProviders("dataPacks").PALADIN)
+    assert.equal(1, #logged)
+    assert.is_truthy(logged[1]:find("PALADIN", 1, true))
+    assert.is_truthy(logged[1]:find("colour", 1, true))
+  end)
+
+  it("says nothing about a pack whose ability defaults are clean", function()
+    local logged = {}
+    helper.ns().log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+    helper.load("Elmira/Core/AbilitySettings.lua")
+    helper.load("Elmira/Core/Schema.lua")
+    API.RegisterDataPack{ class = "PALADIN", flavor = "SoD",
+      spells = { EXORCISM = { id = 1, defaults = { edge = { enabled = true } } } } }
+    assert.same({}, logged)
+  end)
+
+  it("registers a pack with no Schema loaded at all", function()
+    assert.is_nil(helper.ns().Schema)
+    assert.is_true(API.RegisterDataPack{ class = "MAGE", flavor = "SoD", spells = {} })
+  end)
+
   it("sorts bar providers by priority descending with a stable name tiebreak", function()
     API.RegisterBarProvider{ name = "Zeta", priority = 5 }
     API.RegisterBarProvider{ name = "ElvUI", priority = 10 }

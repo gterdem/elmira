@@ -1185,6 +1185,29 @@ describe("Display.Driver", function()
         assert.equal(1, #told)
       end)
 
+      -- AB2-D1: the screen edge is a channel like any other now. The driver only has to REACH it --
+      -- whether this ability's edge cares about this event is Overlay's own answer -- and until it
+      -- did, every Screen-edge tab in the options was a page of controls that did nothing.
+      it("flashes the screen edge, and passes the event through so Overlay can refuse it", function()
+        local fired = {}
+        ns.Overlay = { Fire = function(key, event)
+          fired[#fired + 1] = key .. ":" .. event
+          return event == "suggested"
+        end }
+        assert.is_true(Display.abilityEvent("EXORCISM", "suggested"))
+        assert.is_false(Display.abilityEvent("EXORCISM", "ready"))
+        assert.same({ "EXORCISM:suggested", "EXORCISM:ready" }, fired)
+      end)
+
+      it("does not reach the overlay at all while Only in combat holds it back", function()
+        local fired = 0
+        ns.Overlay = { Fire = function() fired = fired + 1; return true end }
+        A.set(A.ALL, "general", "onlyInCombat", true)
+        stubState(false, false)
+        assert.is_false(Display.abilityEvent("EXORCISM", "suggested"))
+        assert.equal(0, fired)
+      end)
+
       it("does nothing, without erroring, before the settings store is loaded", function()
         ns.AbilitySettings = nil
         assert.is_false(Display.abilityEvent("EXORCISM", "ready"))

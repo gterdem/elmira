@@ -1060,143 +1060,105 @@ describe("Core.Slash", function()
     assert.same({ "cues: overlay not loaded" }, lines)
   end)
 
-  -- Drives Overlay.lua for real (loaded fresh per test) rather than faking its output, so these
-  -- tests catch the two fixed defects: TestFire silently attributing a bad index to cue 1, and a
-  -- test-fired `event = "check"` cue printing a bare success line that contradicts the options
-  -- screen (ADR-0009: check cues stay inert until M5b).
+  -- Drives Overlay.lua for real (loaded fresh per test) rather than faking its output: the whole
+  -- value of this command is that it reports what the RENDERER will actually do, and a fake would
+  -- report what the spec believes instead.
   describe("debug cues", function()
-    local ns, calls
-
-    -- Cue 1 is a now_slot cue (the ordinary, fireable case). Cue 2 is an event="check" cue, which
-    -- Overlay.availableCues() always marks unavailable — Core/Checks.lua does not exist until M5b.
-    local function cues()
-      return {
-        { event = "now_slot", spell = "EXORCISM", reason = "Exorcism up", edge = "left", color = { 1, 1, 1 } },
-        { event = "check", spell = "SEAL_OF_MARTYRDOM", reason = "Seal dropped" },
-      }
-    end
+    local ns, A, calls
 
     before_each(function()
       ns = helper.ns()
+      helper.load("Elmira/Core/Spells.lua")
+      A = helper.load("Elmira/Core/AbilitySettings.lua")
       helper.load("Elmira/Display/Overlay.lua")
-      ns.db = { profile = { overlay = { cues = {} } } }
-      ns.Display = { activeBuild = function() return { visuals = { cues = cues() } } end }
-      -- Stubbed so no frame is ever created (Core specs must stay WoW-API-free) and so a flare can
+      ns.db = { char = { spells = {}, abilities = {} } }
+      ns.Display = { currentPack = function() return { class = "PALADIN",
+                       spells = { EXORCISM = { id = 415073 }, JUDGEMENT = { id = 20271 } } } end,
+                     spellName = function(key) return key end }
+      -- Stubbed so no frame is ever created (Core specs must stay WoW-API-free) and so a flash can
       -- be counted instead of animated.
       calls = 0
       ns.Overlay.Flare = function() calls = calls + 1; return true end
     end)
 
-    local function enableCue(id)
-      ns.db.profile.overlay.cues[id] = { enabled = true, edge = "left", intensity = 0.5 }
-    end
-
-    it("lists each cue and marks the check cue UNAVAILABLE with its reason", function()
+    it("says so plainly when no ability has its screen edge switched on", function()
       local lines = Slash.run("debug cues")
-      assert.is_true(hasLineMatching(lines, "1%. Exorcism up %[now_slot:EXORCISM%]"))
-      assert.is_true(hasLineMatching(lines, "2%. Seal dropped %[check:SEAL_OF_MARTYRDOM%]"))
-      assert.is_true(hasLineMatching(lines, "UNAVAILABLE: needs readiness checks %(M5b%)"))
+      assert.is_true(hasLineMatching(lines, "no ability has its screen edge switched on"))
     end)
 
-    it("an enabled cue reports on, and reports last fired=never before anything has flared", function()
-      enableCue("now_slot:EXORCISM")
+    it("names the ability, its edge and the moments it fires on", function()
+      A.set("EXORCISM", "edge", "enabled", true)
       local lines = Slash.run("debug cues")
-      assert.is_true(hasLineMatching(lines, "on  edge=left"))
+      assert.is_true(hasLineMatching(lines, "EXORCISM"))
+      assert.is_true(hasLineMatching(lines, "edge=left"))
+      assert.is_true(hasLineMatching(lines, "fires on: suggested"))
       assert.is_true(hasLineMatching(lines, "last fired=never"))
     end)
 
-    -- Regression coverage for the deliberate `ns.now` guard in Overlay.Render/describe: no flare has
-    -- happened yet, so lastFired must carry nothing for this cue. (The separate case of a flare
-    -- recorded while no clock exists is Overlay's own contract and is covered in overlay_spec.)
-    it("reports never for a cue that is enabled but has not matched the now-slot", function()
-      enableCue("now_slot:EXORCISM")
+    -- The one state that looks exactly like a broken renderer from the outside: switched on, and
+    -- firing on nothing.
+    it("says when an ability is on but no moment is ticked", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      A.set(A.ALL, "edge", "suggested", false)
       local lines = Slash.run("debug cues")
-      assert.is_true(hasLineMatching(lines, "matches now%-slot=false  last fired=never"))
+      assert.is_true(hasLineMatching(lines, "no event is ticked"))
     end)
 
-    it("reports a real elapsed time, not never, after a flare driven via Overlay.Render", function()
+    it("reports a real elapsed time once an ability has flashed", function()
       local clock = { _now = 50 }
       function clock:now() return self._now end
       ns.API = { GetState = function() return clock end }
-      enableCue("now_slot:EXORCISM")
-
-      ns.Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
-      assert.equal(1, calls, "Render must flare the matching enabled now_slot cue exactly once")
-
+      A.set("EXORCISM", "edge", "enabled", true)
+      ns.Overlay.Fire("EXORCISM", "suggested")
       clock._now = 53
       local lines = Slash.run("debug cues")
-      assert.is_false(hasLineMatching(lines, "last fired=never"))
       assert.is_true(hasLineMatching(lines, "last fired=3%.0s ago"))
     end)
 
-    it("'debug cues 1' test-fires cue 1 and flares exactly once", function()
-      local lines = Slash.run("debug cues 1")
+    it("'debug cues <KEY>' test-fires that ability and flashes exactly once", function()
+      local lines = Slash.run("debug cues EXORCISM")
       assert.equal(1, calls)
-      assert.is_true(hasLineMatching(lines, "^test%-fired: Exorcism up$"))
+      assert.is_true(hasLineMatching(lines, "test%-fired: EXORCISM"))
     end)
 
-    -- Fixed defect: `tonumber(index) or 1` silently fired cue 1 and attributed the flare to it for
-    -- any non-numeric argument. The fix must refuse instead of guessing.
-    it("regression: 'debug cues zzz' does not flare and reports it is not a cue number", function()
+    -- A switched-off ability still flashes -- the question this answers is "can this edge flash at
+    -- all" -- but the line must say so, or it reads as a promise that it will fire in play.
+    it("test-firing a switched-off ability says it will not fire in play", function()
+      local lines = Slash.run("debug cues EXORCISM")
+      assert.equal(1, calls)
+      assert.is_true(hasLineMatching(lines, "will not fire in play"))
+      A.set("EXORCISM", "edge", "enabled", true)
+      lines = Slash.run("debug cues EXORCISM")
+      assert.is_false(hasLineMatching(lines, "will not fire in play"))
+    end)
+
+    -- Not "default to the first ability": flashing something the user did not name attributes the
+    -- flash to the wrong ability, in the one command whose job is to stop exactly that.
+    it("refuses a word that is not an ability key, and flashes nothing", function()
       local lines = Slash.run("debug cues zzz")
-      assert.equal(0, calls, "a non-numeric argument must never flare any cue")
-      assert.is_true(hasLineMatching(lines, "not a cue number: zzz"))
-    end)
-
-    -- Fixed defect: test-firing an event="check" cue printed a bare "test-fired: Seal dropped",
-    -- which contradicts the options screen telling the user that cue cannot fire (ADR-0009). The
-    -- renderer test still flares (that is the point of the command), but the line must say so.
-    it("regression: test-firing the check cue still flares but says it will not fire in play", function()
-      local lines = Slash.run("debug cues 2")
-      assert.equal(1, calls, "TestFire answers \"can this edge flare at all\" even for an unavailable cue")
-      assert.is_true(hasLineMatching(lines, "^test%-fired: Seal dropped %(needs readiness checks %(M5b%)"))
-      assert.is_true(hasLineMatching(lines, "will not fire in play%)$"))
-    end)
-
-    it("'debug cues 99' reports no such cue and does not flare", function()
-      local lines = Slash.run("debug cues 99")
       assert.equal(0, calls)
-      assert.is_true(hasLineMatching(lines, "no cue 99"))
+      assert.is_true(hasLineMatching(lines, "cannot test%-fire"))
     end)
 
-    -- Mutation regression: a cue that is off must be REPORTED as off, never as on. This is the
-    -- diagnostic command's whole job — a cue that reads "on" while actually disabled is a
-    -- diagnostic lying about the thing it exists to diagnose. Cue 1 is fireable (now_slot) but is
-    -- never passed to enableCue() in this test, so it stays out of the profile entirely.
-    it("an off cue is reported as off, never as on", function()
-      local lines = Slash.run("debug cues")
-      assert.is_true(hasLineMatching(lines, "1%. Exorcism up"))
-      assert.is_false(hasLineMatching(lines, "on  edge="),
-        "a cue that was never enabled must not render as on")
-      assert.is_true(hasLineMatching(lines, "^   off"))
-    end)
-
-    -- Mutation regression: when a build suggests zero cues, the command must SAY so rather than
-    -- silently printing nothing past the header line — an empty list and "nothing to report" look
-    -- identical on screen otherwise.
-    it("says the build suggests no cues when its cue list is empty", function()
-      ns.Display.activeBuild = function() return { visuals = { cues = {} } } end
-      local lines = Slash.run("debug cues")
-      assert.is_true(hasLineMatching(lines, "no cues"))
-    end)
-
-    -- Mutation regression: the header line is the only place the build key and now-slot are named,
-    -- which is what makes a stale/wrong build diagnosable at all. Checked as substrings (information
-    -- content), not the exact line format.
-    it("names the build key and now-slot on the header line", function()
+    -- An ability that HAS flashed is still listed after being switched off, and says which of the
+    -- two it is: "it fired earlier and is off now" and "it is on and has never fired" are the two
+    -- readings of an empty screen edge that this command exists to separate.
+    it("keeps a switched-off ability that has flashed, and says it is off", function()
       local clock = { _now = 50 }
       function clock:now() return self._now end
       ns.API = { GetState = function() return clock end }
-      enableCue("now_slot:EXORCISM")
-      ns.Overlay.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      A.set("EXORCISM", "edge", "enabled", true)
+      ns.Overlay.Fire("EXORCISM", "suggested")
+      A.set("EXORCISM", "edge", "enabled", false)
       local lines = Slash.run("debug cues")
-      assert.is_true(hasLineMatching(lines, "build=PALADIN_EXODIN"))
-      assert.is_true(hasLineMatching(lines, "now%-slot=EXORCISM"))
+      assert.is_true(hasLineMatching(lines, "EXORCISM"))
+      assert.is_true(hasLineMatching(lines, "off — switch it on"))
+      assert.is_false(hasLineMatching(lines, "fires on:"))
     end)
 
-    -- Mutation regression: the output must tell the user how to test-fire a cue, or the feature is
-    -- undiscoverable from inside the command that lists the cues.
-    it("tells the user how to test-fire a cue", function()
+    -- Mutation regression: the output must tell the user how to test-fire one, or the feature is
+    -- undiscoverable from inside the command that lists them.
+    it("tells the user how to test-fire one", function()
       local lines = Slash.run("debug cues")
       assert.is_true(hasLineMatching(lines, "test%-fires"))
     end)

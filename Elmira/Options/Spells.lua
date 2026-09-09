@@ -480,32 +480,126 @@ local function announceArgs(key, entry)
   return args
 end
 
--- AB1-D12: shells. One line each, no controls -- AB2 fills Screen-edge and AB3 the Texture tab.
+-- AB1-D12: the Texture tab is still a shell. One line, no controls -- AB3 fills it.
 local function shellArgs(order)
   return { soon = { type = "description", order = order, width = "full", fontSize = "medium",
                     name = ns.Colors.wrap(ns.Colors.MUTED, L["Arrives in the next pass."]) } }
 end
 
+-- ---------------------------------------------------------------- AB2-D1: the Screen-edge tab
+
+-- Named for humans. `Overlay.EDGES` is the authority on which edges exist -- it is what can actually
+-- draw them -- so adding one there cannot leave an unnamed entry here.
+local EDGE_LABELS = { left = "Left", right = "Right", top = "Top", bottom = "Bottom" }
+local function edgeChoices()
+  local out = {}
+  for _, e in ipairs((ns.Overlay and ns.Overlay.EDGES) or {}) do out[e] = L[EDGE_LABELS[e] or e] end
+  return out
+end
+
+-- Only two of the five events, and Overlay is the one that says so: a full-screen flash on every
+-- buff that ticks down is the strobe ADR-0009 exists to prevent, and the other three are what the
+-- Texture tab is for (AB3).
+local EDGE_EVENT_LABELS = { suggested = "When it is suggested", ready = "When it comes off cooldown" }
+
+local function edgeArgs(key)
+  local args = {}
+  args.inherit = inheritToggle(key, "edge", 1)
+  if key ~= ALL then
+    args.enabled = {
+      type = "toggle", order = 2, width = "full", name = L["Flash the screen edge for this ability"],
+      -- ADR-0009 as amended by AB1-D4/AB2-D3: the ON switch is per ability and is never inherited.
+      -- A class pack may ship it on for one or two abilities; nothing else can.
+      desc = L["Never inherited: All abilities cannot switch screen flashes on for you."],
+      get = function() return effective(key, "edge").enabled == true end,
+      set = function(_, v) put(key, "edge", "enabled", v) end,
+    }
+  end
+  args.edge = {
+    type = "select", order = 3, name = L["Edge"], values = edgeChoices(),
+    sorting = (ns.Overlay and ns.Overlay.EDGES) or nil,
+    desc = L["Which screen edge this ability flashes on."],
+    disabled = linked(key, "edge"),
+    get = function() return effective(key, "edge").edge or "left" end,
+    set = function(_, v) put(key, "edge", "edge", v) end,
+  }
+  args.color = {
+    type = "color", order = 4, name = L["Colour"], hasAlpha = false, disabled = linked(key, "edge"),
+    get = function()
+      local c = effective(key, "edge").color or ns.Colors.HIGHLIGHT
+      return c.r, c.g, c.b
+    end,
+    set = function(_, r, g, b) put(key, "edge", "color", { r = r, g = g, b = b }) end,
+  }
+  args.intensity = {
+    type = "range", order = 5, name = L["Intensity"], min = 0.05, max = 1.0, step = 0.05,
+    isPercent = true, disabled = linked(key, "edge"),
+    desc = L["How bright the flash is. Reading a number tells you nothing about whether you will "
+          .. "catch it out of the corner of your eye -- use Preview."],
+    get = function() return effective(key, "edge").intensity or 0.5 end,
+    set = function(_, v) put(key, "edge", "intensity", v) end,
+  }
+  local A = AS()
+  for i, event in ipairs((ns.Overlay and ns.Overlay.EVENTS) or {}) do
+    args[event] = {
+      type = "toggle", order = 5 + i, width = "full", name = L[EDGE_EVENT_LABELS[event] or event],
+      disabled = linked(key, "edge"),
+      get = function() return effective(key, "edge")[event] == true end,
+      set = function(_, v) put(key, "edge", event, v) end,
+    }
+  end
+  args.preview = {
+    type = "execute", order = 9, name = L["Preview Flash"],
+    desc = L["Flashes the screen edge with these settings, whether or not it is switched on."],
+    -- The SAME path `/elm debug cues <KEY>` uses, deliberately: a preview drawn by a second code
+    -- path can look right while the one that fires in play is broken.
+    func = function() if ns.Overlay then ns.Overlay.TestFire(key) end end,
+  }
+  -- Switched on, with neither event ticked, is a channel that can never fire -- and it looks exactly
+  -- like a broken addon. Say so where it happens.
+  args.silent = {
+    type = "description", order = 10, width = "full", fontSize = "medium",
+    hidden = function()
+      local e = effective(key, "edge")
+      if not (A and A.channelOn(key, "edge")) then return true end
+      for _, event in ipairs((ns.Overlay and ns.Overlay.EVENTS) or {}) do
+        if e[event] then return true end
+      end
+      return false
+    end,
+    name = ns.Colors.wrap(ns.Colors.WARN,
+      L["This is switched on but fires on nothing -- tick one of the moments above."]),
+  }
+  return args
+end
+
 -- ---------------------------------------------------------------- AB1-D6: the General tab
 
--- SpellsPage.packNotes(key, p) -> [{ name =, reasons =, needs = }]
+-- SpellsPage.packReason(key, p) -> the class pack's one sentence about this ability, or nil
 --
--- What the SHIPPED class data says about this ability: which of its rotations use it, why its own
--- cues fire, and what those cues and rotations need from the character. Empty for every ability of
--- a class with no pack, which is a normal state and not an error.
+-- AB2-D2 took the build-level `visuals.cues` away, and the `reason` strings that explained them went
+-- with the rest of the cue record -- except this one, which is the half a player reads rather than
+-- the half the renderer used. It now sits on the pack's SPELL entry beside the defaults it explains
+-- (`defaults.reason`, Core/Schema.abilityDefaultErrors), because the sentence is about the ability,
+-- not about any one rotation that happens to name it.
+function SpellsPage.packReason(key, p)
+  local entry = p and p.spells and p.spells[key]
+  local reason = entry and entry.defaults and entry.defaults.reason
+  return type(reason) == "string" and reason or nil
+end
+
+-- SpellsPage.packNotes(key, p) -> [{ name =, needs = }]
+--
+-- What the SHIPPED class data says about this ability: which of its rotations use it and what those
+-- rotations need from the character. Empty for every ability of a class with no pack, which is a
+-- normal state and not an error.
 function SpellsPage.packNotes(key, p)
   local out = {}
   if not (ns.Spells and ns.Spells.referencedKeys) then return out end
   for buildKey, build in pairs((p and p.builds) or {}) do
     if ns.Spells.referencedKeys(build)[key] then
-      local row = { build = buildKey, reasons = {}, needs = {} }
+      local row = { build = buildKey, needs = {} }
       row.name = (ns.Rotation and ns.Rotation.displayName and ns.Rotation.displayName(buildKey)) or buildKey
-      for _, cue in ipairs((build.visuals and build.visuals.cues) or {}) do
-        if cue.spell == key or cue.key == key then
-          if cue.reason then row.reasons[#row.reasons + 1] = cue.reason end
-          if cue.requiresBonus then row.needs[#row.needs + 1] = cue.requiresBonus end
-        end
-      end
       for _, rune in ipairs((build.requires and build.requires.runes) or {}) do
         row.needs[#row.needs + 1] = rune
       end
@@ -530,17 +624,18 @@ end
 
 local function packSummaryArgs(key, p)
   local rows = SpellsPage.packNotes(key, p)
-  if #rows == 0 then return nil end
+  local reason = SpellsPage.packReason(key, p)
+  if #rows == 0 and not reason then return nil end
   local args, a = {}, 0
+  if reason then
+    a = a + 1
+    args["r" .. a] = { type = "description", order = a, width = "full", fontSize = "medium",
+                       name = reason }
+  end
   for _, row in ipairs(rows) do
     a = a + 1
     args["r" .. a] = { type = "description", order = a, width = "full", fontSize = "medium",
                        name = ns.Colors.wrap(ns.Colors.HIGHLIGHT, row.name) }
-    for _, reason in ipairs(row.reasons) do
-      a = a + 1
-      args["r" .. a] = { type = "description", order = a, width = "full", fontSize = "medium",
-                         name = "   " .. reason }
-    end
     for _, need in ipairs(row.needs) do
       a = a + 1
       args["r" .. a] = { type = "description", order = a, width = "full", fontSize = "medium",
@@ -565,7 +660,10 @@ local function removeArgs(entry, rotations, order)
     confirmText = string.format(
       L["Remove %s and its glow, texture, screen-edge, sound and announcement settings?"], entry.name),
     func = function()
-      local ok = ns.Spells.remove(store(), entry.key, rotations)
+      local s = store()
+      -- An unresolved import row has no registry entry to remove -- only the settings that arrived
+      -- with it. Without this, its Remove button is a button that does nothing.
+      local ok = (s ~= nil and s[entry.key] == nil) or ns.Spells.remove(s, entry.key, rotations)
       -- The settings row goes with the registry entry, and only when the registry actually let go:
       -- clearing settings for an entry the guard refused to remove would throw away what the player
       -- configured and leave the ability sitting there.
@@ -585,6 +683,11 @@ local function generalArgs(key, entry, rotations, p)
       sourceText = string.format(L["from the %s pack"], (p and p.class) or "?")
     elseif entry.source == "spellbook" then sourceText = L["added from your spellbook"]
     elseif entry.source == "name" then sourceText = L["added by name"]
+    elseif entry.source == "import" then sourceText = L["arrived in an import"]
+    -- AB2-D5: settings with no ability behind them on THIS character. Said plainly, because every
+    -- control on the page below will look like it works and nothing will ever fire.
+    elseif entry.source == "unresolved" then
+      sourceText = L["not on this character -- these settings arrived in an import"]
     else sourceText = L["added by ID"] end
     args.head = { type = "description", order = 1, width = "full", fontSize = "medium",
       name = string.format("%s%s  ·  #%s  ·  %s  ·  %s", iconPrefix(entry.key), entry.name,
@@ -623,7 +726,7 @@ local function tabsFor(key, entry, rotations, p)
     general  = { type = "group", order = 1, name = L["General"], args = generalArgs(key, entry, rotations, p) },
     glow     = { type = "group", order = 2, name = L["Glow"], args = glowArgs(key) },
     texture  = { type = "group", order = 3, name = L["Texture"], args = shellArgs(1) },
-    edge     = { type = "group", order = 4, name = L["Screen-edge"], args = shellArgs(1) },
+    edge     = { type = "group", order = 4, name = L["Screen-edge"], args = edgeArgs(key) },
     sound    = { type = "group", order = 5, name = L["Sound"], args = soundArgs(key) },
     announce = { type = "group", order = 6, name = L["Announcement"], args = announceArgs(key, entry) },
   }
@@ -651,8 +754,28 @@ local function entryGroup(entry, order, rotations, p)
   }
 end
 
+-- AB2-D5: a settings row for a spell this client cannot resolve. It still gets a full page -- the
+-- settings are real and will work the moment the character learns the spell -- but the tree says so
+-- in the name's colour and in the tooltip, because a row that looks like every other one and glows
+-- nothing is indistinguishable from a bug.
+local function unresolvedGroup(key, order)
+  local A = AS()
+  local info = (A and A.spellInfo(key)) or {}
+  local entry = { key = key, id = info.id, name = info.name or key, source = "unresolved" }
+  return {
+    type = "group", order = order, childGroups = "tab",
+    name = ns.Colors.wrap(ns.Colors.MUTED, entry.name),
+    desc = L["not on this character"],
+    hidden = function() return not SpellsPage.matches(entry) end,
+    args = tabsFor(key, entry, {}, nil),
+  }
+end
+
 local function listArgs()
   if ns.Rotation and ns.Rotation.syncSpells then ns.Rotation.syncSpells() end
+  -- Imported rows this client CAN resolve become registry entries before the tree is built, so they
+  -- appear as themselves rather than as an unresolved row that would quietly stay one forever.
+  SpellsPage.adoptImported()
   local p = pack()
   local rotations = allRotations(p)
   local rows = (ns.Spells and ns.Spells.list(store())) or {}
@@ -664,7 +787,196 @@ local function listArgs()
   for i, entry in ipairs(rows) do
     args[entry.key] = entryGroup(entry, 10 + i, rotations, p)
   end
+  local merged = (ns.Spells and ns.Spells.merged and ns.Spells.merged(p)) or {}
+  local A = AS()
+  for i, key in ipairs((A and A.keys()) or {}) do
+    if not (args[key] or merged[key]) then args[key] = unresolvedGroup(key, 1000 + i) end
+  end
   return args
+end
+
+-- ---------------------------------------------------------------- AB2-D5: the Share tab
+
+-- One declaration: the tab is one idea -- what is currently in the box, what it last said, and
+-- which rotation the picker is on.
+local shareText, shareNote, shareRotation = "", "", nil -- mutants: equivalent globals; luacheck catches it
+
+-- SpellsPage.bundle(keys) -> { abilities =, spells = }
+--
+-- `keys` is a SET (`Spells.referencedKeys`'s shape) or nil for everything stored. `spells` carries
+-- the id and the readable name of every key that travels: the RECEIVING client resolves the id to
+-- decide whether it can register the ability at all, and shows the name when it cannot. Neither is
+-- knowable from the key alone, and neither can be asked for from Core -- which is why the bundle is
+-- assembled up here rather than inside Core/AbilitySettings.
+function SpellsPage.bundle(keys)
+  local A = AS()
+  local abilities = (A and A.export(keys)) or {}
+  local merged = (ns.Spells and ns.Spells.merged and ns.Spells.merged(pack())) or {}
+  local spells = {}
+  for key in pairs(abilities) do
+    if key ~= ALL then
+      local entry, info = merged[key], A and A.spellInfo(key)
+      local id = (entry and entry.id) or (info and info.id)
+      -- A pack's own spell record has an id and no name (the client owns the naming), so the name
+      -- is resolved the same way every other line on this page resolves one.
+      if id then spells[key] = { id = id, name = (entry and entry.name) or readable(key) } end
+    end
+  end
+  return { abilities = abilities, spells = spells }
+end
+
+local function countKeys(t)
+  local n = 0
+  for _ in pairs(t or {}) do n = n + 1 end
+  return n
+end
+
+-- Everything this character has configured, All abilities row included: the settings half of a
+-- "here is my setup" string.
+function SpellsPage.exportAll()
+  if not ns.Serialize then shareNote = L["The import/export libraries are not loaded."]; return false end
+  local b = SpellsPage.bundle(nil)
+  local str, err = ns.Serialize.encodeBundle({ abilities = b.abilities, spells = b.spells })
+  if not str then shareNote = tostring(err); return false end
+  shareText = str
+  shareNote = string.format(L["Exported the settings of %d abilities -- copy the text above."],
+                            countKeys(b.abilities))
+  return true
+end
+
+-- One rotation AND the settings of the abilities it names. The All abilities row deliberately does
+-- NOT ride along: it is what every OTHER ability on the receiving character inherits from, and
+-- overwriting it to share four spells would rewrite their whole setup.
+function SpellsPage.exportRotation(buildKey)
+  local p = pack()
+  if not (ns.UserBuilds and ns.UserBuilds.find and ns.Spells and ns.Serialize) then
+    shareNote = L["The import/export libraries are not loaded."]
+    return false
+  end
+  local build = ns.UserBuilds.find(p, buildKey)
+  if not build then shareNote = L["Pick a rotation first."]; return false end
+  local b = SpellsPage.bundle(ns.Spells.referencedKeys(build))
+  local str, err = ns.UserBuilds.exportKey(p, buildKey, b)
+  if not str then shareNote = tostring(err); return false end
+  shareText = str
+  shareNote = string.format(L["Exported %s with the settings of %d of its abilities."],
+                            readable(buildKey), countKeys(b.abilities))
+  return true
+end
+
+-- How many keys a pasted string would write. The confirm names it, because "Import" over a setup
+-- someone spent an evening on is not an action to take on a guess.
+function SpellsPage.importCount(text)
+  if not ns.Serialize then return 0 end
+  local bundle = ns.Serialize.decodeBundle(text)
+  return countKeys(bundle and bundle.abilities)
+end
+
+-- Merges by key, overwriting on a collision. A build in the string is ignored here on purpose:
+-- rotations are imported on the Rotations page, and quietly creating one from the Abilities tab
+-- would be a second, invisible way to acquire a rotation.
+function SpellsPage.importSettings(text)
+  local A = AS()
+  if not (A and ns.Serialize) then
+    shareNote = L["The import/export libraries are not loaded."]
+    return false
+  end
+  local bundle, err = ns.Serialize.decodeBundle(text)
+  if not bundle then shareText = tostring(text or ""); shareNote = tostring(err); return false end
+  local n = A.import(bundle.abilities, bundle.spells)
+  if n == 0 then
+    shareText = tostring(text or "")
+    shareNote = L["That string carries no ability settings."]
+    return false
+  end
+  shareText = ""
+  shareNote = string.format(L["Merged the settings of %d abilities."], n)
+  restyle()
+  return true, n
+end
+
+-- SpellsPage.adoptImported() -> how many imported rows became registry entries
+--
+-- The other half of AB2-D5's import: a settings row whose key this client CAN resolve becomes a
+-- real registry entry, so the ability is configurable and usable like any other; one it cannot stays
+-- settings-only and the tree shows it muted. Run from the page build rather than from the import,
+-- because it is also the answer for a row imported before the character learned the spell -- and a
+-- step that has to be remembered at two call sites is a step that will be forgotten at one.
+function SpellsPage.adoptImported()
+  local A, s = AS(), store()
+  if not (A and s and ns.Spells and ns.Spells.adopt) then return 0 end
+  local merged = (ns.Spells.merged and ns.Spells.merged(pack())) or {}
+  local adopted = 0
+  for _, key in ipairs(A.keys()) do
+    local info = A.spellInfo(key)
+    if info and info.id and not merged[key] then
+      local name = ns.Adapter and ns.Adapter.spellNameByID and ns.Adapter.spellNameByID(info.id)
+      if name and ns.Spells.adopt(s, key, info.id, name) then adopted = adopted + 1 end
+    end
+  end
+  return adopted
+end
+
+local function rotationChoices()
+  local values, sorting = {}, {}
+  if not (ns.Rotation and ns.Rotation.templateRows and ns.Rotation.forkRows) then return values, sorting end
+  for _, row in ipairs(ns.Rotation.templateRows()) do
+    values[row.build] = ns.Rotation.displayName(row.build)
+    sorting[#sorting + 1] = row.build
+  end
+  for _, row in ipairs(ns.Rotation.forkRows()) do
+    values[row.build] = row.name
+    sorting[#sorting + 1] = row.build
+  end
+  return values, sorting
+end
+
+local function shareArgs()
+  local values, sorting = rotationChoices()
+  return {
+    intro = {
+      type = "description", order = 1, width = "full", fontSize = "medium",
+      name = L["Ability settings are per character. This is how you copy them to another character "
+            .. "-- or to someone else -- without sharing a profile."],
+    },
+    exportAll = {
+      type = "execute", order = 2, width = "relative", relWidth = 0.5,
+      name = L["Export All Ability Settings"],
+      desc = L["Puts a string in the box below covering every ability you have configured, "
+            .. "including All abilities."],
+      func = function() SpellsPage.exportAll() end,
+    },
+    rotation = {
+      type = "select", order = 3, width = "relative", relWidth = 0.5, name = L["Rotation"],
+      values = values, sorting = sorting,
+      get = function() return shareRotation end,
+      set = function(_, v) shareRotation = v end,
+    },
+    exportRotation = {
+      type = "execute", order = 4, width = "relative", relWidth = 0.5,
+      name = L["Export Rotation with Settings"],
+      desc = L["The rotation itself plus the settings of every ability it names. Paste it on the "
+            .. "Rotations page to get both."],
+      func = function() SpellsPage.exportRotation(shareRotation) end,
+    },
+    text = {
+      type = "input", multiline = 8, width = "full", order = 5, name = L["Ability settings string"],
+      desc = L["Paste a string here to merge its settings into this character's."],
+      confirm = function(_, value)
+        local n = SpellsPage.importCount(value)
+        -- No count means nothing will be overwritten, so nothing needs confirming -- the failure
+        -- message under the box says why in that case.
+        if n == 0 then return false end
+        return string.format(L["Overwrite this character's settings for %d abilities?"], n)
+      end,
+      get = function() return shareText end,
+      set = function(_, value) SpellsPage.importSettings(value) end,
+    },
+    note = {
+      type = "description", order = 6, width = "full", fontSize = "medium",
+      name = function() return shareNote end,
+    },
+  }
 end
 
 -- ---------------------------------------------------------------- the section
@@ -677,11 +989,7 @@ function SpellsPage.group()
     type = "group", order = 3, name = L["Abilities"], childGroups = "tab",
     args = {
       list = { type = "group", order = 1, name = L["Abilities"], childGroups = "tree", args = listArgs() },
-      share = {
-        type = "group", order = 2, name = L["Share"],
-        args = { soon = { type = "description", order = 1, width = "full", fontSize = "medium",
-                          name = L["Sharing arrives in the next pass."] } },
-      },
+      share = { type = "group", order = 2, name = L["Share"], args = shareArgs() },
     },
   }
 end

@@ -429,13 +429,12 @@ function NA:StartDisplay()
   -- two were joined, so hiding the strip took the glow with it and the player lost the half of the
   -- display they were actually watching.
   if ns.Glow then ns.Display.register("glow", ns.Glow.Render) end
-  -- Registered even though every cue is off by default: the renderer costs one comparison per
-  -- render when nothing is opted in, and wiring it conditionally would mean the first opt-in
-  -- silently does nothing until a reload.
-  if ns.Overlay then
-    ns.Overlay.Create()
-    ns.Display.register("overlay", ns.Overlay.Render)
-  end
+  -- AB2-D1: the overlay is no longer a RENDERER. A screen edge flashes on an ability EVENT
+  -- (Display.abilityEvent, from Core/Track and from the now-slot the driver already computes), not
+  -- on a diff it takes of the queue itself, so there is nothing here for the render loop to call.
+  -- Its frames are still built up front: the first flash of a fight must not pay for creating five
+  -- textures, and a flash that arrives a frame late is a flash that arrives after the damage.
+  if ns.Overlay then ns.Overlay.Create() end
   -- The Builder's live status column (ADR-0015 amendment). A renderer rather than a timer: the one
   -- moment the column stops being true is the moment the queue changes, which is exactly when a
   -- renderer runs -- so the panel can say "as of the last time the queue changed" and mean it.

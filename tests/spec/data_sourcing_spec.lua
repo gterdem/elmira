@@ -143,23 +143,50 @@ describe("Data sourcing policy (docs/03)", function()
     end
   end)
 
-  -- Overlay cues carry a spell key just like entries do, but Schema only validates entries. A cue
-  -- naming a key the pack lacks resolves to nil and simply never fires — no error, no cue, ADR-0009's
-  -- opt-in flare silently dead. Found by corrupting a cue and watching the suite stay green.
-  it("resolves every overlay cue's spell key to a real spell", function()
-    local dangling = {}
+  -- AB2-D2: build-level `visuals.cues` are GONE. A screen flash belongs to an ability now, and a
+  -- build carrying a cue list would be data nothing reads -- which is worse than no data, because
+  -- it reads as a promise that something will flash.
+  it("ships no build-level cue list anywhere", function()
+    local left = {}
     for _, entry in ipairs(shippedPacks()) do
       for key, build in pairs(entry.data.builds or {}) do
-        local cues = (build.visuals and build.visuals.cues) or build.overlayCues or build.cues or {}
-        for _, cue in ipairs(cues) do
-          if type(cue.spell) == "string" and entry.data.spells[cue.spell] == nil then
-            dangling[#dangling + 1] = key .. " cue -> " .. cue.spell
-          end
-        end
+        if build.visuals or build.overlayCues or build.cues then left[#left + 1] = key end
       end
     end
-    table.sort(dangling)
-    assert.same({}, dangling)
+    table.sort(left)
+    assert.same({}, left)
+  end)
+
+  -- AB2-D3: a pack's per-ability defaults are schema-checked (Core/Schema.abilityDefaultErrors),
+  -- and a field the settings store does not declare is INERT -- so nothing but a test can notice a
+  -- typo in one before a player does.
+  it("ships per-ability defaults the settings store can actually read", function()
+    helper.load("Elmira/Core/AbilitySettings.lua")
+    local Schema = helper.load("Elmira/Core/Schema.lua")
+    for _, entry in ipairs(shippedPacks()) do
+      assert.same({}, Schema.abilityDefaultErrors(entry.data.spells), entry.class)
+    end
+  end)
+
+  -- The two AB2-D3 names. Asserted by NAME, not by count: "some ability ships a flash" would stay
+  -- green if the wrong one did.
+  it("ships the paladin's two screen-edge defaults, on and aimed", function()
+    local spells = helper.classPack("Paladin").spells
+    local exorcism = spells.EXORCISM.defaults
+    assert.is_true(exorcism.edge.enabled)
+    assert.equal("left", exorcism.edge.edge)
+    assert.is_string(exorcism.reason)
+    local storm = spells.DIVINE_STORM.defaults
+    assert.is_true(storm.edge.enabled)
+    assert.equal("right", storm.edge.edge)
+    assert.is_string(storm.reason)
+    -- ...and nothing else, so the list stays short enough to be worth looking at (ADR-0009).
+    local on = {}
+    for key, spell in pairs(spells) do
+      if spell.defaults and spell.defaults.edge and spell.defaults.edge.enabled then on[#on + 1] = key end
+    end
+    table.sort(on)
+    assert.same({ "DIVINE_STORM", "EXORCISM" }, on)
   end)
 
   -- Bonus sources name their set or soul by STRING and nothing dereferences the record at evaluation

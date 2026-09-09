@@ -525,6 +525,63 @@ function Schema.compile(build, ctx)
   return compiled, errors
 end
 
+-- ---------------------------------------------------------------- AB2-D3: per-ability defaults
+
+-- `pairs` has no order, and a list of problems that reshuffles between runs is a list nobody can
+-- diff. One helper for both loops below.
+local function sortedKeys(t)
+  local out = {}
+  for k in pairs(t) do if type(k) == "string" then out[#out + 1] = k end end
+  table.sort(out)
+  return out
+end
+
+-- Schema.abilityDefaultErrors(spells) -> { "EXORCISM: ...", ... }
+--
+-- AB2-D3: a class pack's spell entry may say how that ability should behave out of the box --
+-- `defaults = { reason = "Exorcism came off cooldown", edge = { enabled = true, edge = "left",
+-- color = { r = 0.9, g = 0.2, b = 0.2 } } }`. The channels and the fields inside them are
+-- Core/AbilitySettings' own DEFAULTS table, which is both the schema and the shipped value, so this
+-- check cannot drift from what `AbilitySettings.effective` will actually read back.
+--
+-- Reports rather than refuses. A default this rejects is already INERT (`effective` copies only
+-- declared fields), and taking a whole class's rotations away over a typo in a cue colour would be
+-- worse than the typo; Elmira.API says so in the log at registration time instead.
+function Schema.abilityDefaultErrors(spells)
+  local out = {}
+  local A = ns.AbilitySettings
+  if not (A and type(spells) == "table") then return out end
+  for _, key in ipairs(sortedKeys(spells)) do
+    local entry = spells[key]
+    local block = type(entry) == "table" and entry.defaults or nil
+    if block ~= nil and type(block) ~= "table" then
+      out[#out + 1] = key .. ": defaults must be a table, got " .. type(block)
+    elseif type(block) == "table" then
+      for _, name in ipairs(sortedKeys(block)) do
+        local value = block[name]
+        -- `reason` is the sentence the Abilities page's class-pack summary shows (AB1-D6) -- it
+        -- belongs to the ability, not to any one channel, which is why it sits beside them.
+        if name == "reason" then
+          if type(value) ~= "string" then
+            out[#out + 1] = key .. ": defaults.reason must be a string, got " .. type(value)
+          end
+        elseif not A.DEFAULTS[name] then
+          out[#out + 1] = key .. ": defaults names no such channel '" .. name .. "'"
+        elseif type(value) ~= "table" then
+          out[#out + 1] = key .. ": defaults." .. name .. " must be a table, got " .. type(value)
+        else
+          for _, field in ipairs(sortedKeys(value)) do
+            if A.DEFAULTS[name][field] == nil then
+              out[#out + 1] = key .. ": defaults." .. name .. " has no field '" .. field .. "'"
+            end
+          end
+        end
+      end
+    end
+  end
+  return out
+end
+
 -- Recurses through all/any/not exactly as compileCond does. Scanning only the top level of `when`
 -- would let `{"any", {"custom", fn}, {"buff", ...}}` export with the raw function still embedded —
 -- functions cannot serialize, so that is a broken export string, not a lost condition.

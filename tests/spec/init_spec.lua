@@ -763,14 +763,20 @@ describe("Core.Init", function()
       assert.is_true(pcall(function() NA:StartDisplay() end))
     end)
 
-    it("registers the queue renderer before the overlay renderer, only when both modules exist", function()
+    -- AB2-D1: the overlay is NOT a renderer any more -- a screen edge flashes on an ability event
+    -- (Display.abilityEvent), not on a diff of the queue it takes itself. Its frames are still
+    -- built here, up front, so the first flash of a fight does not pay for creating five textures.
+    it("registers the queue renderer and creates the overlay without registering it", function()
       NA:OnInitialize()
       NA:StartDisplay()
       local regs = {}
       for _, e in ipairs(order) do
         if e:match("^register:") then regs[#regs + 1] = e end
       end
-      assert.same({ "register:queue", "register:overlay" }, regs)
+      assert.same({ "register:queue" }, regs)
+      local created = false
+      for _, e in ipairs(order) do if e == "Overlay.Create" then created = true end end
+      assert.is_true(created, "the overlay's frames were never built")
     end)
 
     -- The Builder's live status column (ADR-0015 amendment). A renderer, not a timer: the moment
@@ -789,21 +795,20 @@ describe("Core.Init", function()
       for _, e in ipairs(order) do
         if e:match("^register:") then regs[#regs + 1] = e end
       end
-      assert.same({ "register:queue", "register:overlay", "register:builder" }, regs)
+      assert.same({ "register:queue", "register:builder" }, regs)
       -- Registered by REFERENCE, not by a name looked up later: the function the driver holds has
       -- to be the one that actually refreshes the panel.
       assert.equal(1, called)
     end)
 
-    it("registers only the queue when no Overlay module is present", function()
+    it("wires nothing overlay-shaped when no Overlay module is present", function()
       ns.Overlay = nil
       NA:OnInitialize()
       NA:StartDisplay()
-      local regs = {}
       for _, e in ipairs(order) do
-        if e:match("^register:") then regs[#regs + 1] = e end
+        assert.are_not.equal("Overlay.Create", e)
       end
-      assert.same({ "register:queue" }, regs)
+      assert.truthy(#order > 0, "the rest of the display was not wired either")
     end)
 
     it("does nothing at all, and does not error, when the Display module is absent", function()

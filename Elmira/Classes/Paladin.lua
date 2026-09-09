@@ -29,9 +29,28 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- (the cost table is numeric — see Schema's cost normalisation). state.powerCost() reads the real
     -- number from the client, which the probe showed is the authority anyway (docs/07 §9.3).
     JUDGEMENT           = { id = 20271,  src = "https://www.wowhead.com/classic/spell=20271", cooldown = 10 },
-    EXORCISM            = { id = 415073, src = "https://www.wowhead.com/classic/spell=415073", cost = { mana = 345 }, cooldown = 15, cdVolatile = true }, -- SoD; Art of War rune shortens CD
+    -- AB2-D3: `defaults` is what THIS PACK says an ability should do on screen out of the box, and
+    -- it is the only thing in this file that is not a fact about the game. Two abilities have one,
+    -- deliberately: these are the moments worth pulling the eye back from a boss, and a longer list
+    -- trains the player to ignore the screen edge (ADR-0009, amended 2026-09-09 — a pack may ship a
+    -- flash switched on, nothing else may). Every other spell in the rotation is served by the queue
+    -- strip and the bar glow. The player's own setting wins over any of this; `reason` is the
+    -- sentence the Abilities page shows under "What the class pack says".
+    --
+    -- Exorcism is the core button and its cooldown is rune-shortened, so the reset is the single
+    -- most valuable thing to notice while looking away.
+    EXORCISM            = { id = 415073, src = "https://www.wowhead.com/classic/spell=415073", cost = { mana = 345 }, cooldown = 15, cdVolatile = true, -- SoD; Art of War rune shortens CD
+                            defaults = { reason = "Exorcism came off cooldown",
+                                         edge = { enabled = true, edge = "left",
+                                                  color = { r = 0.9, g = 0.2, b = 0.2 } } } },
     CRUSADER_STRIKE     = { id = 407676, src = "https://www.wowhead.com/classic/spell=407676", cost = { mana = 0 }, cooldown = 6 }, -- ability, not teach 409914
-    DIVINE_STORM        = { id = 407778, src = "https://www.wowhead.com/classic/spell=407778", cooldown = 10 }, -- ability, not teach 409924; no `cost`, Wowhead gives "12% of base mana"
+    -- Worth a glance because it is the Holy Power spender: the rotation decides WHEN (three Holy
+    -- Power, with the set that makes it consume them) -- that condition is the rotation's rule, not
+    -- the flash's, so the flash simply follows the suggestion.
+    DIVINE_STORM        = { id = 407778, src = "https://www.wowhead.com/classic/spell=407778", cooldown = 10, -- ability, not teach 409924; no `cost`, Wowhead gives "12% of base mana"
+                            defaults = { reason = "Divine Storm at 3 Holy Power",
+                                         edge = { enabled = true, edge = "right",
+                                                  color = { r = 0.3, g = 0.6, b = 1.0 } } } },
     -- 429146 read from the live client via GetSpellInfo("Holy Wrath") on 2026-09-01 (docs/07 §9.6);
     -- 2812 was the dossier's rank-1 guide link. Fetch 429146 on Wowhead to satisfy hard rule 2.
     HOLY_WRATH          = { id = 429146, src = "https://www.wowhead.com/classic/spell=429146", cost = { mana = 805 }, cooldown = 60 },   -- rank max; max-rank id
@@ -507,30 +526,6 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- docs/research/seal-of-martyrdom-acquisition.md
     requires = { weapon = "2H", maxSpeed = 3.0, spells = { "SEAL_OF_MARTYRDOM" },
                  runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM", "RUNE_PURIFYING_POWER" } },
-    -- Suggested PERIPHERAL cues, not a colour table for every spell. The overlay is off by default and
-    -- opted into per cue (docs/01 "Overlay.lua", PRD F16); the wizard offers this list as "recommended
-    -- peripheral cues" with one-click enable and never turns any of it on by itself. Deliberately short:
-    -- these are the moments worth pulling the eye back from a boss, and a longer list trains the user to
-    -- ignore the screen edge. Every other spell in the rotation is served by the queue strip and the
-    -- bar glow, which is why Crusader Strike and Judgement are absent here.
-    visuals = {
-      cues = {
-        -- Exorcism is the core button and its cooldown is rune-shortened, so the reset is the single
-        -- most valuable thing to notice while looking away.
-        { event = "now_slot", spell = "EXORCISM", color = {0.9,0.2,0.2}, edge = "left",
-          reason = "Exorcism came off cooldown" },
-        -- Readiness event, not a now-slot change: the most expensive miss in the rotation, and it is
-        -- invisible until damage has already been lost. Also appears in the readiness row.
-        -- INERT UNTIL M5b: Overlay ships at M3, Core/Checks.lua at M5b. The wizard lists this as
-        -- unavailable until then rather than offering an opt-in that could never fire (ADR-0009).
-        { event = "check", key = "SEAL_DROPPED", color = {1.0,1.0,1.0}, edge = "bottom",
-          reason = "Seal dropped", peripheral = true },
-        -- Only meaningful with the T3.5 4-set, which is what makes Divine Storm consume Holy Power;
-        -- the wizard hides a cue whose gating bonus the character does not have.
-        { event = "now_slot", spell = "DIVINE_STORM", color = {0.3,0.6,1.0}, edge = "right",
-          requiresBonus = "HOLY_POWER_CONSUME", reason = "Divine Storm at 3 Holy Power" },
-      },
-    },
     entries = {
       ---------------------------------------------------------------- always
       { spell = "SEAL_OF_MARTYRDOM", when = { {"no_seal"} }, label = "Seal up" },
@@ -628,15 +623,6 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- is the shared slow-weapon floor; Wowhead gives Wrath-like no explicit speed range of its own.
     requires = { weapon = "2H", minSpeed = 3.0, spells = { "SEAL_OF_MARTYRDOM" },
                  runes = { "RUNE_ART_OF_WAR", "RUNE_CRUSADER_STRIKE", "RUNE_DIVINE_STORM", "RUNE_PURIFYING_POWER" } },
-    visuals = {
-      cues = {
-        -- The one moment worth a glance away: 3 Holy Power with the 4-set, Divine Storm to the top.
-        { event = "now_slot", spell = "DIVINE_STORM", color = {0.3,0.6,1.0}, edge = "right",
-          requiresBonus = "HOLY_POWER_CONSUME", reason = "Divine Storm at 3 Holy Power" },
-        { event = "check", key = "SEAL_DROPPED", color = {1.0,1.0,1.0}, edge = "bottom",
-          reason = "Seal dropped", peripheral = true },
-      },
-    },
     entries = {
       ---------------------------------------------------------------- always
       { spell = "SEAL_OF_MARTYRDOM", when = { {"no_seal"} }, label = "Seal up" },
@@ -703,15 +689,6 @@ ns.RegisterBuiltinPack("PALADIN", function()
     requires = { weapon = "1H", spells = { "SEAL_OF_MARTYRDOM" },
                  runes = { "RUNE_HAND_OF_RECKONING", "RUNE_MALLEABLE_PROTECTION", "RUNE_HAMMER_OF_THE_RIGHTEOUS",
                           "RUNE_SHIELD_OF_RIGHTEOUSNESS", "RUNE_AVENGERS_SHIELD", "RUNE_AEGIS" } },
-    visuals = {
-      cues = {
-        -- The one thing a tank must not let lapse; both guides open every list with it.
-        { event = "now_slot", spell = "HOLY_SHIELD", color = {1.0,0.85,0.2}, edge = "top",
-          reason = "Holy Shield is down" },
-        { event = "check", key = "SEAL_DROPPED", color = {1.0,1.0,1.0}, edge = "bottom",
-          reason = "Seal dropped", peripheral = true },
-      },
-    },
     entries = {
       ---------------------------------------------------------------- always up
       -- With Hand of Reckoning known, Righteous Fury "will remain active until cancelled", so this
@@ -776,14 +753,6 @@ ns.RegisterBuiltinPack("PALADIN", function()
     notes = "Theorycrafted for Phase 8 — no published endgame guide exists. Holy Shock and Exorcism on cooldown, Judgement of Righteousness as the seal's payload, Crusader Strike when runed. With the Holy T3.5 4-set, spend 3 Holy Power on Holy Shock or Divine Storm.",
     requires = { spells = { "HOLY_SHOCK" },
                  runes = { "RUNE_SHOCK_AND_AWE", "RUNE_CRUSADER_STRIKE", "RUNE_INFUSION_OF_LIGHT" } },
-    visuals = {
-      cues = {
-        { event = "now_slot", spell = "HOLY_SHOCK", color = {1.0,0.9,0.4}, edge = "left",
-          reason = "Holy Shock came off cooldown" },
-        { event = "check", key = "SEAL_DROPPED", color = {1.0,1.0,1.0}, edge = "bottom",
-          reason = "Seal dropped", peripheral = true },
-      },
-    },
     entries = {
       ---------------------------------------------------------------- always
       { spell = "SEAL_OF_RIGHTEOUSNESS", when = { {"no_seal"} }, label = "Seal up" },

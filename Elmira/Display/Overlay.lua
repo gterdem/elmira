@@ -1,26 +1,28 @@
--- Elmira/Display/Overlay.lua — peripheral cues (PRD F16, ADR-0009).
+-- Elmira/Display/Overlay.lua — the screen-edge flash (PRD F16, ADR-0009 as amended 2026-09-09).
 --
 -- This is NOT a third rendering of "what do I press". The queue strip and the bar glow already
 -- answer that for someone looking at the UI; the overlay exists for the moments they are not.
 --
 -- Everything here follows from that one idea:
---   * OFF by default, opted in PER CUE. There is no global "overlay on" switch, and an empty
---     `profile.overlay.cues` is a quiet install — a cue exists only because the user added it.
---   * A flare fires when the now-slot CHANGES TO an opted-in spell, never on re-evaluation. The
---     engine re-picks at up to 10 Hz, so a faithful mirror would strobe, and a strobing screen edge
---     is something people filter out within one raid night. A cue that has been habituated away is
---     worse than no cue, because the design still assumes it works.
---   * `event = "check"` cues need Core/Checks.lua (M5b) and are inert here. They are skipped
---     silently at render time and listed as unavailable by the options — never offered as an opt-in
---     that could not fire.
+--   * OFF by default and opted in PER ABILITY. There is no global "overlay on" switch and no
+--     inherited one either: All abilities cannot switch a screen edge on for everything, because a
+--     flash that fires on every suggestion is a strobe people filter out within one raid night.
+--   * A class pack MAY ship one ability's flash switched on (AB2-D3) -- the amendment. That is a
+--     statement about two abilities out of twenty, made by the people who wrote the rotation, not a
+--     global default; the player's own setting still wins over it.
+--   * It fires on EVENTS, not on a diff of its own. Core/Track decides when an ability became
+--     ready and Display/Driver decides when it became the suggestion; both arrive here as one call
+--     per edge, so the "did this change?" logic exists once for every channel instead of once here.
+--
+-- AB2-D1 replaced build-level `visuals.cues` with `Core/AbilitySettings`' `edge` channel: what
+-- flashes, on which edge, in which colour and for which of the two events is now a per-character
+-- setting on the ability, which is what made a cue configurable for an ability no pack ships.
 local ADDON, ns = ...
 ns = ns or _G.__ELM_NS or {}
 
 local Overlay = {}
 local frame, edges = nil, {}
-local lastNow                -- the previous now-slot spell, so we can detect "changed TO"
-local lastKey                -- the build the above was observed under; a switch invalidates it
-local lastFired = {}         -- cue id -> when it last flared, for `/elm debug cues`
+local lastFired = {}         -- ability key -> when it last flashed, for `/elm debug cues`
 
 -- The edges a flare can use. Named here rather than in Options because Overlay is what can actually
 -- draw them; Options only decides what to call them.
@@ -28,10 +30,6 @@ Overlay.EDGES = { "left", "right", "top", "bottom" }
 
 local MEDIA = "Interface\\AddOns\\Elmira\\media\\"
 local EDGE_THICKNESS = 96
-
-local function profile()
-  return (ns.db and ns.db.profile) or ns.DB.defaults.profile
-end
 
 -- One texture per screen edge. `flare_h` is opaque at its left edge and `flare_v` at its top, so the
 -- right and bottom edges reuse them flipped through SetTexCoord rather than shipping four files.
@@ -77,117 +75,6 @@ function Overlay.Create()
   return frame
 end
 
--- The cues this build suggests, as data. Builds SUGGEST; they never enable anything themselves
--- (ADR-0009) — the options surface these as one-click "recommended peripheral cues".
-function Overlay.availableCues()
-  local compiled = ns.Display and select(1, ns.Display.activeBuild())
-  local list = compiled and compiled.visuals and compiled.visuals.cues or {}
-  local out = {}
-  for i, cue in ipairs(list) do
-    local entry = { index = i, event = cue.event, spell = cue.spell, key = cue.key,
-                    color = cue.color, edge = cue.edge, reason = cue.reason,
-                    requiresBonus = cue.requiresBonus }
-    -- Two separate reasons a cue may be unofferable, and they are not the same thing: one waits on
-    -- a milestone, the other on the player's gear. Saying which is the difference between "not yet"
-    -- and "not for you".
-    if cue.event == "check" then
-      entry.unavailable = "needs readiness checks (M5b)"
-    elseif cue.requiresBonus then
-      local state = ns.API and ns.API.GetState()
-      local ok = state and state.bonus and state:bonus(cue.requiresBonus)
-      if not ok then entry.unavailable = "needs " .. cue.requiresBonus end
-    end
-    out[#out + 1] = entry
-  end
-  return out
-end
-
-local function cueID(cue)
-  return (cue.event or "?") .. ":" .. tostring(cue.spell or cue.key or cue.index)
-end
-
--- An edge Flare cannot draw makes the cue silently never appear -- the exact failure this module has
--- just been fixed for. The options dropdown cannot produce one, but a BUILD's cue definition can
--- (`cue.edge` is data a data pack author writes), and so can an opts.edge passed to SetEnabled.
-local function validEdge(v)
-  for _, e in ipairs(Overlay.EDGES) do if e == v then return true end end
-  return false -- mutants: equivalent — nil is falsy and every caller uses this only as a condition
-end
-
-function Overlay.isEnabled(cue)
-  local cues = profile().overlay and profile().overlay.cues or {}
-  local setting = cues[cueID(cue)]
-  return setting ~= nil and setting.enabled == true, setting
-end
-
-function Overlay.SetEnabled(cue, enabled, opts)
-  local p = profile()
-  p.overlay = p.overlay or { cues = {} }
-  p.overlay.cues = p.overlay.cues or {}
-  local id = cueID(cue)
-  -- A cue enabled while its spell is ALREADY the top suggestion -- the normal case, since you turn a
-  -- cue on during the fight that made you want it -- would otherwise count as "already shown" and
-  -- stay silent until the rotation moved off that spell and back. That reads as "the cue does not
-  -- work". This lives inside SetEnabled rather than at the call site because a caller that forgets it
-  -- produces a silent cue, which is exactly how the bug shipped.
-  -- Conditional on purpose: forgetting the now-slot unconditionally would also re-arm every OTHER
-  -- enabled cue, so toggling one cue in the options flashes a second, unrelated screen edge.
-  if cue.event == "now_slot" and cue.spell ~= nil and cue.spell == lastNow then
-    Overlay.Reset()
-  end
-  if not enabled then
-    p.overlay.cues[id] = nil          -- opting out removes it: absent means "never asked for"
-    return false
-  end
-  local setting = p.overlay.cues[id] or {}
-  setting.enabled = true
-  setting.color = (opts and opts.color) or setting.color or cue.color
-  -- Same validation as SetOption, because this is the path a bad edge actually arrives on: a build
-  -- shipping `edge = "middle"` would otherwise be stored verbatim and the cue would never fire.
-  -- Falling back to a drawable edge is better than a cue that is silently dead.
-  local edge = (opts and opts.edge) or setting.edge or cue.edge or "left"
-  setting.edge = validEdge(edge) and edge or "left"
-  setting.intensity = (opts and opts.intensity) or setting.intensity or 0.5
-  setting.sound = (opts and opts.sound) or setting.sound
-  p.overlay.cues[id] = setting
-  return true
-end
-
--- Per-cue appearance, once the cue is ON. Deliberately refuses to write for a cue that is off:
--- opting out DELETES the whole record (absent means "never asked for", ADR-0009), so storing a colour
--- for an off cue would resurrect it as a half-record that isEnabled() reports false for and the next
--- SetEnabled would overwrite anyway. The options screen greys these controls out to match.
-local SETTABLE = { color = true, edge = true, intensity = true, sound = true }
-
-function Overlay.SetOption(cue, key, value)
-  if not SETTABLE[key] then return false end
-  if key == "edge" and not validEdge(value) then return false end
-  local cues = profile().overlay and profile().overlay.cues
-  local setting = cues and cues[cueID(cue)]
-  if not setting then return false end
-  setting[key] = value
-  return true
-end
-
--- The stored value if the user has set one, otherwise what the BUILD suggested, otherwise the
--- shipped default. Three layers, because a cue the user has never customised must still show the
--- colour it will actually flare in rather than a blank swatch.
-function Overlay.GetOption(cue, key)
-  local _, setting = Overlay.isEnabled(cue)
-  if setting and setting[key] ~= nil then return setting[key] end
-  if key == "edge" then return cue.edge or "left" end
-  -- Flare falls back to Colors.HIGHLIGHT for a cue whose build names no colour, so returning nil
-  -- here would show a white swatch for a flare that is not white -- and the picker would then STORE
-  -- that white, silently overriding the fallback the moment anyone opened the colour control.
-  if key == "color" then
-    local c = ns.Colors and ns.Colors.HIGHLIGHT
-    return cue.color or (c and { c.r, c.g, c.b })
-  end
-  if key == "intensity" then return 0.5 end
-  -- Any other key has no default, and falling off the end says so. An explicit `return nil` here
-  -- would be an equivalent mutant: Lua returns nil either way, so no test could ever tell them apart.
-end
-
 function Overlay.Flare(edge, color, intensity, duration)
   Overlay.Create()
   local t = edges[edge or "left"]
@@ -202,98 +89,143 @@ function Overlay.Flare(edge, color, intensity, duration)
   return true
 end
 
--- Renderer. Fires only on a CHANGE of the now-slot, which is why `lastNow` is compared before
--- anything else happens: this function runs on every render, and the whole design rests on it doing
--- nothing the vast majority of the time.
--- The renderer contract is (queue, key, visible) since M3's visibility gating. This one works out
--- correctly on the hidden path either way — Driver passes a nil queue, which already means "clear" —
--- but naming `visible` here is deliberate: relying on nil-by-coincidence is how the next renderer
--- fires a screen flare at someone whose display is switched off.
-function Overlay.Render(queue, key, visible)
-  -- A build or profile switch means the previous now-slot was another rotation's suggestion. Carrying
-  -- it across swallows the first cue of the new build. The key is already an argument, so the module
-  -- can notice this itself rather than depending on someone remembering to call Reset(). Only a real
-  -- key counts: the hidden path passes nil, which is not a build change.
-  if key ~= nil and key ~= lastKey then
-    lastKey, lastNow = key, nil
-  end
+-- The two moments a screen edge can flash (AB2-D1). Deliberately NOT the five Core/Track knows
+-- about: `used`, `active` and `expiring` are what the Texture tab (AB3) is for, and a full-screen
+-- flash on every buff that ticks down is the strobe ADR-0009 exists to prevent. Named here because
+-- Overlay is what draws them; Options/Spells only decides what to call them.
+Overlay.EVENTS = { "suggested", "ready" }
 
-  local now = (visible ~= false) and queue and queue[1] and queue[1].spell or nil
-  if now == lastNow then return end
-  lastNow = now
-  if not now then return end
-
-  for _, cue in ipairs(Overlay.availableCues()) do
-    if cue.event == "now_slot" and cue.spell == now and not cue.unavailable then
-      local on, setting = Overlay.isEnabled(cue)
-      if on then
-        -- Guarding on `ns.now` existing would be theatre: Core/Slash.lua defines it unconditionally
-        -- and returns 0 when no state exists yet, which is the very shape of guard that once stamped
-        -- every recorder mark with 0. Test the VALUE instead. A real reading comes from GetTime() and
-        -- is never 0, so 0 means "no clock yet" -- and recording it would render as "0.0s ago", a
-        -- confident answer to "when did this last fire" that we do not have. Absent reads "never".
-        local firedAt = ns.now and ns.now() or 0
-        if firedAt > 0 then lastFired[cueID(cue)] = firedAt end
-        Overlay.Flare(setting.edge, setting.color, setting.intensity)
-        local sounds = profile().sounds
-        if sounds and sounds.enabled and setting.sound and PlaySoundFile then
-          PlaySoundFile(setting.sound)
-        end
-      end
-    end
-  end
+-- An edge Flare cannot draw makes the flash silently never appear. The options dropdown cannot
+-- produce one, but a CLASS PACK's `defaults = { edge = { edge = "middle" } }` can (AB2-D3), and so
+-- can an imported settings string -- both are data written somewhere else. Falling back to a
+-- drawable edge is better than a cue that is quietly dead.
+local function validEdge(v)
+  for _, e in ipairs(Overlay.EDGES) do if e == v then return true end end
+  return false -- mutants: equivalent — nil is falsy and every caller uses this only as a condition
 end
 
--- What `/elm debug cues` reports. The M4 test pass could not distinguish "the cue is not enabled",
--- "the cue cannot fire", "the now-slot never reached it" and "it fired and you missed it" — every
--- one of those looks like an empty screen edge. Data, not text, so a spec can assert on it.
+-- Settings store a colour the way every other Elmira colour is stored (`{ r =, g =, b = }`, the
+-- shape an AceConfig `color` control hands back); Flare takes the positional form its texture call
+-- needs. One conversion, here, rather than two shapes loose in the settings.
+local function rgb(c)
+  if type(c) ~= "table" then return nil end
+  return { c.r, c.g, c.b }
+end
+
+-- The resolved `edge` channel, with an edge this module can actually draw. Every caller has already
+-- established that Core/AbilitySettings is loaded -- a guard here would be one no test could reach.
+local function settings(key)
+  local e = ns.AbilitySettings.effective(key, "edge")
+  if not validEdge(e.edge) then e.edge = "left" end
+  return e
+end
+
+-- Overlay.Fire(key, event) -> did the screen flash
+--
+-- The whole renderer, now that the events come from elsewhere: Display/Driver calls this for every
+-- ability event, and this decides whether THIS ability's screen edge has anything to say about it.
+-- No now-slot diff of its own any more -- `suggested` already means "the now-slot became this",
+-- which is why the strobe guard the old renderer carried is not repeated here.
+function Overlay.Fire(key, event)
+  local A = ns.AbilitySettings
+  if not (A and A.channelOn(key, "edge")) then return false end
+  local e = settings(key)
+  -- `e[event]` is nil for `used`/`active`/`expiring`: the edge channel declares no field for them,
+  -- so an event this tab does not offer cannot flash by accident.
+  if not e[event] then return false end
+  -- Guarding on `ns.now` existing would be theatre: Core/Slash.lua defines it unconditionally and
+  -- returns 0 when no state exists yet, which is the very shape of guard that once stamped every
+  -- recorder mark with 0. Test the VALUE instead: a real reading comes from GetTime() and is never
+  -- 0, so 0 means "no clock yet" -- and recording it would render as "0.0s ago", a confident answer
+  -- to "when did this last flash" that we do not have. Absent reads "never".
+  local firedAt = ns.now and ns.now() or 0
+  if firedAt > 0 then lastFired[key] = firedAt end
+  return Overlay.Flare(e.edge, rgb(e.color), e.intensity)
+end
+
+-- Every ability this character could configure a flash for: the class pack's spells and the ones
+-- registered on this character alike (`Spells.merged`, pack wins), plus any key that has settings
+-- but no entry -- an imported row for a spell this client cannot resolve still has to be able to
+-- say why it is silent. Sorted, so `/elm debug cues` reads the same way twice in a row.
+-- Is this a key anything knows about: the class pack's, this character's registry, or a settings
+-- row imported for a spell the client cannot resolve yet.
+local function known(key)
+  local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
+  local spells = (ns.Spells and ns.Spells.merged and ns.Spells.merged(pack))
+    or (pack and pack.spells) or {}
+  if spells[key] then return true end
+  local A = ns.AbilitySettings
+  return (A and A.spellInfo(key)) ~= nil or (A and A.store() and A.store()[key]) ~= nil
+end
+
+local function abilityKeys()
+  local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
+  local spells = (ns.Spells and ns.Spells.merged and ns.Spells.merged(pack))
+    or (pack and pack.spells) or {}
+  local seen, out = {}, {}
+  for key in pairs(spells) do seen[key] = true; out[#out + 1] = key end
+  local A = ns.AbilitySettings
+  for _, key in ipairs((A and A.keys()) or {}) do
+    if not seen[key] then out[#out + 1] = key end
+  end
+  table.sort(out)
+  return out
+end
+
+-- What `/elm debug cues` reports. The M4 test pass could not distinguish "the flash is not switched
+-- on", "the event it fires on is unticked", "the rotation never suggested that spell" and "it fired
+-- and you missed it" — every one of those looks like an empty screen edge. Data, not text, so a
+-- spec can assert on it.
 function Overlay.describe()
-  local out = { nowSlot = lastNow, buildKey = lastKey, cues = {} }
-  for i, cue in ipairs(Overlay.availableCues()) do
-    local on, setting = Overlay.isEnabled(cue)
-    out.cues[i] = {
-      index = i, id = cueID(cue), event = cue.event, reason = cue.reason,
-      unavailable = cue.unavailable, enabled = on,
-      edge = (setting and setting.edge) or cue.edge or "left",
-      color = (setting and setting.color) or cue.color,
-      intensity = setting and setting.intensity,
-      firedAt = lastFired[cueID(cue)],
-      -- The one fact that separates "wired wrong" from "the rotation never asked for it".
-      matchesNow = cue.event == "now_slot" and cue.spell ~= nil and cue.spell == lastNow,
-    }
+  local A = ns.AbilitySettings
+  local out = { abilities = {} }
+  if not A then return out end
+  for _, key in ipairs(abilityKeys()) do
+    local e = settings(key)
+    local on = A.channelOn(key, "edge")
+    -- Only the abilities that have something to say: a paladin has forty keys and thirty-eight of
+    -- them are off, and a chat dump nobody reads is the same as no diagnostic at all.
+    if on or lastFired[key] then
+      local events = {}
+      for _, event in ipairs(Overlay.EVENTS) do
+        if e[event] then events[#events + 1] = event end
+      end
+      out.abilities[#out.abilities + 1] = {
+        key = key, enabled = on, edge = e.edge, color = e.color, intensity = e.intensity,
+        -- The pair that separates "wired wrong" from "you never triggered it": switched on, with
+        -- events ticked, and never fired.
+        events = events, firedAt = lastFired[key],
+      }
+    end
   end
   return out
 end
 
--- Manual test-fire, so a silent cue can be told apart from a silent RENDERER without a target dummy.
--- Deliberately ignores `enabled`: the question it answers is "can this edge flare at all", and
--- refusing to fire a disabled cue would make the diagnostic useless in exactly the case it is for.
-function Overlay.TestFire(index)
-  -- Not `tonumber(index) or 1`: defaulting garbage to the first cue answers a question the user did
-  -- not ask and attributes the flare to the wrong cue -- in the one command whose job is to stop
-  -- flares being misattributed.
-  local n = tonumber(index)
-  if not n then return false, "not a cue number: " .. tostring(index) end
-  local cue = Overlay.availableCues()[n]
-  if not cue then return false, "no cue " .. tostring(n) end
-  local _, setting = Overlay.isEnabled(cue)
-  Overlay.Flare((setting and setting.edge) or cue.edge,
-                (setting and setting.color) or cue.color,
-                setting and setting.intensity)
-  local label = cue.reason or cue.spell or cue.key or ("cue " .. tostring(cue.index))
-  -- An unavailable cue still flares -- the question this answers is "can this edge flare at all" --
-  -- but it must SAY so. The options list this cue greyed out as unable to fire (ADR-0009: check cues
-  -- stay inert until M5b), and a bare success line here would be read as that promise being wrong.
-  if cue.unavailable then
-    label = label .. " (" .. cue.unavailable .. " — will not fire in play)"
+-- Manual test-fire, so a silent flash can be told apart from a silent TRACKER without a target
+-- dummy — and the Preview button on the Screen-edge tab, which asks the same question.
+-- Deliberately ignores whether the channel is on: what it answers is "can this edge flash at all",
+-- and refusing a switched-off ability would make the diagnostic useless in the one case it is for.
+function Overlay.TestFire(key)
+  local A = ns.AbilitySettings
+  -- Not "default to the first ability", and not "flash whatever you typed" either: a flash
+  -- attributed to a key that names nothing answers a question the user did not ask, in the one
+  -- command whose job is to stop flashes being misattributed. The All abilities row is allowed
+  -- through by name -- it is what the Screen-edge tab's own Preview button previews.
+  if not (A and type(key) == "string" and key ~= "") then
+    return false, "not an ability key: " .. tostring(key)
+  end
+  if key ~= A.ALL and not known(key) then
+    return false, "no ability " .. key .. " on this character"
+  end
+  local e = settings(key)
+  Overlay.Flare(e.edge, rgb(e.color), e.intensity)
+  local label = (ns.Display and ns.Display.spellName and ns.Display.spellName(key)) or key
+  -- A switched-off ability still flashes -- that is the question this answers -- but it must SAY
+  -- so, or a bare success line reads as a promise that it will fire in play.
+  if not A.channelOn(key, "edge") then
+    label = label .. " (screen edge is off for it — it will not fire in play)"
   end
   return true, label
-end
-
--- A build or profile switch must not leave a stale "we were already showing this" memory, or the
--- first cue after the switch is silently swallowed.
-function Overlay.Reset()
-  lastNow, lastKey = nil, nil
 end
 
 ns.Overlay = Overlay

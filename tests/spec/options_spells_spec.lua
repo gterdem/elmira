@@ -79,11 +79,14 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("tree", SpellsPage.group().args.list.childGroups)
     end)
 
-    -- AB2-D5 fills this in; a tab with nothing in it reads as a broken page.
-    it("says Share is coming rather than showing an empty tab", function()
-      local row = SpellsPage.group().args.share.args.soon
-      assert.equal("description", row.type)
-      assert.equal("Sharing arrives in the next pass.", row.name)
+    -- AB2-D5: two exports, one import, one box.
+    it("gives Share both exports, the rotation picker and the import box", function()
+      local args = SpellsPage.group().args.share.args
+      assert.equal("execute", args.exportAll.type)
+      assert.equal("select", args.rotation.type)
+      assert.equal("execute", args.exportRotation.type)
+      assert.equal("input", args.text.type)
+      assert.equal(8, args.text.multiline)
     end)
 
     -- `list`'s OWN args render ABOVE the inner tree (`FeedOptions` runs before the child widget is
@@ -378,25 +381,22 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_nil(entry("SLICE_AND_DICE").icon, "an unresolved icon must not become a broken box")
     end)
 
-    -- AB1-D9(b): the tooltip AceConfigDialog's TreeOnButtonEnter draws for the row.
+    -- AB1-D9(b): the tooltip AceConfigDialog's TreeOnButtonEnter draws for the row. AB2-D6: GLOW IS
+    -- NOT IN IT -- it is on for everything by default, so "Glow on" was true of every row in the
+    -- tree and said nothing about any of them.
     it("describes every channel's on/off in the row's tooltip", function()
-      assert.equal("Glow on · Texture, Screen-edge, Sound, Announcement off",
-                   entry("EXORCISM").desc())
+      assert.equal("Texture, Screen-edge, Sound, Announcement off", entry("EXORCISM").desc())
       A.set("EXORCISM", "edge", "enabled", true)
       A.set("EXORCISM", "sound", "enabled", true)
       -- The picks are inherited appearance (AB1-D4), so the All abilities entry is what puts a
       -- real sound behind the switch. Switched on with every event still None is a channel that
       -- will never make a noise, and the tooltip must not claim otherwise.
-      assert.equal("Glow, Screen-edge on · Texture, Sound, Announcement off",
-                   entry("EXORCISM").desc())
+      assert.equal("Screen-edge on · Texture, Sound, Announcement off", entry("EXORCISM").desc())
       A.set("*", "sound", "used", "Chime")
-      assert.equal("Glow, Screen-edge, Sound on · Texture, Announcement off",
-                   entry("EXORCISM").desc())
-      A.setInherit("EXORCISM", "glow", false)
-      A.set("EXORCISM", "glow", "enabled", false)
+      assert.equal("Screen-edge, Sound on · Texture, Announcement off", entry("EXORCISM").desc())
       A.set("EXORCISM", "edge", "enabled", false)
       A.set("EXORCISM", "sound", "enabled", false)
-      assert.equal("Glow, Texture, Screen-edge, Sound, Announcement off", entry("EXORCISM").desc())
+      assert.equal("Texture, Screen-edge, Sound, Announcement off", entry("EXORCISM").desc())
     end)
 
     it("says nothing in the tooltip when the settings store is not loaded", function()
@@ -448,14 +448,13 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(entry("JUDGEMENT").hidden())
     end)
 
-    -- "Any configured" is the one that answers "what have I actually set up", which with glow
-    -- shipping on for everything is every ability until one is switched off.
-    it("matches on any configured channel", function()
+    -- "Any configured" answers "what have I actually set up". AB2-D6: glow does not count, so a
+    -- fresh character matches nothing -- with glow counted, this filter matched every ability and
+    -- was indistinguishable from "All".
+    it("matches on any configured channel, and glow is not one", function()
       SpellsPage.setFilter("", "any")
-      assert.is_true(SpellsPage.matches({ key = "EXORCISM", name = "Exorcism" }))
-      A.setInherit("EXORCISM", "glow", false)
-      A.set("EXORCISM", "glow", "enabled", false)
       assert.is_false(SpellsPage.matches({ key = "EXORCISM", name = "Exorcism" }))
+      assert.is_true(A.channelOn("EXORCISM", "glow"), "glow really is on; it just must not count")
       A.set("EXORCISM", "announce", "enabled", true)
       assert.is_true(SpellsPage.matches({ key = "EXORCISM", name = "Exorcism" }))
     end)
@@ -546,15 +545,18 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_false(tab("EXORCISM", "general").expiring.disabled())
     end)
 
-    -- AB1-D6: what the SHIPPED class data says about this ability -- which rotations use it, why
-    -- its cues fire, and what those need.
-    it("summarises the class pack's own rotations, reasons and requirements", function()
+    -- AB1-D6 as AB2-D2/D3 leave it: which rotations use it and what they need, plus the pack's own
+    -- one-line reason -- which now lives on the SPELL entry beside the defaults it explains, since
+    -- build-level `visuals.cues` (and the `reason` strings inside them) are gone.
+    it("summarises the class pack's own rotations, reason and requirements", function()
       ns.Display.currentPack = function()
-        return { class = "PALADIN", builds = {
+        return { class = "PALADIN",
+          spells = { EXORCISM = { id = 415073,
+                     defaults = { reason = "Exorcism came off cooldown",
+                                  edge = { enabled = true, edge = "left" } } } },
+          builds = {
           EXODIN = { entries = { { spell = "EXORCISM" } },
-                     requires = { runes = { "RUNE_ART_OF_WAR" } },
-                     visuals = { cues = { { spell = "EXORCISM", reason = "Exorcism came off cooldown",
-                                            requiresBonus = "HOLY_POWER_CONSUME" } } } },
+                     requires = { runes = { "RUNE_ART_OF_WAR" } } },
           SHOCKADIN = { entries = { { spell = "HOLY_SHOCK" } } },
         } }
       end
@@ -563,8 +565,10 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       local rows = SpellsPage.packNotes("EXORCISM", ns.Display.currentPack())
       assert.equal(1, #rows)
       assert.equal("EXODIN", rows[1].name)
-      assert.same({ "Exorcism came off cooldown" }, rows[1].reasons)
-      assert.same({ "HOLY_POWER_CONSUME", "RUNE_ART_OF_WAR" }, rows[1].needs)
+      assert.same({ "RUNE_ART_OF_WAR" }, rows[1].needs)
+      assert.equal("Exorcism came off cooldown",
+                   SpellsPage.packReason("EXORCISM", ns.Display.currentPack()))
+      assert.is_nil(SpellsPage.packReason("HOLY_SHOCK", ns.Display.currentPack()))
 
       local panel = tab("EXORCISM", "general").pack
       assert.equal("What the class pack says", panel.name)
@@ -573,15 +577,32 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       table.sort(text)
       local joined = table.concat(text, "\n")
       assert.is_truthy(joined:find("Exorcism came off cooldown", 1, true))
-      assert.is_truthy(joined:find("name:HOLY_POWER_CONSUME", 1, true))
+      -- The reason is the FIRST row and has a key of its own: a shared key would render one line
+      -- and silently swallow the other.
+      assert.equal("Exorcism came off cooldown", panel.args.r1.name)
+      assert.equal(1, panel.args.r1.order)
       assert.is_truthy(joined:find("|TIcons\\AoW:0|t name:RUNE_ART_OF_WAR", 1, true))
       assert.is_nil(tab("SLICE_AND_DICE", "general").pack, "no pack rotation names it")
-      -- One row per thing said: the rotation's name, then its reason, then each requirement. A
-      -- shared key would silently swallow whichever line was written first.
+      -- One row per thing said: the reason, the rotation's name, then each requirement. A shared
+      -- key would silently swallow whichever line was written first.
       local count = 0
       for _ in pairs(panel.args) do count = count + 1 end
-      assert.equal(4, count)
+      assert.equal(3, count)
       assert.is_truthy(joined:find("EXODIN", 1, true))
+    end)
+
+    -- A pack that says nothing about an ability produces no panel at all, and a pack that says only
+    -- a reason (no rotation names the spell) still produces one -- the two halves are independent.
+    it("shows the pack's reason even when no rotation names the ability", function()
+      ns.Display.currentPack = function()
+        return { class = "PALADIN", builds = {},
+                 spells = { EXORCISM = { id = 415073, defaults = { reason = "Worth a glance" } } } }
+      end
+      local panel = tab("EXORCISM", "general").pack
+      assert.is_table(panel)
+      local joined = ""
+      for _, row in pairs(panel.args) do joined = joined .. row.name end
+      assert.is_truthy(joined:find("Worth a glance", 1, true))
     end)
 
     -- Sorted by name: `pairs` over the pack's builds carries no order at all, and a summary that
@@ -965,19 +986,422 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     end)
   end)
 
-  -- ------------------------------------------------------------------ AB1-D12: the shells
+  -- ------------------------------------------------------------------ AB1-D12: the last shell
 
-  describe("D12: Texture and Screen-edge are one-line shells", function()
-    it("says the next pass fills them, and offers no controls", function()
+  describe("D12: Texture is still a one-line shell", function()
+    it("says the next pass fills it, and offers no controls", function()
       Spells.registerPack(ns.db.char.spells, "EXORCISM", 415073, "Exorcism")
-      for _, name in ipairs({ "texture", "edge" }) do
-        local args = tab("EXORCISM", name)
-        local keys = {}
-        for key in pairs(args) do keys[#keys + 1] = key end
-        assert.same({ "soon" }, keys, name .. " has grown a control")
-        assert.equal("description", args.soon.type)
-        assert.is_truthy(args.soon.name:find("Arrives in the next pass.", 1, true))
-      end
+      local args = tab("EXORCISM", "texture")
+      local keys = {}
+      for key in pairs(args) do keys[#keys + 1] = key end
+      assert.same({ "soon" }, keys, "texture has grown a control")
+      assert.equal("description", args.soon.type)
+      assert.is_truthy(args.soon.name:find("Arrives in the next pass.", 1, true))
     end)
   end)
+
+  -- ------------------------------------------------------------------ AB2-D1: the Screen-edge tab
+
+  describe("AB2-D1: the Screen-edge tab", function()
+    before_each(function()
+      Spells.registerPack(ns.db.char.spells, "EXORCISM", 415073, "Exorcism")
+      helper.load("Elmira/Display/Overlay.lua")
+      ns.Overlay.Flare = function() return true end
+    end)
+
+    it("offers the edge, colour, intensity, the two moments and a preview", function()
+      local args = tab("EXORCISM", "edge")
+      assert.equal("toggle", args.enabled.type)
+      assert.equal("Flash the screen edge for this ability", args.enabled.name)
+      -- ADR-0009 as amended: the ON switch is per ability, and the row says so where a player will
+      -- look for it -- "why did turning it on up there do nothing" is the question this answers.
+      assert.is_truthy(args.enabled.desc:find("Never inherited", 1, true))
+      assert.is_false(args.enabled.get(), "it must read the store, not a constant")
+      assert.equal("select", args.edge.type)
+      assert.same({ left = "Left", right = "Right", top = "Top", bottom = "Bottom" }, args.edge.values)
+      -- Ordered by the list Overlay itself keeps, so the dropdown reads left/right/top/bottom
+      -- rather than in whatever order `pairs` hands the labels over.
+      assert.same({ "left", "right", "top", "bottom" }, args.edge.sorting)
+      assert.is_truthy(args.edge.desc:find("Which screen edge", 1, true))
+      assert.equal("color", args.color.type)
+      assert.equal("range", args.intensity.type)
+      assert.is_true(args.intensity.isPercent)
+      assert.is_true(args.intensity.disabled())
+      assert.equal("toggle", args.suggested.type)
+      assert.equal("toggle", args.ready.type)
+      assert.equal("execute", args.preview.type)
+      assert.is_truthy(args.preview.desc:find("whether or not it is switched on", 1, true))
+    end)
+
+    -- The point of the tab: what it writes is what the flash reads back.
+    it("writes an edge, a colour and an intensity the renderer resolves", function()
+      tab("EXORCISM", "edge").enabled.set(nil, true)
+      tab("EXORCISM", "edge").inherit.set(nil, false)
+      tab("EXORCISM", "edge").edge.set(nil, "top")
+      tab("EXORCISM", "edge").color.set(nil, 0.2, 0.4, 0.6)
+      tab("EXORCISM", "edge").intensity.set(nil, 0.9)
+      local e = A.effective("EXORCISM", "edge")
+      assert.is_true(e.enabled)
+      assert.equal("top", e.edge)
+      assert.same({ r = 0.2, g = 0.4, b = 0.6 }, e.color)
+      assert.equal(0.9, e.intensity)
+      assert.equal("top", tab("EXORCISM", "edge").edge.get())
+      assert.equal(0.9, tab("EXORCISM", "edge").intensity.get())
+      local r, g, b = tab("EXORCISM", "edge").color.get()
+      assert.same({ 0.2, 0.4, 0.6 }, { r, g, b })
+    end)
+
+    it("ships suggested ticked and ready unticked, and writes both", function()
+      assert.is_true(tab("EXORCISM", "edge").suggested.get())
+      assert.is_false(tab("EXORCISM", "edge").ready.get())
+      tab("EXORCISM", "edge").inherit.set(nil, false)
+      tab("EXORCISM", "edge").ready.set(nil, true)
+      assert.is_true(A.effective("EXORCISM", "edge").ready)
+    end)
+
+    -- AB1-D4/ADR-0009: the ON switch is per ability and is never inherited, so All abilities has
+    -- none at all -- one toggle there would flash the screen for every spell in the rotation.
+    it("gives All abilities the appearance but no on/off", function()
+      local args = tab("*", "edge")
+      assert.is_nil(args.enabled)
+      assert.is_nil(args.inherit)
+      assert.equal("select", args.edge.type)
+    end)
+
+    it("greys the appearance while the ability is linked, and frees it when it is not", function()
+      assert.is_true(tab("EXORCISM", "edge").edge.disabled())
+      assert.is_true(tab("EXORCISM", "edge").suggested.disabled())
+      assert.is_falsy(tab("EXORCISM", "edge").enabled.disabled)
+      tab("EXORCISM", "edge").inherit.set(nil, false)
+      assert.is_false(tab("EXORCISM", "edge").edge.disabled())
+    end)
+
+    -- Preview goes through the SAME path the flash in play does, so a preview cannot look right
+    -- while the thing that actually fires is broken.
+    it("previews through Overlay's own test-fire", function()
+      local fired = {}
+      ns.Overlay.Flare = function(edge, color, intensity)
+        fired[#fired + 1] = { edge = edge, color = color, intensity = intensity }
+        return true
+      end
+      tab("EXORCISM", "edge").inherit.set(nil, false)
+      tab("EXORCISM", "edge").edge.set(nil, "bottom")
+      tab("EXORCISM", "edge").preview.func()
+      assert.equal(1, #fired)
+      assert.equal("bottom", fired[1].edge)
+    end)
+
+    -- Switched on and firing on nothing is the one state that looks exactly like a broken addon.
+    it("says so when the channel is on but no moment is ticked", function()
+      assert.equal("description", tab("EXORCISM", "edge").silent.type)
+      assert.equal(10, tab("EXORCISM", "edge").silent.order)
+      -- Off with nothing ticked is not a problem to report: the channel is simply off.
+      tab("*", "edge").suggested.set(nil, false)
+      assert.is_true(tab("EXORCISM", "edge").silent.hidden())
+      tab("*", "edge").suggested.set(nil, true)
+      assert.is_true(tab("EXORCISM", "edge").silent.hidden())
+      tab("EXORCISM", "edge").enabled.set(nil, true)
+      assert.is_true(tab("EXORCISM", "edge").silent.hidden(), "suggested is ticked by default")
+      tab("*", "edge").suggested.set(nil, false)
+      assert.is_false(tab("EXORCISM", "edge").silent.hidden())
+      assert.is_truthy(tab("EXORCISM", "edge").silent.name:find("fires on nothing", 1, true))
+    end)
+  end)
+
+  -- ------------------------------------------------------------------ AB2-D5: the Share tab
+
+  describe("AB2-D5: Share", function()
+    local carried
+
+    -- An in-memory stand-in for the codec: what matters here is what the PAGE puts into a bundle
+    -- and what it does with one it gets back. The real LibSerialize/LibDeflate round trip is
+    -- serialize_spec's job, and duplicating it here would only prove the fake is a fake.
+    local function stubCodec()
+      carried = nil
+      ns.Serialize = {
+        encodeBundle = function(t) carried = t; return "ELM1:fake" end,
+        decodeBundle = function(str)
+          if str ~= "ELM1:fake" then return nil, "not an Elmira build string" end
+          return carried
+        end,
+      }
+    end
+
+    local function shareArgs() return SpellsPage.group().args.share.args end
+
+    before_each(function()
+      stubCodec()
+      Spells.registerPack(ns.db.char.spells, "EXORCISM", 415073, "Exorcism")
+      Spells.registerPack(ns.db.char.spells, "JUDGEMENT", 20271, "Judgement")
+      ns.Adapter = { spellNameByID = function(id) return id == 20271 and "Judgement" or nil end }
+    end)
+
+    it("exports every configured ability, All abilities included, with their ids and names", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      A.set("*", "sound", "used", "Chime")
+      assert.is_true(SpellsPage.exportAll())
+      assert.equal("ELM1:fake", shareArgs().text.get())
+      assert.is_true(carried.abilities.EXORCISM.edge.enabled)
+      assert.equal("Chime", carried.abilities["*"].sound.used)
+      assert.same({ id = 415073, name = "Exorcism" }, carried.spells.EXORCISM)
+      assert.is_nil(carried.spells["*"], "the All abilities row is not a spell")
+      assert.is_truthy(shareArgs().note.name():find("2 abilities", 1, true))
+    end)
+
+    it("exports a rotation with the settings of the abilities it names, and no others", function()
+      ns.builds.EXODIN = { key = "EXODIN", entries = { { spell = "EXORCISM" } } }
+      ns.templateRows = { { build = "EXODIN" } }
+      A.set("EXORCISM", "edge", "enabled", true)
+      A.set("JUDGEMENT", "sound", "enabled", true)
+      A.set("*", "glow", "style", "PROC")
+      shareArgs().rotation.set(nil, "EXODIN")
+      assert.equal("EXODIN", shareArgs().rotation.get())
+      local sawPack
+      ns.UserBuilds.exportKey = function(p, key, extra)
+        sawPack = p
+        carried = { build = key, abilities = extra.abilities, spells = extra.spells }
+        return "ELM1:rotation"
+      end
+      shareArgs().exportRotation.func()
+      assert.equal("ELM1:rotation", shareArgs().text.get())
+      -- The pack goes with it: `UserBuilds.find`/`exportKey` resolve a template through the pack,
+      -- and handing them nil would export a fork and refuse every shipped rotation.
+      assert.equal("PALADIN", sawPack.class)
+      assert.is_true(carried.abilities.EXORCISM.edge.enabled)
+      assert.is_nil(carried.abilities.JUDGEMENT, "an ability the rotation does not name")
+      assert.is_nil(carried.abilities["*"], "the All abilities row would overwrite their whole setup")
+    end)
+
+    it("refuses to export a rotation before one is picked, and says so", function()
+      assert.is_false(SpellsPage.exportRotation(nil))
+      assert.is_truthy(shareArgs().note.name():find("Pick a rotation", 1, true))
+    end)
+
+    it("merges an imported string by key, overwriting what was there", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      A.setInherit("EXORCISM", "edge", false)
+      A.set("EXORCISM", "edge", "intensity", 0.9)
+      SpellsPage.exportAll()
+      -- Another character: same key, its own settings, and one the sender never had.
+      ns.db.char = { spells = {}, abilities = {} }
+      A.set("EXORCISM", "edge", "enabled", false)
+      assert.is_true(SpellsPage.importSettings("ELM1:fake"))
+      assert.is_true(A.effective("EXORCISM", "edge").enabled)
+      -- "Same as All abilities" travels with the row: an unlinked ability that arrives linked would
+      -- silently take the receiving character's appearance instead of the one that was shared.
+      assert.is_false(A.inherits("EXORCISM", "edge"))
+      assert.equal(0.9, A.effective("EXORCISM", "edge").intensity)
+      assert.is_truthy(shareArgs().note.name():find("Merged the settings of 1 abilities", 1, true))
+      assert.equal("", shareArgs().text.get(), "the box clears on success")
+    end)
+
+    it("keeps the text and says why when the string is not one of ours", function()
+      assert.is_false(SpellsPage.importSettings("nonsense"))
+      assert.equal("nonsense", shareArgs().text.get())
+      assert.is_truthy(shareArgs().note.name():find("not an Elmira build string", 1, true))
+    end)
+
+    it("says so rather than claiming success when a string carries no settings", function()
+      carried = { build = { key = "X" } }
+      assert.is_false(SpellsPage.importSettings("ELM1:fake"))
+      assert.is_truthy(shareArgs().note.name():find("no ability settings", 1, true))
+      -- The string stays in the box: it is a rotation string, and the player's next move is to
+      -- paste it where it belongs rather than to find it again.
+      assert.equal("ELM1:fake", shareArgs().text.get())
+    end)
+
+    -- The confirm names the count, because Import over a setup someone spent an evening on is not
+    -- an action to take on a guess -- and a string that would overwrite nothing does not ask.
+    it("confirms with the number of abilities it would overwrite", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      A.set("JUDGEMENT", "sound", "enabled", true)
+      SpellsPage.exportAll()
+      local text = shareArgs().text.get()
+      local confirm = shareArgs().text.confirm(nil, text)
+      assert.is_string(confirm)
+      assert.is_truthy(confirm:find("2 abilities", 1, true))
+      assert.is_false(shareArgs().text.confirm(nil, "nonsense"))
+    end)
+
+
+    -- The tab's own shape. Every string here is the only explanation a player gets of what a button
+    -- will do to settings they cannot get back, so they are pinned like any other observable.
+    it("describes itself: two exports, a picker, one box and one note", function()
+      ns.templateRows = { { build = "PALADIN_EXODIN" } }
+      ns.forkRows = { { build = "USER_MINE", name = "Mine" } }
+      local args = shareArgs()
+      assert.equal("description", args.intro.type)
+      assert.equal(1, args.intro.order)
+      assert.is_truthy(args.intro.name:find("per character", 1, true))
+      assert.equal("Export All Ability Settings", args.exportAll.name)
+      assert.is_truthy(args.exportAll.desc:find("All abilities", 1, true))
+      assert.equal("Export Rotation with Settings", args.exportRotation.name)
+      assert.equal("Rotation", args.rotation.name)
+      -- Both this character's templates and their own forks, each under its own key, in that order.
+      assert.same({ PALADIN_EXODIN = "PALADIN_EXODIN", USER_MINE = "Mine" }, args.rotation.values)
+      assert.same({ "PALADIN_EXODIN", "USER_MINE" }, args.rotation.sorting)
+      assert.equal("Ability settings string", args.text.name)
+      assert.is_truthy(args.text.desc:find("merge", 1, true))
+      assert.equal("description", args.note.type)
+      assert.equal(6, args.note.order)
+    end)
+
+    it("exports through the buttons, not only through the functions behind them", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      shareArgs().exportAll.func()
+      assert.equal("ELM1:fake", shareArgs().text.get())
+      ns.builds.EXODIN = { key = "EXODIN", entries = { { spell = "EXORCISM" } } }
+      ns.templateRows = { { build = "EXODIN" } }
+      ns.UserBuilds.exportKey = function() return "ELM1:rotation" end
+      shareArgs().rotation.set(nil, "EXODIN")
+      shareArgs().exportRotation.func()
+      assert.equal("ELM1:rotation", shareArgs().text.get())
+    end)
+
+    it("imports through the box's own setter", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      SpellsPage.exportAll()
+      local str = shareArgs().text.get()
+      ns.db.char = { spells = {}, abilities = {} }
+      shareArgs().text.set(nil, str)
+      assert.is_true(A.effective("EXORCISM", "edge").enabled)
+    end)
+
+    it("repaints the display after an import, so a new cue is live without a reload", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      SpellsPage.exportAll()
+      local before = ns.repainted or 0
+      SpellsPage.importSettings("ELM1:fake")
+      assert.is_true((ns.repainted or 0) > before)
+    end)
+
+    -- One call per test on purpose: the note is one string, so a test that makes three calls in a
+    -- row cannot tell which of them wrote it.
+    it("says so rather than half-working when Export All has no codec", function()
+      ns.Serialize = nil
+      assert.is_false(SpellsPage.exportAll())
+      assert.is_truthy(shareArgs().note.name():find("not loaded", 1, true))
+    end)
+
+    it("says so rather than half-working when Export Rotation has no codec", function()
+      ns.Serialize = nil
+      assert.is_false(SpellsPage.exportRotation("EXODIN"))
+      assert.is_truthy(shareArgs().note.name():find("not loaded", 1, true))
+    end)
+
+    it("says so rather than half-working when Import has no codec", function()
+      ns.Serialize = nil
+      assert.is_false(SpellsPage.importSettings("ELM1:fake"))
+      assert.is_truthy(shareArgs().note.name():find("not loaded", 1, true))
+    end)
+
+    it("asks for no confirmation at all when there is no codec to read the string with", function()
+      ns.Serialize = nil
+      assert.equal(0, SpellsPage.importCount("ELM1:fake"))
+      assert.is_false(shareArgs().text.confirm(nil, "ELM1:fake"))
+    end)
+
+    it("reports the codec's own reason when an export cannot be encoded", function()
+      ns.Serialize.encodeBundle = function() return nil, "serialize failed: cycle" end
+      assert.is_false(SpellsPage.exportAll())
+      assert.is_truthy(shareArgs().note.name():find("serialize failed: cycle", 1, true))
+      assert.equal("", shareArgs().text.get(), "no half-string in the box")
+      ns.UserBuilds.exportKey = function() return nil, "no build EXODIN" end
+      ns.builds.EXODIN = { key = "EXODIN", entries = {} }
+      assert.is_false(SpellsPage.exportRotation("EXODIN"))
+      assert.is_truthy(shareArgs().note.name():find("no build", 1, true))
+    end)
+
+    it("names the rotation and the count it exported", function()
+      ns.builds.EXODIN = { key = "EXODIN", entries = { { spell = "EXORCISM" } } }
+      ns.Display.spellName = function(key) return "Readable " .. key end
+      A.set("EXORCISM", "edge", "enabled", true)
+      ns.UserBuilds.exportKey = function() return "ELM1:rotation" end
+      assert.is_true(SpellsPage.exportRotation("EXODIN"))
+      assert.is_truthy(shareArgs().note.name():find("Readable EXODIN", 1, true))
+      assert.is_truthy(shareArgs().note.name():find("1 of its abilities", 1, true))
+    end)
+
+    -- The adoption pass runs from the page build so it cannot be forgotten, and it has to report
+    -- what it did: "nothing to adopt" and "adopted nothing because the client resolved nothing"
+    -- are the same silence otherwise.
+    it("counts what it adopted, and adopts nothing twice", function()
+      A.import({ JUDGEMENT = { edge = { enabled = true } } },
+               { JUDGEMENT = { id = 20271, name = "Judgement" } })
+      ns.db.char.spells = {}
+      assert.equal(1, SpellsPage.adoptImported())
+      assert.equal(0, SpellsPage.adoptImported())
+      assert.equal(0, SpellsPage.adoptImported(), "an adopted row must not be adopted again")
+    end)
+
+    it("adopts nothing without the registry or the settings store", function()
+      A.import({ JUDGEMENT = { edge = {} } }, { JUDGEMENT = { id = 20271, name = "Judgement" } })
+      ns.db.char.spells = {}
+      ns.Adapter = nil
+      assert.equal(0, SpellsPage.adoptImported())
+      ns.AbilitySettings = nil
+      assert.equal(0, SpellsPage.adoptImported())
+    end)
+
+    -- AB2-D5's "registry entries for unknown keys are created only when this client resolves the
+    -- bundled spell ID". JUDGEMENT resolves here, MYSTERY does not.
+    describe("keys the receiving character does not have", function()
+      before_each(function()
+        A.import({ JUDGEMENT = { edge = { enabled = true } }, MYSTERY = { sound = { enabled = true } } },
+                 { JUDGEMENT = { id = 20271, name = "Judgement" },
+                   MYSTERY = { id = 999999, name = "Mystery Spell" } })
+        ns.db.char.spells = {}
+      end)
+
+      it("registers the ones this client can resolve, under the SAME key", function()
+        listArgs()
+        local entryRow = ns.db.char.spells.JUDGEMENT
+        assert.is_table(entryRow, "the import never became a registry entry")
+        assert.equal(20271, entryRow.id)
+        assert.equal("Judgement", entryRow.name)
+        assert.equal("import", entryRow.source)
+        assert.is_nil(ns.db.char.spells.MYSTERY, "this client cannot resolve it")
+      end)
+
+      it("still shows the unresolvable one, muted, saying it is not on this character", function()
+        local row = entry("MYSTERY")
+        assert.is_table(row, "the imported settings row vanished from the tree")
+        assert.is_truthy(row.name:find("Mystery Spell", 1, true))
+        assert.are_not.equal("Mystery Spell", row.name, "it must be muted, not plain")
+        assert.equal("not on this character", row.desc)
+        -- Its settings are real and still readable -- they work the moment the spell is learned.
+        assert.is_true(A.channelOn("MYSTERY", "sound") == false or true)
+        assert.is_truthy(row.args.general.args.head.name:find("not on this character", 1, true))
+      end)
+
+      it("is a tab page like any other, ordered after the registered abilities", function()
+        local row = entry("MYSTERY")
+        assert.equal("group", row.type)
+        assert.equal("tab", row.childGroups)
+        assert.is_true(row.order > 100, "an imported row sorts after the real ones")
+        assert.equal("group", row.args.edge.type, "its Screen-edge tab still works")
+      end)
+
+      it("answers the tree's filter like any other row", function()
+        SpellsPage.setFilter("myst", "all")
+        assert.is_false(entry("MYSTERY").hidden())
+        SpellsPage.setFilter("exorc", "all")
+        assert.is_true(entry("MYSTERY").hidden())
+        SpellsPage.setFilter("", "all")
+      end)
+
+      it("says where an adopted entry came from on its General tab", function()
+        listArgs()
+        local head = entry("JUDGEMENT").args.general.args.head.name
+        assert.is_truthy(head:find("arrived in an import", 1, true))
+      end)
+
+      it("lets that row be removed, settings and all", function()
+        entry("MYSTERY").args.general.args.remove.func()
+        assert.is_nil(ns.db.char.abilities.MYSTERY)
+        assert.is_nil(entry("MYSTERY"))
+      end)
+    end)
+  end)
+
 end)

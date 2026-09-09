@@ -12,11 +12,11 @@ local helper = require("tests.helper")
 -- shape this project keeps shipping: a covered function with an uncovered call site. Every test
 -- below was confirmed to fail against a deliberately broken Options.lua before being kept (see the
 -- task report for the list of mutations tried).
-describe("Options (overlay/peripheral cues)", function()
+describe("Options (the settings pages)", function()
   local Options, ns
 
-  -- Loads Options.lua fresh with the real Overlay.lua underneath it (so isEnabled/SetEnabled are
-  -- the real logic under test, not a mock of themselves) and the real Colors.lua (Options.table()
+  -- Loads Options.lua fresh with the real Overlay.lua underneath it (nothing on these pages calls
+  -- into it any more since AB2-D1, and this is what proves it) and the real Colors.lua (Options.table()
   -- calls ns.Colors.wrap(...) at build time). ns.L is stubbed with the same identity fallback
   -- Core/Slash.lua and Core/API.lua install for real, so L["some string"] just returns the string.
   before_each(function()
@@ -512,14 +512,12 @@ describe("Options (overlay/peripheral cues)", function()
       end
     end
     walk(Options.table(), "Elmira")
-    -- Twice, because whole sections are built from the ACTIVE BUILD and the empty-build panel is a
-    -- different set of rows: the peripheral-cue page is a single "nothing suggests one" line until
-    -- a build suggests a cue, and then it is a heading and a group per cue.
+    -- Twice, because whole sections are built from the ACTIVE BUILD and the no-build panel is a
+    -- different set of rows.
     ns.Display.activeBuild = function()
-      return { visuals = { cues = { { event = "now_slot", spell = "EXORCISM",
-                                      reason = "Exorcism up", edge = "left" } } } }
+      return { entries = { { spell = "EXORCISM", index = 1 } } }, "PALADIN_EXODIN", "pinned"
     end
-    walk(Options.table(), "Elmira(with cues)")
+    walk(Options.table(), "Elmira(with an active build)")
   end)
 
   -- ADR-0015 §3 makes the bar glow the single attention signal, so it gets the range of control
@@ -1455,6 +1453,33 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal("", box().note.name())
     end)
 
+    -- AB2-D5: a rotation string may carry the settings of the abilities it names. They are applied
+    -- by Core/UserBuilds at the one place a string is accepted; this line is what SAYS so --
+    -- settings that arrived silently and overwrote what the player had are the worst surprise
+    -- there is, and settings that did not arrive look identical to ones that did.
+    it("says how many ability settings came with the rotation, and nothing when none did", function()
+      ns.Display.currentPack = function() return { class = "PALADIN" } end
+      ns.UserBuilds = { importString = function() return "USER_X", 3 end }
+      Options.importText("ELM1:withsettings")
+      assert.truthy(box().note.name():find("USER_X", 1, true))
+      assert.truthy(box().note.name():find("3 abilities", 1, true))
+      ns.UserBuilds = { importString = function() return "USER_Y", 0 end }
+      Options.importText("ELM1:plain")
+      assert.is_falsy(box().note.name():find("abilities", 1, true))
+    end)
+
+    -- The Rotations Share tab's Export button reports through the same one-line note (AB2-D5), and
+    -- `setExchangeText` deliberately CLEARS that note -- a stale "Import failed" under a freshly
+    -- exported string would be read as a failure to export.
+    it("carries a note the exporter writes, and clears it when a new string is placed", function()
+      Options.noteExchange("Exported PALADIN_EXODIN.")
+      assert.equal("Exported PALADIN_EXODIN.", Options.exchangeNote())
+      Options.setExchangeText("ELM1:new")
+      assert.equal("", Options.exchangeNote())
+      Options.noteExchange(nil)
+      assert.equal("", Options.exchangeNote())
+    end)
+
     it("keeps the text and shows the reason when the import fails, or when there is no pack", function()
       ns.Display.currentPack = function() return { class = "PALADIN" } end
       ns.UserBuilds = { importString = function() return nil, "corrupted string" end }
@@ -1467,376 +1492,34 @@ describe("Options (overlay/peripheral cues)", function()
     end)
   end)
 
-  -- Cue fixtures. `cueA` is the ordinary fireable case (event = "now_slot"); `cueB` is the
-  -- event = "check" case that Overlay.availableCues() always marks unavailable until M5b
-  -- (ADR-0009) — the wrong-soul-shaped case for this file, i.e. "looks like a cue, cannot fire".
-  local function cueA()
-    return { event = "now_slot", spell = "EXORCISM", reason = "Exorcism up", edge = "left",
-             color = { 1, 1, 1 } }
-  end
-  local function cueB()
-    return { event = "check", key = "SEAL_DROPPED", reason = "Seal dropped" }
-  end
-
-  local function stubCues(list)
-    ns.Display.activeBuild = function() return { visuals = { cues = list } } end
-  end
-
-  -- Rebuilds Options.table() (overlayGroup() runs at build time, so a fresh call is needed after
-  -- changing which cues the active build suggests) and returns just the overlay group's args.
-  local function overlayArgs()
-    return Options.table().args.notifications.args.overlay.args
-  end
-
-  -- An AVAILABLE cue renders as an inline group (toggle + colour + edge + intensity); an unavailable
-  -- one stays a single disabled toggle, so those tests still read args.cueN directly.
-  local function cueRow(n)
-    return overlayArgs()["cue" .. (n or 1)].args
-  end
-  local function enabledToggle(n) return cueRow(n).enabled end
-
-  -- Counts calls to ns.Display.refresh() across the test, restoring nothing (each test gets a
-  -- fresh ns from before_each).
-  local function countRefreshCalls()
-    local n = 0
-    ns.Display.refresh = function() n = n + 1 end
-    return function() return n end
-  end
-
-  local function countFlareCalls()
-    local n = 0
-    ns.Overlay.Flare = function() n = n + 1; return true end
-    return function() return n end
-  end
-
-  -- Every existing preview assertion below only ever counted Flare() calls, so `preview()` could be
-  -- reduced to `ns.Overlay.Flare()` -- no arguments at all -- and the count-only assertions would
-  -- stay green: Flare() defaults nils to the left edge and Colors.HIGHLIGHT, so the CHANGELOG's
-  -- promise that each change "flares once as you make it" in the CHOSEN colour/edge/intensity could
-  -- silently break. This records the (edge, color, intensity) triple of every call so tests can
-  -- assert on what preview() actually told Flare to draw.
-  local function recordFlareCalls()
-    local calls = {}
-    ns.Overlay.Flare = function(edge, color, intensity)
-      calls[#calls + 1] = { edge = edge, color = color, intensity = intensity }
-      return true
-    end
-    return calls
-  end
-
-  describe("an available cue's row", function()
-    it("calls ns.Display.refresh() when ticked -- regression guard for the audit finding", function()
-      stubCues{ cueA() }
-      local refreshCalls = countRefreshCalls()
-      local row = enabledToggle()
-      row.set(nil, true)
-      assert.equal(1, refreshCalls())
+  -- AB2-D1: the Peripheral cues page is gone. A screen flash belongs to an ability now
+  -- (Abilities > the ability > Screen-edge), and the per-cue toggles/colour/edge/intensity controls
+  -- that used to live here -- with the whole `Overlay.SetEnabled`/`SetOption`/`GetOption` surface
+  -- they drove -- went with them. What is left is a signpost, so someone who knew the page finds
+  -- where it went instead of a page that is silently missing; AB4 removes the node itself.
+  describe("Peripheral cues (AB2-D1: moved to the ability)", function()
+    it("is one line saying where the controls went, with no cue rows of its own", function()
+      local args = Options.table().args.notifications.args.overlay.args
+      local keys = {}
+      for key in pairs(args) do keys[#keys + 1] = key end
+      assert.same({ "moved" }, keys)
+      assert.equal("description", args.moved.type)
+      assert.truthy(args.moved.name:find("Screen-edge", 1, true))
+      assert.truthy(args.moved.name:find("Abilities", 1, true))
+      -- ...and says what the page over there actually does, including the one thing a class pack is
+      -- allowed to do (AB2-D3), so the signpost answers the question rather than just pointing.
+      assert.truthy(args.moved.name:find("picks the edge, the colour and when it fires", 1, true))
+      assert.truthy(args.moved.name:find("class pack", 1, true))
     end)
 
-    it("calls ns.Display.refresh() when unticked too", function()
-      stubCues{ cueA() }
-      local row = enabledToggle()
-      row.set(nil, true)
-      local refreshCalls = countRefreshCalls()
-      row.set(nil, false)
-      assert.equal(1, refreshCalls())
-    end)
-
-    it("calls Overlay.SetEnabled(cue, true) when ticked, and Overlay.SetEnabled(cue, false) when unticked", function()
-      stubCues{ cueA() }
-      local calls = {}
-      local realSetEnabled = ns.Overlay.SetEnabled
-      ns.Overlay.SetEnabled = function(cue, v, opts)
-        calls[#calls + 1] = v
-        return realSetEnabled(cue, v, opts)
-      end
-      local row = enabledToggle()
-      row.set(nil, true)
-      row.set(nil, false)
-      assert.same({ true, false }, calls)
-    end)
-
-    it("fires the one-shot preview flare on enable", function()
-      stubCues{ cueA() }
-      local flareCalls = countFlareCalls()
-      local row = enabledToggle()
-      row.set(nil, true)
-      assert.equal(1, flareCalls())
-    end)
-
-    it("the preview flare on enable is called with the cue's own edge/colour/intensity, not blank defaults", function()
-      stubCues{ cueA() }
-      local calls = recordFlareCalls()
-      local row = enabledToggle()
-      row.set(nil, true)
-      assert.equal(1, #calls)
-      assert.equal("left", calls[1].edge)
-      assert.same({1, 1, 1}, calls[1].color)
-      assert.equal(0.5, calls[1].intensity)
-    end)
-
-    it("does NOT flare on disable", function()
-      stubCues{ cueA() }
-      local row = enabledToggle()
-      row.set(nil, true)
-      local flareCalls = countFlareCalls()
-      row.set(nil, false)
-      assert.equal(0, flareCalls())
-    end)
-
-    it("get() reflects Overlay.isEnabled()", function()
-      stubCues{ cueA() }
-      local row = enabledToggle()
-      assert.is_false(row.get())
-      row.set(nil, true)
-      assert.is_true(row.get())
-      row.set(nil, false)
-      assert.is_false(row.get())
-    end)
-  end)
-
-  describe("an available cue's row shape", function()
-    it("is an inline group named for the cue, not a bare toggle", function()
-      stubCues{ cueA() }
-      local row = overlayArgs().cue1
-      assert.equal("group", row.type)
-      assert.is_true(row.inline)
-      assert.equal("Exorcism up", row.name)
-    end)
-
-    it("the enabled toggle carries its own widget type, name and the cue's reason as its description", function()
-      stubCues{ cueA() }
-      local row = enabledToggle()
-      assert.equal("toggle", row.type)
-      assert.equal("Enabled", row.name)
-      assert.equal("Exorcism up", row.desc)
-    end)
-  end)
-
-  describe("an available cue's appearance controls (colour/edge/intensity)", function()
-    it("carry the widget type AceConfig needs to render them", function()
-      stubCues{ cueA() }
-      local row = cueRow()
-      assert.equal("color", row.color.type)
-      assert.equal("select", row.edge.type)
-      assert.equal("range", row.intensity.type)
-    end)
-
-    it("are disabled while the cue is off, and enabled once it is turned on", function()
-      stubCues{ cueA() }
-      local row = cueRow()
-      assert.is_true(row.color.disabled())
-      assert.is_true(row.edge.disabled())
-      assert.is_true(row.intensity.disabled())
-
-      enabledToggle().set(nil, true)
-      row = cueRow()
-      assert.is_false(row.color.disabled())
-      assert.is_false(row.edge.disabled())
-      assert.is_false(row.intensity.disabled())
-    end)
-
-    it("the colour widget's get returns r, g, b as three separate values", function()
-      stubCues{ cueA() }
-      local r, g, b = cueRow().color.get()
-      assert.same({1, 1, 1}, {r, g, b})
-    end)
-
-    it("the colour widget's set stores {r,g,b} and fires exactly one preview flare", function()
-      stubCues{ cueA() }
-      enabledToggle().set(nil, true)
-      local flareCalls = countFlareCalls()
-      cueRow().color.set(nil, 0.1, 0.2, 0.3)
-      assert.equal(1, flareCalls())
-      local r, g, b = cueRow().color.get()
-      assert.same({0.1, 0.2, 0.3}, {r, g, b})
-    end)
-
-    it("the colour widget's preview flare is called WITH the newly chosen colour, not a blank default", function()
-      stubCues{ cueA() }
-      enabledToggle().set(nil, true)
-      local calls = recordFlareCalls()
-      cueRow().color.set(nil, 0.1, 0.2, 0.3)
-      assert.equal(1, #calls)
-      assert.same({0.1, 0.2, 0.3}, calls[1].color)
-    end)
-
-    it("the edge widget carries a description", function()
-      stubCues{ cueA() }
-      assert.equal("Which screen edge this cue flares on.", cueRow().edge.desc)
-    end)
-
-    it("the edge widget's get reflects Overlay.GetOption, and set stores + previews once", function()
-      stubCues{ cueA() }
-      enabledToggle().set(nil, true)
-      assert.equal("left", cueRow().edge.get())
-      local flareCalls = countFlareCalls()
-      cueRow().edge.set(nil, "right")
-      assert.equal(1, flareCalls())
-      assert.equal("right", cueRow().edge.get())
-    end)
-
-    it("the edge widget's preview flare is called WITH the newly chosen edge, not a blank default", function()
-      stubCues{ cueA() }
-      enabledToggle().set(nil, true)
-      local calls = recordFlareCalls()
-      cueRow().edge.set(nil, "right")
-      assert.equal(1, #calls)
-      assert.equal("right", calls[1].edge)
-    end)
-
-    it("the edge dropdown's values come from Overlay.EDGES, not a hardcoded list", function()
-      stubCues{ cueA() }
-      local values = cueRow().edge.values()
-      -- Human-friendly labels come from EDGE_LABELS, keyed by Overlay.EDGES.
-      assert.equal("Left", values.left)
-      assert.equal("Right", values.right)
-      assert.equal("Top", values.top)
-      assert.equal("Bottom", values.bottom)
-      assert.is_nil(values.diagonal)
-
-      -- Prove it is not hardcoded: grow a COPY of EDGES and confirm the dropdown grows with it.
-      -- (Options.lua reads ns.Overlay.EDGES fresh every time edgeChoices() runs, so replacing the
-      -- table the real module already owns is enough -- no source file is touched.)
-      local grown = {}
-      for _, e in ipairs(ns.Overlay.EDGES) do grown[#grown + 1] = e end
-      grown[#grown + 1] = "diagonal"
-      ns.Overlay.EDGES = grown
-
-      values = cueRow().edge.values()
-      assert.equal("diagonal", values.diagonal)
-    end)
-
-    it("the intensity widget's get reflects Overlay.GetOption, and set stores + previews once", function()
-      stubCues{ cueA() }
-      enabledToggle().set(nil, true)
-      assert.equal(0.5, cueRow().intensity.get())
-      local flareCalls = countFlareCalls()
-      cueRow().intensity.set(nil, 0.9)
-      assert.equal(1, flareCalls())
-      assert.equal(0.9, cueRow().intensity.get())
-    end)
-
-    it("the intensity widget's preview flare is called WITH the newly chosen intensity, not a blank default", function()
-      stubCues{ cueA() }
-      enabledToggle().set(nil, true)
-      local calls = recordFlareCalls()
-      cueRow().intensity.set(nil, 0.9)
-      assert.equal(1, #calls)
-      assert.equal(0.9, calls[1].intensity)
-    end)
-
-    it("changing appearance previews but touches neither enablement nor the queue", function()
-      stubCues{ cueA() }
-      enabledToggle().set(nil, true)   -- baseline enable, its own refresh/preview already counted
-      local refreshCalls = countRefreshCalls()
-      local setEnabledCalls = 0
-      local realSetEnabled = ns.Overlay.SetEnabled
-      ns.Overlay.SetEnabled = function(...)
-        setEnabledCalls = setEnabledCalls + 1
-        return realSetEnabled(...)
-      end
-
-      cueRow().color.set(nil, 0.4, 0.5, 0.6)
-      cueRow().edge.set(nil, "top")
-      cueRow().intensity.set(nil, 0.8)
-
-      assert.equal(0, refreshCalls())
-      assert.equal(0, setEnabledCalls)
-    end)
-  end)
-
-  -- Overlay.SetOption returns false (and writes nothing) when the cue is OFF -- opting out deletes
-  -- the whole record (ADR-0009, "absent means never asked for") -- or when the value is invalid (an
-  -- edge Flare cannot draw). The three appearance setters guard `preview()` behind that return value
-  -- so the user is never shown a flare for a change that was refused. `disabled` on the row only
-  -- greys the widget for AceConfigDialog; `set` stays directly callable (profile import and
-  -- Elmira.API reach it the same way a test does), so the guard has to live in `set` itself.
-  describe("appearance setters refuse to preview a refused write", function()
-    it("colour: cue OFF, set() produces zero flares", function()
-      stubCues{ cueA() }
-      local flareCalls = countFlareCalls()
-      cueRow().color.set(nil, 0.4, 0.5, 0.6)
-      assert.equal(0, flareCalls())
-    end)
-
-    it("edge: cue OFF, set() produces zero flares", function()
-      stubCues{ cueA() }
-      local flareCalls = countFlareCalls()
-      cueRow().edge.set(nil, "top")
-      assert.equal(0, flareCalls())
-    end)
-
-    it("intensity: cue OFF, set() produces zero flares", function()
-      stubCues{ cueA() }
-      local flareCalls = countFlareCalls()
-      cueRow().intensity.set(nil, 0.8)
-      assert.equal(0, flareCalls())
-    end)
-
-    it("edge: cue ON but given a value outside Overlay.EDGES produces zero flares, and does not store it", function()
-      stubCues{ cueA() }
-      enabledToggle().set(nil, true)
-      local flareCalls = countFlareCalls()
-      cueRow().edge.set(nil, "diagonal")
-      assert.equal(0, flareCalls())
-      assert.equal("left", cueRow().edge.get())
-    end)
-
-    it("edge: cue ON with a value inside Overlay.EDGES previews exactly once, with that edge", function()
-      stubCues{ cueA() }
-      enabledToggle().set(nil, true)
-      local calls = recordFlareCalls()
-      cueRow().edge.set(nil, "right")
-      assert.equal(1, #calls)
-      assert.equal("right", calls[1].edge)
-    end)
-  end)
-
-  describe("an unavailable cue's row (event = \"check\", ADR-0009)", function()
-    it("is disabled = true", function()
-      stubCues{ cueB() }
-      local row = overlayArgs().cue1
-      assert.is_true(row.disabled)
-    end)
-
-    it("set is inert: enabling it writes nothing into db.profile.overlay.cues", function()
-      stubCues{ cueB() }
-      local row = overlayArgs().cue1
-      row.set(nil, true)
-      assert.same({}, ns.db.profile.overlay.cues)
-    end)
-
-    it("get always answers false, regardless of what set was asked to do", function()
-      stubCues{ cueB() }
-      local row = overlayArgs().cue1
-      row.set(nil, true)
-      assert.is_false(row.get())
-    end)
-
-    it("stays a plain disabled toggle -- no colour/edge/intensity controls to grey out", function()
-      stubCues{ cueB() }
-      local row = overlayArgs().cue1
-      assert.equal("toggle", row.type)
-      assert.is_nil(row.args)
-    end)
-  end)
-
-  describe("a build suggesting no cues", function()
-    it("renders the \"no peripheral cues\" description instead of an empty group", function()
-      stubCues{}
-      local args = overlayArgs()
-      assert.equal("description", args.none.type)
-      assert.equal("This build suggests no peripheral cues.", args.none.name)
-      assert.is_nil(args.cue1)
-    end)
-  end)
-
-  describe("a build suggesting at least one cue", function()
-    it("does not render the \"no peripheral cues\" description", function()
-      stubCues{ cueA() }
-      local args = overlayArgs()
-      assert.is_nil(args.none)
+    -- The whole point of the rewrite: nothing on this page reads the profile-scoped cue store or
+    -- calls into Overlay any more, so a build that suggests nothing and a build that suggests three
+    -- render identically.
+    it("does not touch ns.Overlay at all", function()
+      ns.Overlay = setmetatable({}, { __index = function(_, k)
+        error("Options must not call ns.Overlay." .. tostring(k))
+      end })
+      assert.has_no.errors(function() Options.table() end)
     end)
   end)
 end)

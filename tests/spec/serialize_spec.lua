@@ -201,4 +201,81 @@ describe("Core.Serialize", function()
     assert.is_nil(back.entries[1].conditions)
     assert.same(pack.builds.PALADIN_EXODIN.entries[1], back.entries[1])
   end)
+
+  -- AB2-D5: one payload shape for everything Elmira shares -- a rotation, a rotation WITH the
+  -- settings of the abilities it names, or a bare bag of settings. One format, one decoder.
+  describe("bundles (AB2-D5)", function()
+    local A
+
+    before_each(function()
+      A = helper.load("Elmira/Core/AbilitySettings.lua")
+      helper.ns().db = { char = { abilities = {} } }
+    end)
+
+    it("round-trips ability settings through the real codec, unchanged", function()
+      A.set("EXORCISM", "edge", "enabled", true)
+      A.setInherit("EXORCISM", "edge", false)
+      A.set("EXORCISM", "edge", "edge", "top")
+      A.set("EXORCISM", "edge", "color", { r = 0.9, g = 0.2, b = 0.2 })
+      A.set("*", "sound", "used", "Chime")
+      local source = A.export(nil)
+      local str = assert(Serialize.encodeBundle({ abilities = source,
+        spells = { EXORCISM = { id = 415073, name = "Exorcism" } } }))
+      assert.equal("ELM1:", str:sub(1, 5))
+
+      -- A fresh character, nothing configured.
+      helper.ns().db = { char = { abilities = {} } }
+      local back = assert(Serialize.decodeBundle(str))
+      assert.same(source, back.abilities)
+      assert.equal(2, A.import(back.abilities, back.spells))
+      assert.same(source, A.export(nil))
+      assert.equal("top", A.effective("EXORCISM", "edge").edge)
+      assert.same({ id = 415073, name = "Exorcism" }, A.spellInfo("EXORCISM"))
+    end)
+
+    it("carries a rotation and its abilities' settings in one string", function()
+      local build = pack.builds.PALADIN_EXODIN
+      local str = assert(Serialize.encodeBundle({ build = build,
+        abilities = { EXORCISM = { edge = { enabled = true } } } }))
+      local back = assert(Serialize.decodeBundle(str, ctx()))
+      assert.same(build, back.build)
+      assert.is_true(back.abilities.EXORCISM.edge.enabled)
+    end)
+
+    -- A settings-only string has no build to check against a pack, which is exactly what makes it
+    -- importable on a class with no shipped data at all (the standing rule for this pass).
+    it("decodes a settings-only bundle with no pack context", function()
+      local str = assert(Serialize.encodeBundle({ abilities = { X = { edge = {} } } }))
+      local back = assert(Serialize.decodeBundle(str))
+      assert.is_nil(back.build)
+      assert.is_table(back.abilities.X)
+    end)
+
+    it("still validates a build that IS in the bundle", function()
+      local str = assert(Serialize.encodeBundle({ build = { schema = 1, key = "K", name = "N",
+        class = "PALADIN", entries = { { spell = "NOT_A_SPELL" } } } }))
+      local back, err = Serialize.decodeBundle(str, ctx())
+      assert.is_nil(back)
+      assert.is_truthy(err:find("NOT_A_SPELL", 1, true))
+    end)
+
+    it("refuses to export nothing, and refuses a build that is not a table", function()
+      local str, err = Serialize.encodeBundle(nil)
+      assert.is_nil(str)
+      assert.is_string(err)
+      str, err = Serialize.encodeBundle({ build = "PALADIN_EXODIN" })
+      assert.is_nil(str)
+      assert.is_string(err)
+    end)
+
+    -- `Serialize.decode` is the rotation half of the same payload: a settings-only string pasted
+    -- into the Rotations box has to be refused with a reason rather than half-imported.
+    it("refuses a settings-only string through the build-only decoder", function()
+      local str = assert(Serialize.encodeBundle({ abilities = { X = { edge = {} } } }))
+      local build, err = Serialize.decode(str, ctx())
+      assert.is_nil(build)
+      assert.is_truthy(err:find("no build", 1, true))
+    end)
+  end)
+
 end)

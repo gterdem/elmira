@@ -328,4 +328,34 @@ describe("Core/Spells (the registry)", function()
       assert.is_not_nil(s.SLICE)
     end)
   end)
+
+  -- AB2-D5's import path. Not `add`: `add` slugs a fresh key out of the name, and settings that
+  -- arrived under "EXORCISM" attached to an entry called "EXORCISM_2" would configure nothing.
+  describe("adopt() -- the import path", function()
+    it("registers under the key it was given, marked as an import", function()
+      local s = {}
+      assert.equal("EXORCISM", Spells.adopt(s, "EXORCISM", 415073, "Exorcism"))
+      assert.same({ key = "EXORCISM", id = 415073, name = "Exorcism", source = "import" }, s.EXORCISM)
+    end)
+
+    it("never overwrites an entry that is already there", function()
+      local s = { EXORCISM = { key = "EXORCISM", id = 1, name = "Mine", source = "spellbook" } }
+      assert.equal("EXORCISM", Spells.adopt(s, "EXORCISM", 415073, "Exorcism"))
+      assert.equal("Mine", s.EXORCISM.name)
+      assert.equal("spellbook", s.EXORCISM.source)
+    end)
+
+    it("refuses anything it cannot make a real entry out of", function()
+      local s = {}
+      assert.is_nil(Spells.adopt(nil, "EXORCISM", 1, "Exorcism"))
+      assert.is_nil(Spells.adopt(s, "", 1, "Exorcism"))
+      assert.is_nil(Spells.adopt(s, 7, 1, "Exorcism"))
+      assert.is_nil(Spells.adopt(s, "EXORCISM", nil, "Exorcism"))
+      assert.is_nil(Spells.adopt(s, "EXORCISM", 0, "Exorcism"))
+      assert.is_nil(Spells.adopt(s, "EXORCISM", 1, ""))
+      assert.is_nil(Spells.adopt(s, "EXORCISM", 1, nil))
+      assert.same({}, s)
+    end)
+  end)
+
 end)

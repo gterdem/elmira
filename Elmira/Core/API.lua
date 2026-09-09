@@ -54,6 +54,14 @@ function API.RegisterDataPack(a, b)
     return fail(spec.class, "flavor is required")
   end
   registry.dataPacks[spec.class] = spec
+  -- AB2-D3: the one place EVERY pack arrives -- the shipped class files come through here too --
+  -- so it is the one place a malformed per-ability default block can be said out loud. The pack is
+  -- still registered: a bad default is inert, and refusing the pack over one would take the class's
+  -- rotations with it. Silent is the one thing it must not be, because an ignored default looks
+  -- exactly like a cue that was never meant to fire.
+  for _, problem in ipairs(ns.Schema and ns.Schema.abilityDefaultErrors(spec.spells) or {}) do
+    ns.log("data pack %s: %s", spec.class, problem)
+  end
   return true
 end
 

@@ -713,4 +713,52 @@ describe("Core.UserBuilds", function()
       assert.equal("?", UserBuilds.displayName(pack, 7))
     end)
   end)
+
+  -- AB2-D5: "include ability settings". The rotation and the settings of the abilities it names
+  -- travel in ONE string, and the settings are applied at the one place a build string is accepted
+  -- -- a second call site is a second place to forget, and settings that silently did not arrive
+  -- look exactly like settings the sender never included.
+  describe("exporting and importing a rotation WITH its abilities' settings", function()
+    local A
+
+    before_each(function()
+      A = helper.load("Elmira/Core/AbilitySettings.lua")
+      db.char.abilities = {}
+    end)
+
+    it("exports the rotation alone when nothing extra is handed over", function()
+      local str = assert(UserBuilds.exportKey(pack, "PALADIN_EXODIN"))
+      local back = assert(Serialize.decodeBundle(str, { spells = pack.spells }))
+      assert.is_table(back.build)
+      assert.is_nil(back.abilities)
+    end)
+
+    it("carries the settings it was handed, and applies them on import", function()
+      local str = assert(UserBuilds.exportKey(pack, "PALADIN_EXODIN", {
+        abilities = { EXORCISM = { edge = { enabled = true, intensity = 0.9 }, inherit = nil } },
+        spells = { EXORCISM = { id = 415073, name = "Exorcism" } },
+      }))
+      local key, merged = UserBuilds.importString(str, pack, { name = "Mine" })
+      assert.is_string(key)
+      assert.equal(1, merged)
+      assert.is_true(A.effective("EXORCISM", "edge").enabled)
+      assert.same({ id = 415073, name = "Exorcism" }, A.spellInfo("EXORCISM"))
+    end)
+
+    it("reports no settings for a plain rotation string, without erroring", function()
+      local key, merged = UserBuilds.importString(exodinString(), pack, {})
+      assert.is_string(key)
+      assert.equal(0, merged)
+      assert.same({}, db.char.abilities)
+    end)
+
+    it("refuses a settings-only string as a rotation, with a reason", function()
+      local str = assert(Serialize.encodeBundle({ abilities = { EXORCISM = { edge = {} } } }))
+      local key, err = UserBuilds.importString(str, pack, {})
+      assert.is_nil(key)
+      assert.is_truthy(err:find("no build", 1, true))
+      assert.same({}, db.char.abilities, "nothing was written on the way to refusing it")
+    end)
+  end)
+
 end)

@@ -46,25 +46,45 @@ local function copyPlain(v)
   return out
 end
 
--- Serialize.encode(build) -> string | nil, reason
-function Serialize.encode(build)
+-- Serialize.encodeBundle(t) -> string | nil, reason
+--
+-- AB2-D5. One payload shape for everything this addon shares: `{ build = , abilities = ,
+-- spells = }`, any of them absent. A rotation alone is what `/elm export` has always produced; a
+-- rotation WITH the settings of the abilities it names, and a bare bag of settings, are the two the
+-- Abilities > Share tab adds. One format rather than three means one decoder, and a string pasted
+-- into the wrong box is refused for a reason rather than half-read.
+function Serialize.encodeBundle(t)
   if not libs then return nil, "cannot export: serializer libraries are not loaded" end
-  if type(build) ~= "table" then return nil, "not a build" end
-  local exportable = ns.Schema and ns.Schema.exportable and ns.Schema.exportable(build) or build
-  local out = copyPlain(exportable)
-  local ok, payload = pcall(libs.serializer.Serialize, libs.serializer, { v = Serialize.VERSION, build = out })
-  if not ok or type(payload) ~= "string" then
-    return nil, "serialize failed: " .. tostring(payload)
+  if type(t) ~= "table" then return nil, "nothing to export" end
+  local payload = { v = Serialize.VERSION }
+  if t.build ~= nil then
+    if type(t.build) ~= "table" then return nil, "not a build" end
+    payload.build = copyPlain(ns.Schema and ns.Schema.exportable and ns.Schema.exportable(t.build)
+      or t.build)
   end
-  local compressed = libs.deflate:CompressDeflate(payload)
+  payload.abilities = t.abilities and copyPlain(t.abilities) or nil
+  payload.spells = t.spells and copyPlain(t.spells) or nil
+  local ok, serialized = pcall(libs.serializer.Serialize, libs.serializer, payload)
+  if not ok or type(serialized) ~= "string" then
+    return nil, "serialize failed: " .. tostring(serialized)
+  end
+  local compressed = libs.deflate:CompressDeflate(serialized)
   if type(compressed) ~= "string" then return nil, "compress failed" end
   return Serialize.PREFIX .. libs.deflate:EncodeForPrint(compressed)
 end
 
--- Serialize.decode(str, ctx) -> build | nil, reason
+-- Serialize.encode(build) -> string | nil, reason
+function Serialize.encode(build)
+  if type(build) ~= "table" then return nil, "not a build" end
+  return Serialize.encodeBundle({ build = build })
+end
+
+-- Serialize.decodeBundle(str, ctx) -> { build =, abilities =, spells = } | nil, reason
 -- `ctx` is what Schema.validate needs (`spells`, `sets`, `souls`, `bonuses` of the pack the build is
--- meant for): a string can be well-formed and still name spells this class pack does not have.
-function Serialize.decode(str, ctx)
+-- meant for): a string can be well-formed and still name spells this class pack does not have. A
+-- bundle with no build in it skips that check -- there is nothing to validate against a pack, which
+-- is exactly what makes a settings-only string importable on a class with no shipped data at all.
+function Serialize.decodeBundle(str, ctx)
   if not libs then return nil, "cannot import: serializer libraries are not loaded" end
   if type(str) ~= "string" then return nil, "not a string" end
   str = str:gsub("^%s+", ""):gsub("%s+$", "")
@@ -81,15 +101,22 @@ function Serialize.decode(str, ctx)
   if t.v ~= Serialize.VERSION then
     return nil, string.format("unsupported build string version %s (this Elmira reads %d)", tostring(t.v), Serialize.VERSION)
   end
-  local build = t.build
-  if type(build) ~= "table" then return nil, "no build in string" end
-  if ns.Schema then
-    local valid, errors = ns.Schema.validate(build, ctx or {})
+  if t.build ~= nil and ns.Schema then
+    local valid, errors = ns.Schema.validate(t.build, ctx or {})
     if not valid then
       return nil, "invalid build: " .. table.concat(ns.Schema.errorLines(errors or {}), "; ")
     end
   end
-  return build
+  return { build = t.build, abilities = t.abilities, spells = t.spells }
+end
+
+-- Serialize.decode(str, ctx) -> build | nil, reason
+-- The rotation half of the bundle, for every caller that only ever wanted a build.
+function Serialize.decode(str, ctx)
+  local t, err = Serialize.decodeBundle(str, ctx)
+  if not t then return nil, err end
+  if type(t.build) ~= "table" then return nil, "no build in string" end
+  return t.build
 end
 
 ns.Serialize = Serialize

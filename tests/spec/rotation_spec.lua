@@ -417,6 +417,76 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal("", box().note.name())
       box().text.set(nil, "ELM1:ignored")
     end)
+    -- AB2-D5, the rotation side. The Share tab could not produce a string at all before this --
+    -- only `/elm export` could -- and "include ability settings" is off by default, because a
+    -- rotation string is what people paste at each other and quietly sending your glow colours,
+    -- sounds and announcements with it is not what "share this rotation" means.
+    describe("Export (AB2-D5)", function()
+      local wrote, noted
+
+      local function installExchange()
+        wrote, noted = nil, nil
+        ns.Options = { exchangeText = function() return wrote or "" end,
+                       exchangeNote = function() return noted or "" end,
+                       importText = function() end,
+                       setExchangeText = function(str) wrote = str; noted = "" end,
+                       noteExchange = function(text) noted = text end }
+      end
+
+      before_each(function()
+        installPack()
+        installExchange()
+        ns.UserBuilds = { find = function(_, key) return { key = key, entries = { { spell = "EXORCISM" } } } end,
+                          exportKey = function(_, key, extra)
+                            return "ELM1:" .. key .. (extra and ":with-settings" or "")
+                          end }
+        Rotation.select("PALADIN_EXODIN")
+        Rotation.setShareAbilities(false)
+      end)
+
+      it("ships the toggle off, and exports the rotation alone while it is", function()
+        assert.is_false(box().abilities.get())
+        assert.equal("execute", box().export.type)
+        assert.equal("Export This Rotation", box().export.name)
+        assert.is_truthy(box().export.desc:find("box below", 1, true))
+        assert.is_truthy(box().abilities.desc:find("glow, screen-edge, sound and announcement", 1, true))
+        assert.is_true(Rotation.exportSelected())
+        assert.equal("ELM1:PALADIN_EXODIN", ns.Options.exchangeText())
+        assert.is_truthy(ns.Options.exchangeNote():find("PALADIN_EXODIN", 1, true))
+        -- Through the button, not only through the function behind it.
+        ns.Options.setExchangeText("")
+        box().export.func()
+        assert.equal("ELM1:PALADIN_EXODIN", ns.Options.exchangeText())
+      end)
+
+      it("bundles the settings of the abilities the rotation names once the toggle is on", function()
+        local askedFor
+        ns.SpellsPage = { bundle = function(keys) askedFor = keys; return { abilities = {}, spells = {} } end }
+        box().abilities.set(nil, true)
+        assert.is_true(box().abilities.get())
+        box().export.func()
+        assert.equal("ELM1:PALADIN_EXODIN:with-settings", ns.Options.exchangeText())
+        assert.is_true(askedFor.EXORCISM, "it bundled the wrong ability keys")
+      end)
+
+      it("says why when the export fails, and leaves no half-string in the box", function()
+        ns.UserBuilds.exportKey = function() return nil, "serializer is not loaded" end
+        ns.Options.setExchangeText("ELM1:something-older")
+        assert.is_false(Rotation.exportSelected())
+        assert.equal("", ns.Options.exchangeText())
+        assert.is_truthy(ns.Options.exchangeNote():find("serializer is not loaded", 1, true))
+      end)
+
+      -- Options.lua and Core/UserBuilds.lua are both reached lazily (TOC load order), so the
+      -- button has to answer for itself rather than erroring inside a click handler.
+      it("does nothing, without erroring, when the modules it needs are not loaded", function()
+        ns.UserBuilds = nil
+        assert.is_false(Rotation.exportSelected())
+        ns.UserBuilds = { find = function() return nil end, exportKey = function() return "ELM1:x" end }
+        ns.Options = nil
+        assert.is_false(Rotation.exportSelected())
+      end)
+    end)
   end)
 
   -- The Builder's palette (step 2). Core/Palette is pure and tested on its own; this is the wiring

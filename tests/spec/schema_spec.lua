@@ -937,4 +937,58 @@ describe("Core.Schema (docs/02-CONDITION-SCHEMA.md, ADR-0002)", function()
     local c = ctx(); c.spells.EXORCISM = { id = 1, cost = { mana = 345 } }
     assert.is_true((Schema.validate(build, c)))
   end)
+
+  -- AB2-D3: what a class pack's spell entry may say about how that ability behaves out of the box.
+  -- The channels and their fields ARE Core/AbilitySettings' DEFAULTS table -- one list that is both
+  -- the schema and the shipped value -- so this check cannot drift from what `effective` reads back.
+  describe("Schema.abilityDefaultErrors (per-ability defaults)", function()
+    local A
+
+    before_each(function()
+      A = helper.load("Elmira/Core/AbilitySettings.lua")
+    end)
+
+    it("accepts a spell table with no defaults at all", function()
+      assert.same({}, Schema.abilityDefaultErrors({ EXORCISM = { id = 1 } }))
+      assert.same({}, Schema.abilityDefaultErrors(nil))
+    end)
+
+    it("accepts the shape AB2-D3 ships", function()
+      assert.same({}, Schema.abilityDefaultErrors({
+        EXORCISM = { id = 1, defaults = { reason = "Exorcism came off cooldown",
+                     edge = { enabled = true, edge = "left", color = { r = 1, g = 0, b = 0 } } } },
+      }))
+    end)
+
+    it("names the ability, the channel and the field it does not know", function()
+      local out = Schema.abilityDefaultErrors({
+        EXORCISM = { defaults = { edge = { colour = 1 } } },
+        JUDGEMENT = { defaults = { flashing = { enabled = true } } },
+        DIVINE_STORM = { defaults = { edge = "left", reason = 7 } },
+        CRUSADER_STRIKE = { defaults = "on" },
+      })
+      -- Sorted, so a list of problems can be diffed between runs.
+      assert.equal(5, #out, table.concat(out, " | "))
+      assert.is_truthy(out[1]:find("CRUSADER_STRIKE", 1, true))
+      assert.is_truthy(out[1]:find("defaults must be a table", 1, true))
+      assert.is_truthy(out[2]:find("DIVINE_STORM: defaults.edge must be a table", 1, true))
+      assert.is_truthy(out[3]:find("DIVINE_STORM: defaults.reason must be a string", 1, true))
+      assert.is_truthy(out[4]:find("EXORCISM: defaults.edge has no field 'colour'", 1, true))
+      assert.is_truthy(out[5]:find("JUDGEMENT: defaults names no such channel 'flashing'", 1, true))
+    end)
+
+    -- Every channel AbilitySettings declares is a channel a pack may set a default for: a list
+    -- repeated here would go stale the first time a channel was added.
+    it("accepts every channel the settings store declares", function()
+      for _, channel in ipairs(A.CHANNELS) do
+        assert.same({}, Schema.abilityDefaultErrors({ X = { defaults = { [channel] = {} } } }), channel)
+      end
+    end)
+
+    it("says nothing at all when the settings store is not loaded", function()
+      ns.AbilitySettings = nil
+      assert.same({}, Schema.abilityDefaultErrors({ X = { defaults = { nonsense = 1 } } }))
+    end)
+  end)
+
 end)

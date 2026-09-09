@@ -38,7 +38,13 @@ local DEFAULTS = {
   glow     = { enabled = true, style = "PIXEL", color = false,
                particles = false, frequency = false, thickness = false, speed = false },
   texture  = { enabled = false },
-  edge     = { enabled = false, edge = "left", color = false, intensity = 0.5 },
+  -- AB2-D1: `suggested` and `ready` are the two moments a screen edge can flash. `suggested` ships
+  -- ON so that switching the tab on does something the first time (a channel that is "on" and fires
+  -- on nothing is the silent failure this project keeps shipping); `ready` ships OFF, because a
+  -- spell coming off cooldown while you are already pressing something else is the strobe ADR-0009
+  -- is about. They are CHOICES, so they inherit -- only `enabled` is per ability (OWN, below).
+  edge     = { enabled = false, edge = "left", color = false, intensity = 0.5,
+               suggested = true, ready = false },
   sound    = { enabled = false, suggested = "None", ready = "None", used = "None",
                active = "None", expiring = "None" },
   announce = { enabled = false, duration = false },
@@ -54,13 +60,16 @@ local OWN = { texture = { enabled = true }, edge = { enabled = true },
               sound = { enabled = true }, announce = { enabled = true } }
 
 AbilitySettings.CHANNELS = { "general", "glow", "texture", "edge", "sound", "announce" }
--- The five channels that have an on/off a player can read off the tree (AB1-D9b). `general` is not
--- one of them: it holds facts about the ability, not a cue that fires.
-AbilitySettings.CUE_CHANNELS = { "glow", "texture", "edge", "sound", "announce" }
--- The channels Core/Track has to watch the state for. Glow is absent because it follows the
--- now-slot the render loop already computes -- adding it here would put every ability in the addon
--- into a 10 Hz cooldown/aura poll for an event nothing reads.
-local TRACK_CHANNELS = { "texture", "edge", "sound", "announce" }
+-- The channels that count as "this ability is configured": the tree's greyed icon, the tooltip's
+-- on/off list and the "Show > Any configured" filter all read this one list.
+--
+-- AB2-D6 (owner's first look at AB1): GLOW IS NOT IN IT. Glow ships on for everything, so counting
+-- it made every icon in the tree full colour and every tooltip say "Glow on" -- a mark that is true
+-- of every row marks nothing. What is left is exactly the four channels whose on/off is per ability
+-- and never inherited, which is also exactly what Core/Track has to watch the state for: glow
+-- follows the now-slot the render loop already computes, and polling it would put every ability in
+-- the addon into a 10 Hz cooldown/aura scan for an event nothing reads.
+AbilitySettings.CUE_CHANNELS = { "texture", "edge", "sound", "announce" }
 AbilitySettings.EVENTS = { "suggested", "ready", "used", "active", "expiring" }
 
 -- Bumped by every write. Display/Driver compares it to decide whether its tracked set is stale,
@@ -107,12 +116,37 @@ function AbilitySettings.setInherit(key, channel, on)
   return true
 end
 
+-- AB2-D3: what the CLASS PACK says this ability should do out of the box.
+--
+-- A shipped pack's spell entry may carry `defaults = { edge = { enabled = true, ... }, ... }`. This
+-- is the amendment ADR-0009 gets in AB2: a screen flash is still never switched on by a global
+-- toggle, and it is still per ability -- but the people who wrote the rotation are allowed to say
+-- which two of its twenty abilities are worth a flash, because that is the judgement the ADR's
+-- "opt in per cue" was protecting and a player has no way to make before their first pull.
+--
+-- Read through `ns.Display.currentPack()` rather than injected: this file stays free of the WoW API
+-- (the class read behind that call is the adapter's), and a guarded read cannot be forgotten by a
+-- wiring step the way an injected setter can. `nil` is a NORMAL answer -- a class with no shipped
+-- pack configures everything by hand and gets every channel off (the standing rule for this pass).
+local function packDefault(key, channel)
+  local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
+  local spells = pack and pack.spells
+  local entry = spells and spells[key]
+  local block = entry and entry.defaults
+  local t = block and block[channel]
+  return type(t) == "table" and t or nil
+end
+
 -- AbilitySettings.effective(key, channel) -> a fresh table of resolved values
 --
--- Three layers, applied in order: the shipped default, then the All abilities entry (only while
--- this ability inherits, and never for an OWN field), then this ability's own stored values (all of
--- them when it does not inherit, its OWN fields either way). Nothing outside this file reads the
--- raw table -- that is what keeps the inheritance rule in one place.
+-- Four layers, lowest first: the shipped default, then the All abilities entry (only while this
+-- ability inherits, and never for an OWN field), then the class pack's own default for THIS
+-- ability, then this ability's own stored values (all of them when it does not inherit, its OWN
+-- fields either way). Highest wins, so the precedence AB2-D3 names reads stored -> pack default ->
+-- All abilities -> shipped. The pack sits above All abilities deliberately: it is a statement about
+-- one ability, while All abilities is a statement about everything, and the more specific of the
+-- two is the one a player means. Anything the player touches on the ability itself still wins over
+-- both. Nothing outside this file reads the raw table -- that is what keeps the rule in one place.
 function AbilitySettings.effective(key, channel)
   local def = DEFAULTS[channel]
   if not def then return nil end
@@ -124,6 +158,12 @@ function AbilitySettings.effective(key, channel)
     for field, value in pairs(stored(ALL, channel) or {}) do
       if field ~= "inherit" and not own[field] then out[field] = value end
     end
+  end
+  -- Filtered by the channel's own field list, exactly as `set` filters a write from the panel: a
+  -- pack shipping `defaults = { edge = { colour = ... } }` is a typo, and storing it would put a
+  -- field in the resolved table that nothing will ever read back.
+  for field, value in pairs(packDefault(key, channel) or {}) do
+    if def[field] ~= nil then out[field] = value end
   end
   for field, value in pairs(stored(key, channel) or {}) do
     if field ~= "inherit" and (own[field] or not inherit) then out[field] = value end
@@ -186,13 +226,101 @@ function AbilitySettings.anyOn(key)
   return false
 end
 
--- Does the render loop have to watch this ability's cooldown and auras? Only the channels that fire
--- on something Core/Track reads out of the state.
+-- Does the render loop have to watch this ability's cooldown and auras? The same question as
+-- `anyOn` since AB2-D6 dropped glow from CUE_CHANNELS -- the four channels that are worth marking
+-- in the tree are the four that fire on something Core/Track reads out of the state. Kept as its
+-- own name because the two callers ask different questions of the same answer, and one of them
+-- (Display/Driver) would have to change if a future channel were configured but not polled.
 function AbilitySettings.tracked(key)
-  for _, channel in ipairs(TRACK_CHANNELS) do
-    if AbilitySettings.channelOn(key, channel) then return true end
+  return AbilitySettings.anyOn(key)
+end
+
+-- ---------------------------------------------------------------- AB2-D5: sharing
+
+-- Values are copied, never referenced. A colour is a table, and handing the stored one out would
+-- let whatever received it edit the settings it was only supposed to read -- the same reason
+-- `effective` hands out a fresh table.
+local function copyValue(v)
+  if type(v) ~= "table" then return v end
+  local out = {}
+  for k, x in pairs(v) do out[k] = copyValue(x) end
+  return out
+end
+
+-- One settings row, filtered to what this addon actually declares: unknown channels and undeclared
+-- fields are dropped. Used on the way OUT and on the way IN, so an import string cannot write a
+-- field into SavedVariables that nothing will ever read back -- the same rule `set` applies to the
+-- options panel, in the one other place values arrive from outside.
+local function cleanRow(row)
+  local out = {}
+  for channel, t in pairs(row) do
+    local def = DEFAULTS[channel]
+    if def and type(t) == "table" then
+      local c = {}
+      for field, value in pairs(t) do
+        if field == "inherit" or def[field] ~= nil then c[field] = copyValue(value) end
+      end
+      out[channel] = c
+    end
   end
-  return false
+  return out
+end
+
+-- AbilitySettings.export(keys) -> { [key] = row }
+--
+-- `keys` is a SET (`Spells.referencedKeys`'s shape) or nil for the whole store, All abilities row
+-- included. Only what is actually STORED travels: an ability whose screen edge is on because its
+-- class pack ships it that way (AB2-D3) has no row of its own, and the receiving character gets the
+-- same default from the same pack -- writing it out as if the player had chosen it would freeze
+-- today's shipped value into their SavedVariables.
+function AbilitySettings.export(keys)
+  local out = {}
+  for key, row in pairs(AbilitySettings.store() or {}) do
+    if (keys == nil or keys[key]) and type(row) == "table" then out[key] = cleanRow(row) end
+  end
+  return out
+end
+
+-- AbilitySettings.import(rows, spells) -> how many keys were written
+--
+-- Merges by key and OVERWRITES on a collision (AB2-D5: the panel confirms with the count first).
+-- `spells` is the bundle's `{ [key] = { id =, name = } }`, remembered on the row so an ability this
+-- client cannot resolve still has something to show in the tree instead of a bare key.
+function AbilitySettings.import(rows, spells)
+  local s = AbilitySettings.store()
+  if not (s and type(rows) == "table") then return 0 end
+  local n = 0
+  for key, row in pairs(rows) do
+    if type(key) == "string" and type(row) == "table" then
+      local clean = cleanRow(row)
+      local info = spells and spells[key]
+      if type(info) == "table" then clean.spell = { id = info.id, name = info.name } end
+      s[key] = clean
+      n = n + 1
+    end
+  end
+  if n > 0 then version = version + 1 end
+  return n
+end
+
+-- What an imported row remembers about the spell it came from, or nil. The tree shows this for a
+-- key that is in neither the registry nor the class pack ("not on this character"), and the export
+-- puts it back into the bundle so passing a settings string on does not lose the id.
+function AbilitySettings.spellInfo(key)
+  local s = AbilitySettings.store()
+  local row = s and s[key]
+  local info = row and row.spell
+  return type(info) == "table" and info or nil
+end
+
+-- Every key with a row of its own, sorted -- the tree needs a stable order, and `pairs` has none.
+function AbilitySettings.keys()
+  local out = {}
+  for key in pairs(AbilitySettings.store() or {}) do
+    if key ~= ALL then out[#out + 1] = key end
+  end
+  table.sort(out)
+  return out
 end
 
 ns.AbilitySettings = AbilitySettings

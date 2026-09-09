@@ -113,6 +113,25 @@ function Spells.add(s, resolved)
   return key
 end
 
+-- Spells.adopt(s, key, id, name) -> key | nil
+--
+-- The IMPORT path (AB2-D5). A settings bundle names a key the SENDER's client resolved, and the
+-- settings row and the registry entry have to keep that same key or they point at different things
+-- -- which is why this is not `Spells.add`: `add` slugs a fresh key out of the name, and an
+-- imported "EXORCISM_2" would leave the imported settings attached to nothing.
+--
+-- Never overwrites an entry that is already there: a shipped pack's key, or the player's own
+-- naming, outranks whatever a string says about it. The id and name are the RECEIVER's -- the
+-- caller resolves them through the adapter first and does not call this at all when the client
+-- cannot (that row stays settings-only and the tree says "not on this character").
+function Spells.adopt(s, key, id, name)
+  if not (s and type(key) == "string" and key ~= "") then return nil end
+  if not (type(id) == "number" and id > 0 and type(name) == "string" and name ~= "") then return nil end
+  if s[key] then return key end
+  s[key] = { key = key, id = id, name = name, source = "import" }
+  return key
+end
+
 -- Spells.list(s) -> rows, sorted by NAME so the page reads the same way twice in a row -- `pairs()`
 -- carries no order at all, and a list that reshuffled on every open would be unusable.
 function Spells.list(s)

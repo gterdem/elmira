@@ -350,6 +350,10 @@ function Display.abilityEvent(key, event)
   if ns.Sounds and ns.Sounds.abilitySoundsOn() and A.channelOn(key, "sound") then
     if ns.Sounds.play(A.effective(key, "sound")[event]) then acted = true end
   end
+  -- AB2-D1: the screen edge is a channel like any other now. Overlay decides whether THIS ability's
+  -- edge cares about THIS event; the driver only has to reach it, which is the half that used to be
+  -- a renderer with a now-slot diff of its own.
+  if ns.Overlay and ns.Overlay.Fire(key, event) then acted = true end
   if event == "used" and Display.announceCooldown(key) then acted = true end
   return acted
 end

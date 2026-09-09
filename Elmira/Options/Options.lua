@@ -3,11 +3,9 @@
 -- Every user-facing string goes through AceLocale (`ns.L[...]`), enUS only in v1, so a translation
 -- is a data file rather than a rewrite.
 --
--- The overlay section is the interesting one. ADR-0009 forbids a global "overlay on" switch, so
--- there isn't one: the section lists the cues the ACTIVE BUILD suggests, each individually
--- opt-in-able, and a cue that cannot fire is shown disabled WITH ITS REASON rather than hidden.
--- Hiding it would leave the user wondering why a documented cue is missing; offering it would let
--- them enable something that can never fire.
+-- ADR-0009 forbids a global "screen flash on" switch, so there isn't one anywhere in here: since
+-- AB2 every cue -- glow, screen edge, sound, announcement -- is a setting on ONE ability, and this
+-- page owns only what is true of the whole addon (routing, the master mute, the log).
 local ADDON, ns = ...
 ns = ns or _G.__ELM_NS or {}
 
@@ -53,15 +51,6 @@ local function choices(labels, order)
   local values = {}
   for _, key in ipairs(order) do values[key] = L[labels[key]] end
   return values
-end
-
--- Screen edges, named for humans. Overlay.EDGES is the authority on which ones exist; this only
--- names them, so adding an edge there cannot leave an unnamed entry here.
-local EDGE_LABELS = { left = "Left", right = "Right", top = "Top", bottom = "Bottom" }
-local function edgeChoices()
-  local out = {}
-  for _, e in ipairs((ns.Overlay and ns.Overlay.EDGES) or {}) do out[e] = L[EDGE_LABELS[e] or e] end
-  return out
 end
 
 local function profile()
@@ -481,98 +470,19 @@ local function actionBarsGroup()
   }
 end
 
+-- AB2-D1: the per-cue controls that were here are gone -- a screen flash belongs to an ABILITY now
+-- (Abilities > the ability > Screen-edge), not to a list a build suggested. The node stays for this
+-- pass as a signpost, the same way the Glow page's did in AB1, so nobody hunts for a page that
+-- moved; AB4 removes both.
 local function overlayGroup()
-  local args = {}
-  local cues = ns.Overlay and ns.Overlay.availableCues() or {}
-  if #cues == 0 then
-    args.none = {
-      type = "description", fontSize = "medium", order = 1,
-      name = L["This build suggests no peripheral cues."],
-    }
-    return args
-  end
-
-  args.header = {
-    type = "description", fontSize = "medium", order = 0,
-    name = L["Screen-edge flares for the moments you are not looking at the UI. Off unless you turn one on."],
+  return {
+    moved = {
+      type = "description", order = 1, width = "full", fontSize = "medium",
+      name = L["Screen-edge flashes are set per ability now: Abilities > the ability > Screen-edge "
+            .. "picks the edge, the colour and when it fires. Your class pack may switch one or two "
+            .. "on for you; nothing else can."],
+    },
   }
-
-  for i, cue in ipairs(cues) do
-    local label = cue.reason or cue.spell or cue.key or ("cue " .. i)
-    if cue.unavailable then
-      args["cue" .. i] = {
-        type = "toggle", order = i, width = "full",
-        name = label .. "  |cff9AA0A6(" .. cue.unavailable .. ")|r",
-        desc = L["This cue cannot fire yet, so it cannot be enabled."],
-        disabled = true,
-        get = function() return false end,
-        set = function() end,
-      }
-    else
-      -- One inline group per cue rather than a bare toggle: the owner asked for colour and edge to be
-      -- adjustable on every cue, and a flare you cannot aim or recolour is one you turn off. The
-      -- appearance controls are greyed out until the cue is ON, because the stored record only exists
-      -- while it is (Overlay.SetOption refuses to write otherwise).
-      local function enabled() return (ns.Overlay.isEnabled(cue)) end
-      local function off() return not enabled() end
-      -- Every appearance change previews itself. Reading a hex value tells you nothing about whether
-      -- you will catch it in peripheral vision, which is the only thing this setting is for.
-      local function preview()
-        ns.Overlay.Flare(ns.Overlay.GetOption(cue, "edge"), ns.Overlay.GetOption(cue, "color"),
-                         ns.Overlay.GetOption(cue, "intensity"))
-      end
-
-      args["cue" .. i] = {
-        type = "group", inline = true, order = i, name = label,
-        args = {
-          enabled = {
-            type = "toggle", order = 1, width = "full", name = L["Enabled"],
-            desc = cue.reason,
-            get = enabled,
-            set = function(_, v)
-              ns.Overlay.SetEnabled(cue, v)
-              -- The driver only repaints when the QUEUE changes, and turning a cue on changes neither
-              -- the queue nor the build. Without this the newly enabled cue waits for the rotation to
-              -- move before it is ever evaluated — and if its spell is stuck at the top (an Exorcism
-              -- that is not on any bar, say) that never happens and the cue looks dead. Forcing the
-              -- repaint is what makes the reset inside SetEnabled actually reach the renderer.
-              if ns.Display then ns.Display.refresh() end
-              -- Show it once on enable. A cue the user just turned on and cannot picture is a cue they
-              -- turn straight back off.
-              if v then preview() end
-            end,
-          },
-          color = {
-            type = "color", order = 2, name = L["Colour"], hasAlpha = false,
-            disabled = off,
-            get = function()
-              local c = ns.Overlay.GetOption(cue, "color") or {}
-              return c[1] or 1, c[2] or 1, c[3] or 1
-            end,
-            set = function(_, r, g, b)
-              -- Only preview what was actually stored. Flaring after a refused write shows the user
-              -- a change that did not happen.
-              if ns.Overlay.SetOption(cue, "color", { r, g, b }) then preview() end
-            end,
-          },
-          edge = {
-            type = "select", order = 3, name = L["Edge"],
-            desc = L["Which screen edge this cue flares on."],
-            values = edgeChoices, disabled = off,
-            get = function() return ns.Overlay.GetOption(cue, "edge") end,
-            set = function(_, v) if ns.Overlay.SetOption(cue, "edge", v) then preview() end end,
-          },
-          intensity = {
-            type = "range", order = 4, name = L["Intensity"],
-            min = 0.05, max = 1.0, step = 0.05, isPercent = true, disabled = off,
-            get = function() return ns.Overlay.GetOption(cue, "intensity") end,
-            set = function(_, v) if ns.Overlay.SetOption(cue, "intensity", v) then preview() end end,
-          },
-        },
-      }
-    end
-  end
-  return args
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -597,6 +507,13 @@ function Options.exchangeNote()
   return exchangeNote
 end
 
+-- AB2-D5: the Share tab's Export button has a result to report too, and `setExchangeText` clears
+-- the note on purpose (a stale "Import failed" under a freshly pasted string is worse than none).
+-- One writer for both, so the two cannot drift.
+function Options.noteExchange(text)
+  exchangeNote = tostring(text or "")
+end
+
 -- Options.importText(str) -> true, key | false. Keeps the text in the box on failure so the user
 -- can fix it, clears it on success, and leaves a one-line result under the box either way.
 function Options.importText(str)
@@ -605,16 +522,24 @@ function Options.importText(str)
     exchangeNote = L["Import: no data pack for your class."]
     return false
   end
-  local key, err = ns.UserBuilds.importString(str, pack, {
+  -- The second return is the count of ability settings that came WITH the rotation (AB2-D5) on
+  -- success, and the failure reason otherwise.
+  local key, extra = ns.UserBuilds.importString(str, pack, {
     today = ns.Adapter and ns.Adapter.today and ns.Adapter.today() or nil,
   })
   if not key then
     exchangeText = tostring(str or "")
-    exchangeNote = string.format(L["Import failed: %s"], tostring(err))
+    exchangeNote = string.format(L["Import failed: %s"], tostring(extra))
     return false
   end
   exchangeText = ""
   exchangeNote = string.format(L["Imported as %s. /elm profile %s to use it."], key, key)
+  -- Said out loud: settings that arrived silently and overwrote what the player had are the worst
+  -- possible surprise, and settings that did NOT arrive look identical to ones that did.
+  if type(extra) == "number" and extra > 0 then
+    exchangeNote = exchangeNote .. " " ..
+      string.format(L["Also merged the settings of %d abilities."], extra)
+  end
   if ns.Display and ns.Display.refresh then ns.Display.refresh() end
   return true, key
 end
@@ -1923,8 +1848,8 @@ function Options.Register()
   local AceConfigDialog = LibStub and LibStub("AceConfigDialog-3.0", true)
   if not (AceConfig and AceConfigDialog) then return false end
 
-  -- Built fresh on open rather than once at load: the overlay section is derived from the ACTIVE
-  -- build's suggested cues, and both the build and the character's gear can change in a session.
+  -- Built fresh on open rather than once at load: the pages are derived from the registry, the
+  -- active build and the character's gear, and all three can change within a session.
   AceConfig:RegisterOptionsTable("Elmira", Options.table)
   Options.frame = AceConfigDialog:AddToBlizOptions("Elmira", "Elmira")
 

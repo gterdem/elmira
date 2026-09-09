@@ -495,10 +495,10 @@ Slash.register{
       end
       return lines
     elseif sub == "cues" then
-      -- Four independent reasons a screen-edge cue stays silent, and they are indistinguishable by
-      -- looking at the screen: not opted in, cannot fire yet, the rotation never put that spell in
-      -- the now-slot, or it fired while you were looking at the boss. Says which.
-      -- `/elm debug cues <n>` test-fires one, which separates a silent cue from a broken renderer.
+      -- Three independent reasons a screen edge stays silent, and they are indistinguishable by
+      -- looking at the screen: the ability's Screen-edge tab is off, it is on but neither event is
+      -- ticked, or it fired while you were looking at the boss. Says which, per ability.
+      -- `/elm debug cues <KEY>` test-fires one, which separates a silent flash from a silent tracker.
       if not ns.Overlay then return { "cues: overlay not loaded" } end
       local which = rest and rest:match("^%S+%s+(%S+)")
       if which then
@@ -507,29 +507,25 @@ Slash.register{
       end
 
       local d = ns.Overlay.describe()
-      local lines = {
-        string.format("build=%s  now-slot=%s", tostring(d.buildKey), tostring(d.nowSlot)),
-      }
-      if #d.cues == 0 then
-        lines[#lines + 1] = "this build suggests no cues"
+      local lines = {}
+      if #d.abilities == 0 then
+        lines[#lines + 1] = "no ability has its screen edge switched on"
       end
-      for _, c in ipairs(d.cues) do
-        lines[#lines + 1] = string.format("%d. %s [%s]", c.index, tostring(c.reason or c.id), c.id)
-        if c.unavailable then
-          lines[#lines + 1] = "   UNAVAILABLE: " .. c.unavailable
-        elseif not c.enabled then
-          lines[#lines + 1] = "   off — enable it in /elm config → Peripheral cues"
+      for _, a in ipairs(d.abilities) do
+        lines[#lines + 1] = string.format("%s  edge=%s intensity=%s", a.key, tostring(a.edge),
+          tostring(a.intensity))
+        if not a.enabled then
+          lines[#lines + 1] = "   off — switch it on in /elm config → Abilities → Screen-edge"
+        elseif #a.events == 0 then
+          -- On, and firing on nothing: the one state that looks identical to a broken renderer.
+          lines[#lines + 1] = "   on, but no event is ticked — it can never fire"
         else
-          lines[#lines + 1] = string.format("   on  edge=%s intensity=%s", tostring(c.edge),
-            tostring(c.intensity))
-          -- "never" here with matchesNow=true is the actionable pair: the cue is on, its spell IS
-          -- the current suggestion, and nothing has flared. That is a bug, not a quiet rotation.
-          lines[#lines + 1] = string.format("   matches now-slot=%s  last fired=%s",
-            tostring(c.matchesNow),
-            c.firedAt and string.format("%.1fs ago", math.max(0, ns.now() - c.firedAt)) or "never")
+          lines[#lines + 1] = string.format("   on  fires on: %s", table.concat(a.events, ", "))
         end
+        lines[#lines + 1] = string.format("   last fired=%s",
+          a.firedAt and string.format("%.1fs ago", math.max(0, ns.now() - a.firedAt)) or "never")
       end
-      lines[#lines + 1] = "/elm debug cues <n> test-fires one"
+      lines[#lines + 1] = "/elm debug cues <ABILITY_KEY> test-fires one"
       return lines
     elseif sub == "perf" then
       -- This command exists to answer "is Elmira expensive". It used to open with

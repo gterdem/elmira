@@ -1,9 +1,35 @@
 # Changelog
 ## Unreleased
+- **New: the Screen-edge tab works.** Any ability can flash a screen edge — left, right, top or
+  bottom — in a colour and at a brightness you choose, when Elmira suggests it and/or when it comes
+  off cooldown. Off for every ability until you switch it on, with a Preview button that fires the
+  real flash, and a line on the tab if you leave it on with neither moment ticked.
+- **New: your class pack can ship a screen flash already switched on for the one or two abilities
+  worth glancing away for.** The paladin data ships two: Exorcism (red, left edge) and Divine Storm
+  (blue, right edge). Everything else stays off, and anything you set yourself wins over what the
+  pack says. Their one-line reason now shows under "What the class pack says" on the ability's
+  General tab.
+- **New: Abilities › Share.** Export every ability setting on this character as a string, or export
+  a rotation together with the settings of the abilities it uses, and paste either into the box to
+  merge them in — after a confirmation naming how many abilities it will overwrite. Settings for a
+  spell this character does not know are kept and shown greyed in the list as "not on this
+  character", and become a normal ability the moment your client can resolve it.
+- **New: the Rotations Share tab can export.** A button puts the rotation you are looking at into
+  the box, with an "Include ability settings" tick box beside it; importing such a string applies
+  both and says how many abilities' settings came with it.
+- **Changed: an ability's icon is greyed unless one of Texture, Screen-edge, Sound or Announcement
+  is on for it.** The glow no longer counts: it is on for everything by default, so it left every
+  icon in the list looking configured. The row's tooltip and the "Show › Any configured" filter
+  follow the same rule.
+- **Changed: `/elm debug cues` reports per ability** — which edge, which moments, when it last
+  fired — and `/elm debug cues <ABILITY_KEY>` test-fires that one ability's flash.
+- **Changed: the old build-level cue lists are gone**, along with the Peripheral cues controls on
+  the Notifications page, which now points at the ability's own Screen-edge tab.
+
 - **New: every ability has its own settings, on a rebuilt Abilities page.** The page is two tabs
   now, "Abilities" and "Share", and the abilities themselves sit in a list of their own with the
   add box and a search row above it. Pick one and you get six tabs: General, Glow, Texture,
-  Screen-edge, Sound and Announcement. Texture and Screen-edge are placeholders in this update.
+  Screen-edge, Sound and Announcement. Texture is a placeholder in this update.
 - **New: "All abilities" is the first row of that list.** It holds what every ability falls back
   to. Each ability opens with "Same as All abilities" switched on; turn it off to give that one
   ability its own glow style, colour and sliders, its own sounds or its own wording. Whether a

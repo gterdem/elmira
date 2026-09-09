@@ -145,8 +145,10 @@ function UserBuilds.importString(str, pack, opts)
   local s = store()
   if not s then return nil, "saved variables are not loaded" end
   if not ns.Serialize then return nil, "serializer is not loaded" end
-  local build, err = ns.Serialize.decode(str, ctxFor(pack))
-  if not build then return nil, err end
+  local bundle, err = ns.Serialize.decodeBundle(str, ctxFor(pack))
+  if not bundle then return nil, err end
+  local build = bundle.build
+  if type(build) ~= "table" then return nil, "no build in string" end
   if build.class and build.class ~= pack.class then
     return nil, string.format("that build is for %s, not %s", tostring(build.class), tostring(pack.class))
   end
@@ -161,7 +163,13 @@ function UserBuilds.importString(str, pack, opts)
     derivedFrom = parent, derivedAt = parent and catalogUpdated(pack, parent) or nil,
     importedAt = opts.today,
   }
-  return key
+  -- AB2-D5: a rotation exported WITH its abilities' settings arrives with them. Applied here, at
+  -- the one place a build string is accepted, rather than at the two panels that paste one -- a
+  -- second caller is a second place to forget, and settings that silently did not arrive look
+  -- exactly like settings the sender never included. Returned as a count so the panel can say so.
+  local A = ns.AbilitySettings
+  local merged = (A and A.import(bundle.abilities, bundle.spells)) or 0
+  return key, merged
 end
 
 -- A fork is a COPY, all the way down. `Classes/<Class>.lua` builds are one shared table per
@@ -342,12 +350,17 @@ function UserBuilds.replaceEntries(pack, key, entries)
   return edited(build)
 end
 
--- UserBuilds.exportKey(pack, key) -> string | nil, reason
-function UserBuilds.exportKey(pack, key)
+-- UserBuilds.exportKey(pack, key, extra) -> string | nil, reason
+--
+-- `extra` is AB2-D5's "include ability settings": `{ abilities = , spells = }`, already resolved by
+-- the caller (the names in it come from the CLIENT, which Core cannot ask). Absent, this is the
+-- rotation-only string `/elm export` has always produced.
+function UserBuilds.exportKey(pack, key, extra)
   local build = UserBuilds.find(pack, key)
   if not build then return nil, string.format("no build %q", tostring(key)) end
   if not ns.Serialize then return nil, "serializer is not loaded" end
-  return ns.Serialize.encode(build)
+  if not extra then return ns.Serialize.encode(build) end
+  return ns.Serialize.encodeBundle({ build = build, abilities = extra.abilities, spells = extra.spells })
 end
 
 function UserBuilds.remove(key)

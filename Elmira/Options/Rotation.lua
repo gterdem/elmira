@@ -2485,8 +2485,55 @@ end
 -- The state lives in Options.lua, where it already was; this reads it through the accessors rather
 -- than holding a second copy. `Options.exchangeText()` had no caller outside the suite until now,
 -- which in this repo is a bug report, not a spare function.
+-- AB2-D5: "include ability settings". Off by default -- a rotation string is what people paste at
+-- each other, and quietly sending your glow colours and sounds with it is not what "share this
+-- rotation" means. On, the string carries the settings of every ability the rotation names, and the
+-- receiving side applies them when it imports the rotation (Core/UserBuilds.importString).
+local shareAbilities = false -- mutants: equivalent deleting the local only makes it a global; luacheck catches it
+
+function Rotation.setShareAbilities(on) shareAbilities = on and true or false end
+function Rotation.shareAbilities() return shareAbilities end
+
+-- Rotation.exportSelected() -> true | false
+--
+-- The rotation-side export (AB2-D5). Fills the same box `/elm export` fills, for whichever rotation
+-- the page is showing -- the one thing the Share tab could not do before was produce a string.
+function Rotation.exportSelected()
+  local key = Rotation.selected()
+  if not (key and ns.UserBuilds and ns.Options) then return false end
+  local extra = nil -- mutants: equivalent deleting the local only makes it a global; luacheck catches it
+  if shareAbilities and ns.SpellsPage and ns.SpellsPage.bundle and ns.Spells then
+    local build = ns.UserBuilds.find(pack(), key)
+    if build then extra = ns.SpellsPage.bundle(ns.Spells.referencedKeys(build)) end
+  end
+  local str, err = ns.UserBuilds.exportKey(pack(), key, extra)
+  if not str then
+    ns.Options.setExchangeText("")
+    ns.Options.noteExchange(string.format(L["Export failed: %s"], tostring(err)))
+    return false
+  end
+  ns.Options.setExchangeText(str)
+  ns.Options.noteExchange(string.format(L["Exported %s -- copy the text above."],
+                                        Rotation.displayName(key)))
+  return true
+end
+
 local function shareArgs()
   return {
+    export = {
+      type = "execute", order = 0.1, width = "relative", relWidth = 0.5,
+      name = L["Export This Rotation"],
+      desc = L["Puts the rotation you are looking at into the box below, as a string to copy."],
+      func = function() Rotation.exportSelected() end,
+    },
+    abilities = {
+      type = "toggle", order = 0.2, width = "relative", relWidth = 0.5,
+      name = L["Include ability settings"],
+      desc = L["Sends the glow, screen-edge, sound and announcement settings of every ability this "
+            .. "rotation names along with it."],
+      get = function() return Rotation.shareAbilities() end,
+      set = function(_, v) Rotation.setShareAbilities(v) end,
+    },
     text = {
       type = "input", multiline = 8, width = "full", order = 1, name = L["Build string"],
       desc = L["Paste an ELM1: string to import it as one of your builds. /elm export fills this box with the active build."],
