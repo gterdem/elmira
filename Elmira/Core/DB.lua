@@ -68,30 +68,20 @@ DB.defaults = {
     -- ships behind this toggle rather than folded permanently into the strip.
     showPlaceholder = true,
     anchor = { point = "CENTER", relPoint = "CENTER", x = 0, y = -150 },
-    -- Every numeric here is `false`, meaning "whatever LibCustomGlow would do on its own". That is
-    -- what makes a default install render exactly as it did before these controls existed; the
-    -- moment the user moves a slider it becomes a real number. `color = false` means the brand's
-    -- highlight. `secondary` ships off: ADR-0015 exists because two things competed for one glance.
-    glow = { style = "PIXEL", barGlow = true, color = false,
-             particles = false, frequency = false, thickness = false, speed = false,
-             secondary = false,
-             -- How dim the "cast after next" hint is, as a fraction of the main glow. A setting
-             -- rather than a constant because how dim "dim" needs to be depends on the style: Proc
-             -- drives its own alpha animation (SetToFinalAlpha, from 1 to 1), so a value that reads
-             -- clearly dimmer on Pixel can look identical there. Reported from a client, 2026-09-05.
-             -- Brightness is the ONLY difference the hint is allowed to make: it has no style of
-             -- its own. PE7 (owner): per-ability glow style is coming to the Abilities page, and a
-             -- global shape for the second glow would silently overrule what was set on the ability.
-             secondaryAlpha = 0.35 },
-    -- ADR-0009: the overlay has no global "on" switch. `cues` maps a cue id to the user's settings
-    -- for it, so an empty table is a quiet default install, and a cue only ever exists because the
-    -- user opted it in. Reshaped at M1 with no dbVersion migration: the previous
-    -- `{enabled=false, intensity=0.5}` both equalled their defaults, so AceDB never wrote either key
-    -- to disk, and no UI existed yet that could have changed them.
-    overlay = { cues = {} },
-    -- Master mute only. A cue carries its own sound name, on the same opt-in set and the same
-    -- change-to trigger as its flare.
-    sounds = { enabled = false },
+    -- AB1-D3: what a glow LOOKS like (style, colour, particles, frequency, thickness, pulse) is a
+    -- per-ability, per-character setting now and lives in `char.abilities` through
+    -- Core/AbilitySettings.lua. What is left here are the two switches that are not about any one
+    -- ability: whether Elmira glows action-bar buttons at all, and the dim second glow for the cast
+    -- after next.
+    --
+    -- `secondary` ships off: ADR-0015 exists because two things competed for one glance.
+    -- `secondaryAlpha` is how dim that hint is, as a fraction of the main glow -- a setting rather
+    -- than a constant because how dim "dim" needs to be depends on the style: Proc drives its own
+    -- alpha animation (SetToFinalAlpha, from 1 to 1), so a value that reads clearly dimmer on Pixel
+    -- can look identical there. Reported from a client, 2026-09-05. Brightness is the ONLY
+    -- difference the hint is allowed to make: it has no style of its own, because a global shape
+    -- for the second glow would silently overrule what was set on the ability.
+    glow = { barGlow = true, secondary = false, secondaryAlpha = 0.35 },
     -- F37. `routes` starts EMPTY and Core/Announce falls back to its shipped defaults, so a category
     -- added by a later release arrives with its intended routing rather than silent -- and a user
     -- who has never opened the panel is not carrying a frozen copy of an old default set.
@@ -106,9 +96,10 @@ DB.defaults = {
       sounds = {},
       screen = { font = "Friz Quadrata TT", size = 18, duration = 4,
                  anchor = { point = "TOP", relPoint = "TOP", x = 0, y = -140 } },
-      -- Only cooldowns at least this long are announced. Shorter ones would be a line every global
-      -- cooldown -- noise in your own chat, and worse in a group's.
-      cooldownFloor = 120,
+      -- AB1-D10: there is no `cooldownFloor` any more. A number of seconds cannot tell a tank's
+      -- defensive save from a burst cooldown, which is the distinction that decides whether a line
+      -- in party chat is welcome; the per-ability Announcement tab decides instead, and it ships
+      -- off for every ability.
       routes = {},
     },
     dbVersion = 0,
@@ -118,7 +109,13 @@ DB.defaults = {
   -- R2 (D53): the Spells registry is PER CHARACTER, because it records what THIS character's client
   -- could resolve -- a name only this account's rogue has seen means nothing to its paladin.
   -- `[key] = { key =, id =, name =, source = "pack"|"spellbook"|"id"|"name" }`.
-  char = { setupDone = 0, pinnedBuild = false, snoozed = {}, firstRunDismissed = false, spells = {} },
+  -- AB1-D3: `abilities` is what every registered ability is allowed to do on screen, keyed by the
+  -- SAME spell key as `spells` above but stored beside it rather than inside it -- `Spells.merged`
+  -- lets a data pack overwrite a registry entry on a key collision, and settings kept in that entry
+  -- would go with it. `"*"` is the All abilities row. Core/AbilitySettings.lua owns the shape.
+  -- `sounds` is the master mute for every ability sound (AB1-D8), per character like the rest.
+  char = { setupDone = 0, pinnedBuild = false, snoozed = {}, firstRunDismissed = false, spells = {},
+           abilities = {}, sounds = { enabled = false } },
 }
 
 -- Ordered migration lists. Each entry: { version = N, apply = function(target) end }. Empty at M0;

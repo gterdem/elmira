@@ -34,9 +34,9 @@ describe("Core.DB", function()
     -- to the constant. It has no style of its own (PE7): it always draws in the main style, dimmed.
     assert.equal(0.35, DB.defaults.profile.glow.secondaryAlpha)
     assert.is_nil(DB.defaults.profile.glow.secondaryStyle)
-    -- The only category that can reach party chat, so the bar for what counts is pinned: 120s
-    -- takes Avenging Wrath and Aura Mastery and leaves Crusader Strike's 6s alone.
-    assert.equal(120, DB.defaults.profile.announce.cooldownFloor)
+    -- AB1-D10: no cooldown floor. Length cannot tell a defensive save from a burst cooldown; the
+    -- per-ability Announcement tab decides, and it ships off for every ability.
+    assert.is_nil(DB.defaults.profile.announce.cooldownFloor)
     -- D38: the queue strip's own nudge ships ON; the owner can switch it off from Queue.
     assert.is_true(DB.defaults.profile.showPlaceholder)
     -- D37: the first-run popup is offered until the player explicitly says stop.
@@ -44,18 +44,31 @@ describe("Core.DB", function()
     -- R2 (D53): the Spells registry starts empty and PER CHARACTER, not account-wide -- a name only
     -- one alt's client has resolved means nothing to another.
     assert.same({}, DB.defaults.char.spells)
+    -- AB1-D3: the per-ability settings store, per character and beside `spells` rather than inside
+    -- it, plus the master mute for every ability sound (AB1-D8).
+    assert.same({}, DB.defaults.char.abilities)
+    assert.is_false(DB.defaults.char.sounds.enabled)
   end)
 
-  -- Every glow number ships as `false`, meaning "whatever LibCustomGlow would do on its own", so a
-  -- default install renders exactly as it did before the controls existed. A number here would
-  -- silently restyle every existing user's glow on upgrade.
-  it("leaves every glow appearance setting to the library", function()
+  -- AB1-D3: what a glow LOOKS like is per ability and per character now (Core/AbilitySettings), so
+  -- none of it is left in the profile. What stays is the pair of switches that are not about any
+  -- one ability. A key that came back here would be a setting two screens could disagree about.
+  it("keeps no per-ability glow appearance in the profile", function()
     local g = DB.defaults.profile.glow
-    assert.is_false(g.color)
-    assert.is_false(g.particles)
-    assert.is_false(g.frequency)
-    assert.is_false(g.thickness)
-    assert.is_false(g.speed)
+    assert.is_true(g.barGlow)
+    assert.is_nil(g.style)
+    assert.is_nil(g.color)
+    assert.is_nil(g.particles)
+    assert.is_nil(g.frequency)
+    assert.is_nil(g.thickness)
+    assert.is_nil(g.speed)
+  end)
+
+  -- AB1-D3: the overlay's per-cue table and the old cue-sound mute are gone from the profile with
+  -- them -- both are per-ability, per-character settings now.
+  it("keeps no overlay or cue-sound table in the profile", function()
+    assert.is_nil(DB.defaults.profile.overlay)
+    assert.is_nil(DB.defaults.profile.sounds)
   end)
 
   it("ships the second-suggestion hint off", function()

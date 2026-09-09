@@ -403,8 +403,10 @@ Slash.register{
       local p = ns.db and ns.db.profile
       local lines = {}
       if p and p.glow then
+        -- AB1-D3: the style is per ability now, so this reports the All abilities one -- what an
+        -- ability that has not been given its own draws in. `p.glow.style` was nil from here on.
         lines[#lines + 1] = string.format("glow: barGlow=%s style=%s active=%d",
-          tostring(p.glow.barGlow), tostring(p.glow.style),
+          tostring(p.glow.barGlow), tostring(ns.Glow and ns.Glow.styleFor()),
           ns.Glow and ns.Glow.activeCount() or 0)
         if p.glow.barGlow == false then lines[#lines + 1] = "  -> bar glow is OFF in the options" end
       end

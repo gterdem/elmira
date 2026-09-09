@@ -19,10 +19,15 @@ describe("Display.Driver", function()
   -- driver, and a stub that allocated on every read would be charged to it.
   -- PE9-D6: the visibility reading is targetAttackable (UnitCanAttack), not targetExists. Both are
   -- stubbed from the one argument because every scenario in this file means "a mob".
+  -- AB1-D5 widened this to the three members Core/Track reads. Off cooldown, castable and with no
+  -- aura up is the resting state of every scenario in this file that is not about the tracker.
   local function stubState(inCombat, hasTarget)
     local state = { inCombat = function() return inCombat end,
                     targetExists = function() return hasTarget end,
-                    targetAttackable = function() return hasTarget end }
+                    targetAttackable = function() return hasTarget end,
+                    cooldown = function() return 0 end,
+                    usable = function() return true end,
+                    buff = function() return nil end }
     ns.API = { GetState = function() return state end }
   end
 
@@ -417,35 +422,55 @@ describe("Display.Driver", function()
     -- "Cooldowns used" shipped with routing, a colour and the ONLY party/raid toggle, and nothing
     -- anywhere emitted it: the owner switched it on, used Avenging Wrath and got silence. Reported
     -- from a client 2026-09-05.
+    --
+    -- AB1-D10: there is no length rule left. The ability's own Announcement tab decides, and it
+    -- ships OFF for every ability including the long ones ("keep them turned off by default").
     describe("announcing a cooldown that was used", function()
       local told
       before_each(function()
         told = {}
+        helper.load("Elmira/Core/AbilitySettings.lua")
+        ns.db.char = { abilities = {} }
         ns.Announce = {
-          worthAnnouncing = function(cd) return ns.Announce.floor and cd and cd >= ns.Announce.floor end,
-          floor = 120,
           emit = function(cat, text, opts) told[#told + 1] = { cat = cat, text = text, opts = opts } end,
         }
         ns.BarGlow = { spellName = function(id) return id == 407788 and "Avenging Wrath" or nil end }
-        -- Real cooldown values, so the threshold is tested against the numbers a paladin has:
-        -- Avenging Wrath 180s is announced, Crusader Strike 6s is not.
         ns.Display.currentPack = function()
           return { spells = { AVENGING_WRATH = { id = 407788, cooldown = 180 },
                               CRUSADER_STRIKE = { id = 407676, cooldown = 6 } } }
         end
       end)
 
-      it("says a long cooldown went out, in its own category", function()
+      local function announceOn(key)
+        ns.AbilitySettings.set(key, "announce", "enabled", true)
+      end
+
+      it("says nothing at all until the ability's own tab is switched on", function()
+        assert.is_false(Display.announceCooldown("AVENGING_WRATH"))
+        assert.equal(0, #told)
+      end)
+
+      it("says the cooldown went out, in its own category, once it is switched on", function()
+        announceOn("AVENGING_WRATH")
         assert.is_true(Display.announceCooldown("AVENGING_WRATH"))
         assert.equal(1, #told)
         assert.equal("cooldown", told[1].cat)
         assert.equal("Avenging Wrath used.", told[1].text)
       end)
 
-      -- The bar is deliberately high: this is the one category that may reach party chat, and
-      -- Crusader Strike at 6s would be a line every global cooldown.
-      it("says nothing about a short one", function()
-        assert.is_false(Display.announceCooldown("CRUSADER_STRIKE"))
+      -- Length no longer decides anything: a six-second ability announces if its owner asked for
+      -- it, which is the whole point of moving the decision onto the ability.
+      it("announces a short cooldown too when that is what was asked for", function()
+        announceOn("CRUSADER_STRIKE")
+        assert.is_true(Display.announceCooldown("CRUSADER_STRIKE"))
+        assert.equal(1, #told)
+      end)
+
+      -- AB1-D4: All abilities has no on/off for Announcement, so nothing set there can switch one
+      -- on. This is the observable the decision names.
+      it("cannot be switched on for an ability by the All abilities entry", function()
+        ns.AbilitySettings.set(ns.AbilitySettings.ALL, "announce", "enabled", true)
+        assert.is_false(Display.announceCooldown("AVENGING_WRATH"))
         assert.equal(0, #told)
       end)
 
@@ -455,6 +480,7 @@ describe("Display.Driver", function()
       end)
 
       it("falls back to a readable name when the client cannot resolve the id", function()
+        announceOn("AVENGING_WRATH")
         ns.BarGlow = { spellName = function() return nil end }
         ns.Detect = { readableName = function(key) return "readable:" .. key end }
         Display.announceCooldown("AVENGING_WRATH")
@@ -463,24 +489,52 @@ describe("Display.Driver", function()
 
       -- The key itself is the last resort. A blank line saying " used." is worse than an ugly one.
       it("falls back to the raw key when nothing can name it", function()
+        announceOn("AVENGING_WRATH")
         ns.BarGlow, ns.Detect = nil, nil
         Display.announceCooldown("AVENGING_WRATH")
         assert.equal("AVENGING_WRATH used.", told[1].text)
       end)
 
+      -- AB1-D10: "include how long it lasts", from State's THIRD `buff` return (the effect's full
+      -- length), omitted rather than guessed when this client cannot say.
+      it("adds the effect's length only when asked for it, and only when it is known", function()
+        announceOn("AVENGING_WRATH")
+        ns.API = { GetState = function() return { buff = function(_, key)
+          if key == "AVENGING_WRATH" then return 1, 4, 20 end
+        end } end }
+        Display.announceCooldown("AVENGING_WRATH")
+        assert.equal("Avenging Wrath used.", told[1].text, "the duration is off by default")
+
+        -- "include how long it lasts" is WORDING, so it inherits (AB1-D4) -- setting it on the
+        -- All abilities entry is what reaches an ability that is still linked to it.
+        ns.AbilitySettings.set(ns.AbilitySettings.ALL, "announce", "duration", true)
+        Display.announceCooldown("AVENGING_WRATH")
+        assert.equal("Avenging Wrath used -- 20s.", told[2].text)
+
+        ns.API = { GetState = function() return { buff = function() return nil end } end }
+        Display.announceCooldown("AVENGING_WRATH")
+        assert.equal("Avenging Wrath used.", told[3].text, "an unknown length must be omitted")
+      end)
+
       it("carries the spell's icon, so the on-screen line shows what went out", function()
+        announceOn("AVENGING_WRATH")
         Display.announceCooldown("AVENGING_WRATH")
         assert.is_truthy(told[1].opts.icon)
       end)
 
-      it("does not error before the announcer is loaded", function()
+      it("does not error before the announcer or the settings store is loaded", function()
+        announceOn("AVENGING_WRATH")
         ns.Announce = nil
+        assert.is_false(Display.announceCooldown("AVENGING_WRATH"))
+        ns.Announce = { emit = function() end }
+        ns.AbilitySettings = nil
         assert.is_false(Display.announceCooldown("AVENGING_WRATH"))
       end)
 
       -- Both halves, and the announcement must NOT inherit the strip's guards: someone who hides
       -- the queue and watches only the bar glow still wants to be told a cooldown went out.
       it("tells the strip and announces, from one call", function()
+        announceOn("AVENGING_WRATH")
         local passed
         ns.Queue = { keyForSpellID = function(id) return id == 407788 and "AVENGING_WRATH" or nil end,
                      noteCast = function(id) passed = id end }
@@ -987,6 +1041,226 @@ describe("Display.Driver", function()
       assert.is_true((Display.shouldShow()))
       local kb = helper.allocatedKB(function() for _ = 1, 10 do Display.shouldShow() end end)
       assert.is_true(kb == nil or kb < 0.05, string.format("ten visibility reads allocated %.3f KB", kb or 0))
+    end)
+  end)
+
+  -- AB1-D5: the per-ability event tracker rides the loop that already exists. The three things
+  -- worth asserting are which abilities it watches, that the loop actually ticks it, and that an
+  -- event reaches something the player notices -- the last one is where "covered function, no call
+  -- site" hides.
+  describe("the per-ability tracker (AB1-D5)", function()
+    local A, spells, played
+
+    before_each(function()
+      A = helper.load("Elmira/Core/AbilitySettings.lua")
+      helper.load("Elmira/Core/Track.lua")
+      ns.db.char = { abilities = {}, sounds = { enabled = true } }
+      spells = { EXORCISM = { id = 1 }, JUDGEMENT = { id = 2 } }
+      -- ONE pack table, returned by identity: the driver compares the pack it cached against for
+      -- exactly that, and a fresh table per call would make the cache miss on every tick -- which
+      -- is the defect the caching test below exists to catch.
+      local currentPack = { spells = spells }
+      ns.Display.currentPack = function() return currentPack end
+      ns.Spells = { merged = function(pack) return pack and pack.spells or {} end }
+      played = {}
+      -- Mirrors Display/Sounds.play, "None" refusal included: a fake that recorded silence too
+      -- would let a test pass on a cue that never made a noise.
+      ns.Sounds = { abilitySoundsOn = function() return ns.db.char.sounds.enabled end,
+                    play = function(name)
+                      if not name or name == "None" then return false end
+                      played[#played + 1] = name
+                      return true
+                    end }
+    end)
+
+    local function keysOf(rows)
+      local out = {}
+      for _, row in ipairs(rows) do out[#out + 1] = row.key end
+      return out
+    end
+
+    describe("the tracked set", function()
+      it("watches nothing until an ability asks for something the state answers", function()
+        assert.same({}, keysOf(Display.watchedKeys()))
+        A.set("EXORCISM", "edge", "enabled", true)
+        assert.same({ "EXORCISM" }, keysOf(Display.watchedKeys()))
+      end)
+
+      -- Rebuilt when the settings version moves, never per tick: a fresh walk of the registry ten
+      -- times a second is the aura scan this addon spent M5 removing. Proved by writing BEHIND the
+      -- store's back, which bumps no version -- the only way to tell a cached answer from a
+      -- recomputed one that happens to agree.
+      it("recomputes when the settings version moves, and not otherwise", function()
+        A.set("EXORCISM", "edge", "enabled", true)
+        assert.same({ "EXORCISM" }, keysOf(Display.watchedKeys()))
+        ns.db.char.abilities.JUDGEMENT = { edge = { enabled = true } }
+        assert.same({ "EXORCISM" }, keysOf(Display.watchedKeys()), "it walked the registry again")
+        A.set("JUDGEMENT", "sound", "enabled", true)
+        assert.same({ "EXORCISM", "JUDGEMENT" }, keysOf(Display.watchedKeys()))
+      end)
+
+      it("carries each ability's own expiring threshold", function()
+        A.set("EXORCISM", "edge", "enabled", true)
+        A.set(A.ALL, "general", "expiringSeconds", 7)
+        assert.equal(7, Display.watchedKeys()[1].expiring)
+      end)
+
+      it("rebuilds when the pack changes underneath it", function()
+        A.set("EXORCISM", "edge", "enabled", true)
+        assert.same({ "EXORCISM" }, keysOf(Display.watchedKeys()))
+        ns.Display.currentPack = function() return { spells = { JUDGEMENT = { id = 2 } } } end
+        A.set("JUDGEMENT", "edge", "enabled", true)
+        assert.same({ "JUDGEMENT" }, keysOf(Display.watchedKeys()))
+      end)
+
+      -- The standing rule for the whole redesign: nothing may assume a class pack exists. A mage
+      -- with no shipped data registers abilities from the spellbook and must still get cues.
+      it("watches a registered ability on a character with no data pack at all", function()
+        ns.Display.currentPack = function() return nil end
+        ns.db.char.spells = { SLICE_AND_DICE = { key = "SLICE_AND_DICE", id = 900 } }
+        ns.Spells = { merged = function(pack) return (pack and pack.spells) or ns.db.char.spells end }
+        A.set("SLICE_AND_DICE", "edge", "enabled", true)
+        assert.same({ "SLICE_AND_DICE" }, keysOf(Display.watchedKeys()))
+      end)
+
+      it("watches nothing at all with no settings store loaded", function()
+        ns.AbilitySettings = nil
+        assert.same({}, keysOf(Display.watchedKeys()))
+      end)
+
+      it("reads a pack's own spells when the registry merge is not loaded", function()
+        ns.Spells = nil
+        A.set("EXORCISM", "edge", "enabled", true)
+        assert.same({ "EXORCISM" }, keysOf(Display.watchedKeys()))
+      end)
+    end)
+
+    describe("what an event does", function()
+      it("plays the ability's own sound for that event, and nothing for another", function()
+        A.set("EXORCISM", "sound", "enabled", true)
+        A.set(A.ALL, "sound", "ready", "Chime")
+        assert.is_true(Display.abilityEvent("EXORCISM", "ready"))
+        assert.same({ "Chime" }, played)
+        assert.is_false(Display.abilityEvent("EXORCISM", "used"), "the used slot is still None")
+        assert.same({ "Chime" }, played)
+      end)
+
+      it("plays nothing for an ability whose sound channel is off", function()
+        A.set(A.ALL, "sound", "ready", "Chime")
+        assert.is_false(Display.abilityEvent("EXORCISM", "ready"))
+        assert.same({}, played)
+      end)
+
+      -- AB1-D8's master mute, per character.
+      it("plays nothing at all while ability sounds are muted", function()
+        A.set("EXORCISM", "sound", "enabled", true)
+        A.set(A.ALL, "sound", "ready", "Chime")
+        ns.db.char.sounds.enabled = false
+        assert.is_false(Display.abilityEvent("EXORCISM", "ready"))
+        assert.same({}, played)
+      end)
+
+      -- AB1-D6: "Only in combat" guards EVERY channel of the ability, asked once rather than once
+      -- per channel -- a guard applied in four places is one that will be forgotten in one of them.
+      it("does nothing out of combat once Only in combat is set", function()
+        A.set("EXORCISM", "sound", "enabled", true)
+        A.set(A.ALL, "sound", "ready", "Chime")
+        A.set(A.ALL, "general", "onlyInCombat", true)
+        stubState(false, false)
+        assert.is_false(Display.abilityEvent("EXORCISM", "ready"))
+        assert.same({}, played)
+        stubState(true, false)
+        assert.is_true(Display.abilityEvent("EXORCISM", "ready"))
+        assert.same({ "Chime" }, played)
+      end)
+
+      it("announces on used, through the ability's own Announcement tab", function()
+        local told = {}
+        ns.Announce = { emit = function(cat, text) told[#told + 1] = cat .. ":" .. text end }
+        A.set("EXORCISM", "announce", "enabled", true)
+        assert.is_true(Display.abilityEvent("EXORCISM", "used"))
+        assert.same({ "cooldown:EXORCISM used." }, told)
+        -- and only on `used`: coming off cooldown is not using it
+        assert.is_false(Display.abilityEvent("EXORCISM", "ready"))
+        assert.equal(1, #told)
+      end)
+
+      it("does nothing, without erroring, before the settings store is loaded", function()
+        ns.AbilitySettings = nil
+        assert.is_false(Display.abilityEvent("EXORCISM", "ready"))
+      end)
+    end)
+
+    describe("the loop that drives it", function()
+      it("ticks the tracker before the visibility branch, so a hidden strip still cues", function()
+        A.set("EXORCISM", "sound", "enabled", true)
+        A.set(A.ALL, "sound", "ready", "Chime")
+        ns.db.profile.visibility = "combat"
+        stubState(false, false)
+        assert.equal("hidden", tick())
+        assert.same({ "Chime" }, played, "the tracker never ran on a hidden tick")
+        -- The edge, across ticks: the loop has to carry Track's memory forward or a spell that is
+        -- simply sitting off cooldown cues ten times a second.
+        tick()
+        tick()
+        assert.same({ "Chime" }, played, "the tracker's memory was not carried between ticks")
+      end)
+
+      it("does not tick the tracker on a throttled tick", function()
+        A.set("EXORCISM", "sound", "enabled", true)
+        A.set(A.ALL, "sound", "ready", "Chime")
+        Display.tick(500)
+        assert.equal(1, #played)
+        assert.equal("skipped", Display.tick(500.01))
+        assert.equal(1, #played, "a throttled tick still polled the state")
+      end)
+
+      -- The `suggested` event: the now-slot became THIS ability. Fired from the now-slot alone, not
+      -- from `changed` -- which is true for any movement anywhere in the queue.
+      it("fires suggested when the top of the queue changes to the ability, once", function()
+        A.set("EXORCISM", "sound", "enabled", true)
+        A.set(A.ALL, "sound", "suggested", "Ping")
+        stubQueue({ { spell = "EXORCISM" }, { spell = "JUDGEMENT" } }, "BUILD")
+        tick()
+        assert.same({ "Ping" }, played)
+        -- The rest of the queue moving is not a new suggestion.
+        stubQueue({ { spell = "EXORCISM" }, { spell = "CONSECRATION" } }, "BUILD")
+        tick()
+        assert.same({ "Ping" }, played, "a change further down the queue fired the cue")
+        stubQueue({ { spell = "JUDGEMENT" } }, "BUILD")
+        tick()
+        assert.same({ "Ping" }, played, "JUDGEMENT has no sound of its own")
+        stubQueue({ { spell = "EXORCISM" } }, "BUILD")
+        tick()
+        assert.same({ "Ping", "Ping" }, played, "coming back to the top is a new suggestion")
+      end)
+
+      it("fires nothing for an empty queue", function()
+        A.set("EXORCISM", "sound", "enabled", true)
+        A.set(A.ALL, "sound", "suggested", "Ping")
+        stubQueue({}, "BUILD")
+        tick()
+        assert.same({}, played)
+      end)
+    end)
+
+    -- Display.spellName: the client's name for the id the merged registry holds, falling back to
+    -- the readable key. Split out of announceCooldown because a key now has to appear in more than
+    -- one sentence.
+    describe("naming an ability", function()
+      it("prefers the client's name, then a readable one, then the raw key", function()
+        ns.BarGlow = { spellName = function(id) return id == 1 and "Exorcism" or nil end }
+        assert.equal("Exorcism", Display.spellName("EXORCISM"))
+        ns.Detect = { readableName = function(key) return "readable:" .. key end }
+        assert.equal("readable:JUDGEMENT", Display.spellName("JUDGEMENT"))
+        ns.BarGlow, ns.Detect = nil, nil
+        assert.equal("EXORCISM", Display.spellName("EXORCISM"))
+      end)
+
+      it("names a key from no pack at all", function()
+        ns.Display.currentPack = function() return nil end
+        assert.equal("EXORCISM", Display.spellName("EXORCISM"))
+      end)
     end)
   end)
 

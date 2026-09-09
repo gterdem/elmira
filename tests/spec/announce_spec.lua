@@ -22,37 +22,16 @@ describe("Core.Announce", function()
     A.use{ now = function() return 100 end, inCombat = function() return false end }
   end)
 
-  -- "Cooldowns used" is the only category that may reach party chat, so what counts as a cooldown
-  -- matters: Crusader Strike at 6s would be a line every global cooldown, in someone else's chat.
+  -- AB1-D10: there is no cooldown floor any more. A number of seconds cannot tell a tank's
+  -- defensive save from a burst cooldown, and that is the distinction that decides whether a line
+  -- belongs in a group's chat -- so the per-ability Announcement tab decides instead, and nothing
+  -- in Core has an opinion about the length.
   describe("what counts as a cooldown worth announcing", function()
-    it("takes the shipped floor when nothing is set", function()
-      assert.equal(120, A.COOLDOWN_FLOOR)
-      assert.equal(120, A.cooldownFloor())
-      assert.is_true(A.worthAnnouncing(180))
-      assert.is_true(A.worthAnnouncing(120))
-      assert.is_false(A.worthAnnouncing(30))
-      assert.is_false(A.worthAnnouncing(6))
-    end)
-
-    it("follows the floor the player chose", function()
-      ns.db.profile.announce.cooldownFloor = 20
-      assert.equal(20, A.cooldownFloor())
-      assert.is_true(A.worthAnnouncing(30))
-      ns.db.profile.announce.cooldownFloor = 600
-      assert.is_false(A.worthAnnouncing(180))
-    end)
-
-    it("ignores a floor that is not a usable number", function()
-      ns.db.profile.announce.cooldownFloor = "soon"
-      assert.equal(120, A.cooldownFloor())
-      ns.db.profile.announce.cooldownFloor = -5
-      assert.equal(120, A.cooldownFloor())
-    end)
-
-    -- A spell with no cooldown recorded is not a cooldown, and must not be announced as one.
-    it("says no for a spell with no cooldown at all", function()
-      assert.is_false(A.worthAnnouncing(nil))
-      assert.is_false(A.worthAnnouncing("lots"))
+    it("has no length rule of its own left", function()
+      assert.is_nil(A.COOLDOWN_FLOOR)
+      assert.is_nil(A.cooldownFloor)
+      assert.is_nil(A.worthAnnouncing)
+      assert.is_nil(ns.DB.defaults.profile.announce.cooldownFloor)
     end)
   end)
 
@@ -80,17 +59,16 @@ describe("Core.Announce", function()
       assert.equal("Long cooldowns used", A.category("cooldown").label)
     end)
 
-    -- PE14-D3: the cooldown row left the Notifications page, and NOTHING ELSE about the category
-    -- left with it -- announcing a long cooldown becomes a per-ability setting, so the engine side
-    -- has to keep working while the page stops offering it.
-    it("keeps every kind emittable while leaving cooldowns off the page", function()
+    -- AB1-D10: the cooldown row is back on the Notifications page. WHETHER a cooldown is
+    -- announced is the ability's own Announcement tab; WHERE the line goes is still routing, so
+    -- the row belongs here with the other three and `OFF_PAGE` is empty again.
+    it("lists every kind on the page, cooldowns included", function()
       local keys = {}
       for _, c in ipairs(A.listed()) do keys[#keys + 1] = c.key end
-      assert.same({ "rotation", "warning", "status" }, keys)
-      assert.is_true(A.OFF_PAGE.cooldown)
+      assert.same({ "rotation", "warning", "status", "cooldown" }, keys)
+      assert.is_nil(A.OFF_PAGE.cooldown)
       assert.is_not_nil(A.category("cooldown"))
       assert.is_not_nil(A.DEFAULT_ROUTES.cooldown)
-      assert.is_true(A.worthAnnouncing(180))
       local heard = 0
       A.registerSink("chat", function() heard = heard + 1 end)
       ns.db.profile.announce.routes.cooldown = { chat = true }
@@ -507,15 +485,13 @@ describe("Core.Announce", function()
   end)
 
   describe("the test button", function()
-    -- PE14-D3: one of every kind THE PAGE OFFERS. Testing a kind with no row is a button
-    -- demonstrating a setting the player cannot find, so both read the same list.
+    -- One of every kind THE PAGE OFFERS. Testing a kind with no row is a button demonstrating a
+    -- setting the player cannot find, so both read the same list -- which since AB1-D10 is every
+    -- category there is.
     it("sends one of every kind the page offers, and none it does not", function()
       assert.equal(#A.listed(), A.test())
       assert.equal(#A.listed(), #A.log())
-      assert.is_true(#A.listed() < #A.CATEGORIES)
-      for _, entry in ipairs(A.log()) do
-        assert.is_not.equal("cooldown", entry.category)
-      end
+      assert.equal(#A.CATEGORIES, #A.listed())
     end)
 
     -- The point of pressing it is to see the result now, not after the next fight.

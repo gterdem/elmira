@@ -174,22 +174,32 @@ describe("Options window", function()
   -- silently drops -- which is exactly how the D31 suppression shipped green and left the tooltip
   -- covering the page in game. `hover()` fires the callback the way the tree does on mouseover, so
   -- what a test asserts is whether anything was DRAWN, never which function is installed.
+  -- `events` rather than a name of our own: that is the field AceGUI's `WidgetBase.SetCallback`
+  -- writes into (AceGUI-3.0.lua:292-296) and the field Options reads to CHAIN a callback instead of
+  -- replacing one. A stand-in that kept its callbacks somewhere else would let a chain that never
+  -- found the prior handler pass green.
   local function fakeTree()
-    local t = { type = "TreeGroup", callbacks = {}, drew = nil }
+    local t = { type = "TreeGroup", events = {}, drew = nil }
     function t:SetCallback(name, fn)
-      if type(fn) == "function" then self.callbacks[name] = fn end
+      if type(fn) == "function" then self.events[name] = fn end
     end
     function t:RefreshTree() self.refreshed = (self.refreshed or 0) + 1 end
     -- Stands in for AceConfigDialog's TreeOnButtonEnter, whose whole body is "draw a tooltip".
     function t:showsATooltip()
       self.drew = nil
-      if self.callbacks.OnButtonEnter then
-        self.callbacks.OnButtonEnter(self, "OnButtonEnter", "rotation", {})
+      if self.events.OnButtonEnter then
+        self.events.OnButtonEnter(self, "OnButtonEnter", "rotation", {})
       end
       return self.drew == true
     end
     t:SetCallback("OnButtonEnter", function(widget) widget.drew = true end)
     return t
+  end
+
+  -- One tree row, reduced to what AB1-D9(a) touches: the icon texture and the row's uniquevalue.
+  local function fakeButton(value)
+    local icon = { SetDesaturated = function(self, on) self.desaturated = on end }
+    return { uniquevalue = value, icon = icon }
   end
 
   before_each(function()
@@ -808,7 +818,7 @@ describe("Options window", function()
       open()
       local tree = fakeTree()
       feed("Elmira", tree, { "rotation" })
-      assert.is_function(tree.callbacks.OnButtonEnter,
+      assert.is_function(tree.events.OnButtonEnter,
         "AceGUI drops a non-function, so the original tooltip callback would survive")
     end)
 
@@ -874,6 +884,190 @@ describe("Options window", function()
     it("does nothing when the tree cannot answer SetCallback or RefreshTree", function()
       open()
       assert.has_no.errors(function() feed("Elmira", { type = "TreeGroup" }, { "rotation" }) end)
+    end)
+  end)
+
+  -- AB1-D9. `spells` is a TAB group whose "Abilities" child is a tree, so FeedGroup builds a SECOND
+  -- TreeGroup (`(parenttype ~= "tree")`, AceConfigDialog-3.0.lua:1721) and hands it over on the path
+  -- {"spells","list"}. Everything here is about that widget alone.
+  describe("the inner Abilities tree (AB1-D9)", function()
+    local function feed(container, path)
+      Options.dialog.FeedGroup(Options.dialog, "Elmira", {}, container, {}, path)
+    end
+
+    before_each(function()
+      helper.load("Elmira/Core/AbilitySettings.lua")
+      ns.db.char = { abilities = {} }
+    end)
+
+    -- The OUTER tree's tooltip is suppressed (PE3-D6: it covered the page). Silencing this one
+    -- would take the per-ability "Glow, Sound on · ..." summary AB1-D9(b) exists to show with it.
+    it("keeps the tooltip the outer tree has suppressed", function()
+      open()
+      local tree = fakeTree()
+      feed(tree, { "spells", "list" })
+      assert.is_true(tree:showsATooltip(), "the channel summary tooltip was silenced")
+      assert.is_nil(tree.refreshed, "the inner tree's rows are flat; nothing to expand")
+    end)
+
+    -- AB1-D9(a). `UpdateButton` only ever calls SetTexture on a row's icon
+    -- (AceGUIContainer-TreeGroup.lua:92-95), so there is no "greyed" flag to set in the options
+    -- table -- it has to happen on the button.
+    describe("desaturating the abilities with nothing switched on", function()
+      it("greys a row with every channel off and leaves a configured one alone", function()
+        open()
+        local A = ns.AbilitySettings
+        A.setInherit("QUIET", "glow", false)
+        A.set("QUIET", "glow", "enabled", false)
+        local tree = fakeTree()
+        tree.buttons = { fakeButton("*"), fakeButton("EXORCISM"), fakeButton("QUIET") }
+        feed(tree, { "spells", "list" })
+        assert.is_false(tree.buttons[1].icon.desaturated, "All abilities is never greyed")
+        assert.is_false(tree.buttons[2].icon.desaturated, "glow ships on for everything")
+        assert.is_true(tree.buttons[3].icon.desaturated)
+      end)
+
+      it("re-runs on every feed, so switching a cue on un-greys the row", function()
+        open()
+        local A = ns.AbilitySettings
+        A.setInherit("QUIET", "glow", false)
+        A.set("QUIET", "glow", "enabled", false)
+        local tree = fakeTree()
+        tree.buttons = { fakeButton("QUIET") }
+        feed(tree, { "spells", "list" })
+        assert.is_true(tree.buttons[1].icon.desaturated)
+        A.set("QUIET", "announce", "enabled", true)
+        feed(tree, { "spells", "list", "QUIET" })
+        assert.is_false(tree.buttons[1].icon.desaturated)
+      end)
+
+      it("reports how many rows it marked, and marks none it cannot", function()
+        open()
+        local tree = fakeTree()
+        tree.buttons = { fakeButton("EXORCISM"), { uniquevalue = "NO_ICON" },
+                         { icon = { SetDesaturated = function() end } } }
+        assert.equal(1, Options.markAbilityIcons(tree))
+        assert.equal(0, Options.markAbilityIcons(fakeTree()))
+        assert.equal(0, Options.markAbilityIcons(nil))
+        ns.AbilitySettings = nil
+        assert.equal(0, Options.markAbilityIcons(tree))
+      end)
+    end)
+
+    -- AB1-D9(d). Each ability page is its own tab group with its own status table, so the Glow tab
+    -- you were reading is "selected" for THAT ability and nothing for the next one.
+    describe("keeping the tab when you select another ability", function()
+      it("copies the previous ability's selected tab into the new one", function()
+        open()
+        assert.is_nil(Options.keepAbilityTab("EXORCISM"), "nothing to copy from on the first select")
+        local from = Options.dialog:GetStatusTable("Elmira", { "spells", "list", "EXORCISM" })
+        from.groups = { selected = "glow" }
+        assert.equal("glow", Options.keepAbilityTab("JUDGEMENT"))
+        local to = Options.dialog:GetStatusTable("Elmira", { "spells", "list", "JUDGEMENT" })
+        assert.equal("glow", to.groups.selected)
+      end)
+
+      it("copies nothing when the previous ability had no tab selected, or is the same one", function()
+        open()
+        -- The destination already sits on a tab of its own; a source with nothing selected must
+        -- leave that alone rather than writing nil over it.
+        local to = Options.dialog:GetStatusTable("Elmira", { "spells", "list", "JUDGEMENT" })
+        to.groups = { selected = "announce" }
+        Options.keepAbilityTab("EXORCISM")
+        assert.is_nil(Options.keepAbilityTab("JUDGEMENT"), "no tab was ever selected")
+        assert.equal("announce", to.groups.selected, "it wrote a nil selection over a real one")
+        assert.is_nil(Options.keepAbilityTab("JUDGEMENT"), "selecting the same row again")
+      end)
+
+      it("says nothing rather than erroring with no dialog", function()
+        Options.dialog = nil
+        assert.is_nil(Options.keepAbilityTab("EXORCISM"))
+      end)
+
+      -- CHAINED, never replaced: AceGUI holds ONE callback per event name, so overwriting
+      -- OnGroupSelected would silently delete AceConfigDialog's own GroupSelected and the tree
+      -- would stop feeding pages at all. This has cost two outages.
+      it("chains onto AceConfigDialog's own OnGroupSelected rather than replacing it", function()
+        open()
+        local fedTo = {}
+        local tree = fakeTree()
+        tree:SetCallback("OnGroupSelected", function(_, _, value) fedTo[#fedTo + 1] = value end)
+        feed(tree, { "spells", "list" })
+
+        tree.events.OnGroupSelected(tree, "OnGroupSelected", "EXORCISM")
+        local from = Options.dialog:GetStatusTable("Elmira", { "spells", "list", "EXORCISM" })
+        from.groups = { selected = "sound" }
+        tree.events.OnGroupSelected(tree, "OnGroupSelected", "JUDGEMENT")
+        assert.same({ "EXORCISM", "JUDGEMENT" }, fedTo, "the library's own handler stopped running")
+        local to = Options.dialog:GetStatusTable("Elmira", { "spells", "list", "JUDGEMENT" })
+        assert.equal("sound", to.groups.selected)
+      end)
+
+      -- Re-feeding must not wrap the wrapper: a chain that grows on every navigation calls the
+      -- library's handler N times and re-selects the tab N times.
+      it("installs itself once however many times the tree is fed", function()
+        open()
+        local calls = 0
+        local tree = fakeTree()
+        tree:SetCallback("OnGroupSelected", function() calls = calls + 1 end)
+        feed(tree, { "spells", "list" })
+        local wrapper = tree.events.OnGroupSelected
+        feed(tree, { "spells", "list", "EXORCISM" })
+        assert.equal(wrapper, tree.events.OnGroupSelected)
+        tree.events.OnGroupSelected(tree, "OnGroupSelected", "EXORCISM")
+        assert.equal(1, calls)
+      end)
+
+      -- AceGUI pools TreeGroups across every Ace3 addon on the client. `Release` wipes
+      -- `widget.events`, so our chained callback goes with it -- and we must leave nothing else
+      -- behind on the widget for the next addon to inherit.
+      it("writes nothing onto the pooled widget except the callback AceGUI itself clears", function()
+        open()
+        local tree = fakeTree()
+        local before = {}
+        for key in pairs(tree) do before[key] = true end
+        tree:SetCallback("OnGroupSelected", function() end)
+        feed(tree, { "spells", "list" })
+        for key in pairs(tree) do
+          assert.is_true(before[key] == true, "left " .. tostring(key) .. " on a pooled widget")
+        end
+        -- AceGUI's Release wipes `widget.events` (AceGUI-3.0.lua:188-190), and with it every trace
+        -- of us: the next addon handed this TreeGroup gets its own callbacks back.
+        tree.events = {}
+        assert.is_false(tree:showsATooltip())
+      end)
+
+      it("survives a tree that cannot answer SetCallback", function()
+        open()
+        assert.has_no.errors(function()
+          Options.dialog.FeedGroup(Options.dialog, "Elmira", {}, { type = "TreeGroup" },
+                                   {}, { "spells", "list" })
+        end)
+      end)
+    end)
+
+    -- AB1-D1. `SetStatusTable` fills `treewidth` in with AceGUI's 175 the moment the widget is
+    -- built and there is no pre-hook to get in front of it, so the width is seeded into the status
+    -- table at Open time instead.
+    describe("the tree's opening width", function()
+      it("seeds 220 into the status table once, and never fights a resize", function()
+        open()
+        local status = Options.dialog:GetStatusTable("Elmira", { "spells", "list" })
+        assert.equal(220, status.groups.treewidth)
+        status.groups.treewidth = 300
+        assert.is_false(Options.seedAbilityTree(), "it wrote over a width the player had dragged")
+        assert.equal(300, status.groups.treewidth)
+        -- ...and it reports having seeded a status table that has never been touched, so a caller
+        -- can tell "already set" from "there was nowhere to write".
+        status.groups.treewidth = nil
+        assert.is_true(Options.seedAbilityTree())
+        assert.equal(220, status.groups.treewidth)
+      end)
+
+      it("says so rather than erroring with no dialog", function()
+        Options.dialog = nil
+        assert.is_false(Options.seedAbilityTree())
+      end)
     end)
   end)
 

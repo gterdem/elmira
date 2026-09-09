@@ -187,40 +187,16 @@ end
 -- Is a preview still lit? Only this file knows: a previewed frame is deliberately outside the
 -- render loop's set, so nothing else can see it. `restyle` needs the answer to relight it with new
 -- settings, because no render ever will.
--- The styles the loaded library can actually draw, named for humans. Shared by the main picker and
--- the hint's, so the two can never offer different lists. Only what is loadable: Proc arrived in
--- LibCustomGlow minor 25, and offering it against an older copy is a menu entry that does nothing.
-local GLOW_STYLE_NAMES = { PIXEL = "Pixel", BUTTON = "Button", AUTOCAST = "Autocast", PROC = "Proc" }
-
-function Options.glowStyleNames()
-  local out = {}
-  for key in pairs((ns.Glow and ns.Glow.available()) or {}) do
-    out[key] = L[GLOW_STYLE_NAMES[key] or key]
-  end
-  return out
-end
-
 -- Put every glow setting back the way it shipped. Asked for because the settings are worth playing
 -- with and there was no way back: the colour picker's own Default button belongs to Blizzard's
 -- frame and does not touch what we stored.
+--
+-- AB1-D3: this is now the All abilities > Glow reset. Deleting the stored channel rather than
+-- writing the defaults into it is what restores "never chosen", which is the state a fresh install
+-- is in -- and abilities inheriting from it follow in the same click.
 function Options.resetGlow()
-  local p = profile()
-  if not p then return false end
-  local shipped = ns.DB and ns.DB.defaults.profile.glow
-  if not shipped then return false end
-  local fresh = {}
-  for k, v in pairs(shipped) do
-    -- Colour is the one table in here; copied rather than shared, or a later edit would write
-    -- straight into the defaults every future profile is built from.
-    if type(v) == "table" then
-      local copy = {}
-      for ck, cv in pairs(v) do copy[ck] = cv end
-      fresh[k] = copy
-    else
-      fresh[k] = v
-    end
-  end
-  p.glow = fresh
+  local A = ns.AbilitySettings
+  if not (A and A.resetChannel(A.ALL, "glow")) then return false end
   restyle()
   return true
 end
@@ -233,18 +209,22 @@ end
 -- useful control in the panel: it separates "the glow is broken" from "nothing is being suggested
 -- right now", which are indistinguishable to a player standing in a city and are the likeliest
 -- source of a bug report that is not a bug.
-function Options.previewGlow(secondary)
+--
+-- AB1-D7: `key` is which ability to preview -- the Abilities page's own Glow tab passes the one
+-- being edited, so what flashes is that ability's colour and style rather than the suggestion's.
+-- Left out, it still means "whatever is being suggested right now", which is what the Action Bars
+-- panel wants.
+function Options.previewGlow(secondary, key)
   stopPreview()
-  local key = Options.checkSpell()
+  key = key or Options.checkSpell()
   local buttons = key and ns.BarGlow and ns.BarGlow.buttonsFor(key)
   local frame = buttons and buttons[1]
   if not frame then
     previewNote = L["No button to preview: the spell below is not on a bar Elmira can see."]
     return false
   end
-  local p = profile()
-  local style = (p and p.glow and p.glow.style) or "PIXEL"
-  if not (ns.Glow and ns.Glow.Start(frame, style, secondary and true or false)) then
+  local style = (ns.Glow and ns.Glow.styleFor(key)) or "PIXEL"
+  if not (ns.Glow and ns.Glow.Start(frame, style, secondary and true or false, key)) then
     previewNote = L["The glow library is not loaded, so Elmira cannot draw a glow at all."]
     return false
   end
@@ -639,22 +619,6 @@ function Options.importText(str)
   return true, key
 end
 
--- A glow setting that is a NUMBER. `hidden` is driven by the style's own argument table rather
--- than by a list repeated here: a row the current style cannot use would let the user move a
--- slider and watch nothing happen, which is a panel telling a lie.
---
--- `get` shows the library's default until the user chooses, so the sliders read as what is on
--- screen rather than as zero. `set` writes a real number, which is what stops passing nil.
-local function numberRow(order, name, key, minimum, maximum, step, desc)
-  return {
-    type = "range", order = order, name = name, desc = desc,
-    min = minimum, max = maximum, step = step,
-    hidden = function() return not (ns.Glow and ns.Glow.applies(profile().glow.style, key)) end,
-    get = function() return ns.Glow and ns.Glow.effective(profile().glow.style, key) or minimum end,
-    set = function(_, v) profile().glow[key] = v; restyle() end,
-  }
-end
-
 -- ============================================================ Notifications (F37, D21-D29)
 -- One page, not a tab of its own (2026-09-07 Notifications pass): the whole of what used to be the
 -- "Announcements" sub-page is now the content of Notifications itself. Peripheral cues and Cue
@@ -675,9 +639,12 @@ local LOG_ORDER = 90
 -- message happens, not which pipe carries it. Verbatim from the "When it fires" column of the
 -- Notifications artifact (e1fc0af9), not authored here.
 --
--- PE14-D3: no `cooldown` sentence -- that row is off this page (Core/Announce.OFF_PAGE) and its
--- "when it fires" belongs to the per-ability tab that will own it.
+-- AB1-D10: the `cooldown` sentence is back with its row. WHETHER a cooldown is announced is the
+-- ability's own Announcement tab; this page still decides where the resulting line goes.
 local WHEN_IT_FIRES = {
+  cooldown = "You use an ability whose Announcement tab is switched on (Abilities > the ability > "
+          .. "Announcement) -- off for every ability until you turn one on",
+
   rotation = "Your gear, runes or buffs change and a line in your rotation becomes usable or stops "
           .. "being usable",
   warning  = "Elmira cannot do its job: no visible bar button holds the spell, or a display "
@@ -685,6 +652,20 @@ local WHEN_IT_FIRES = {
   status   = "First login before setup, after a catalog update, and when Learning mode rewrites "
           .. "two other settings",
 }
+
+-- One channel of one category, stored. The EFFECTIVE routing is read before anything is written:
+-- creating the row first makes `A.routes` see an empty stored table and stop falling back, so
+-- switching one channel on would switch every other channel for that category off. One writer for
+-- the chat/screen/sound loop and for the party/raid pair (AB1-D10), so the two cannot drift.
+local function setRoute(key, channel, on)
+  local a = profile().announce
+  local stored = a.routes[key]
+  if not stored then
+    stored = ns.Announce.routes(key)
+    a.routes[key] = stored
+  end
+  stored[channel] = on
+end
 
 local function announceGroup()
   local args = {}
@@ -752,18 +733,7 @@ local function announceGroup()
         channels[channel] = {
           type = "toggle", order = order, name = label, width = 0.7, desc = when,
           get = function() return A.routes(cat.key)[channel] == true end,
-          set = function(_, v)
-            local a = profile().announce
-            -- Read the EFFECTIVE routing before storing anything: creating the row first makes
-            -- A.routes see an empty stored table and stop falling back, so switching one channel
-            -- on would switch every other channel for that category off.
-            local stored = a.routes[cat.key]
-            if not stored then
-              stored = A.routes(cat.key)
-              a.routes[cat.key] = stored
-            end
-            stored[channel] = v
-          end,
+          set = function(_, v) setRoute(cat.key, channel, v) end,
         }
         if channel == "sound" then
           -- D24: which sound plays for THIS category, revealed only while its Sound toggle is on.
@@ -796,10 +766,22 @@ local function announceGroup()
         end
       end
     end
-    -- PE14-D3: no Party/Raid toggles and no cooldown-length slider are built here any more. Both
-    -- existed for `cooldown` alone -- the only `shareable` category, and the only one the slider
-    -- answered for -- and that row is off this page. Announce.routes still carries `party`/`raid`
-    -- for every category and Announcers.party still reads them; nothing on THIS page writes them.
+    -- AB1-D10: the Party/Raid pair is back with the `cooldown` row it belongs to. Gated on
+    -- `shareable`, which is a property of the CATEGORY in code and not a checkbox the user can
+    -- widen -- "Divine Storm is now active in my rotation" is about the player's own bars and is
+    -- noise in a group. Two toggles rather than one (D22): reaching a five-man says nothing about
+    -- whether it belongs in a twenty-man raid.
+    if cat.shareable then
+      local group = { party = L["Party"], raid = L["Raid"] }
+      for _, channel in ipairs({ "party", "raid" }) do
+        order = order + 1
+        channels[channel] = {
+          type = "toggle", order = order, name = group[channel], width = 0.7, desc = when,
+          get = function() return A.routes(cat.key)[channel] == true end,
+          set = function(_, v) setRoute(cat.key, channel, v) end,
+        }
+      end
+    end
     args["cat" .. cat.key] = {
       type = "group", order = 40 + i, name = ns.Colors.wrap(ns.Colors[cat.color], L[cat.label]),
       inline = true, args = channels,
@@ -1324,6 +1306,79 @@ end
 -- alone, because AceGUI wipes `widget.events` on Release (AceGUI-3.0.lua:188-190), so the next
 -- addon to be handed this pooled TreeGroup gets its own tooltip back.
 local function noTooltip() end
+
+-- ============================================================ the inner Abilities tree (AB1-D9)
+--
+-- `spells` is a TAB group whose "Abilities" child is a tree, so FeedGroup builds a SECOND TreeGroup
+-- -- `(parenttype ~= "tree")`, AceConfigDialog-3.0.lua:1721 -- and hands it to us as a child of the
+-- tab widget on the path {"spells","list"}. Everything below is about that widget alone. The outer
+-- tree's tooltip is suppressed (PE3-D6, it covered the page); this one's is NOT, because its rows
+-- carry the per-ability "Glow, Sound on · ..." summary AB1-D9(b) asks for.
+
+-- AB1-D9(a). A tree entry carries no "greyed" flag: `UpdateButton` only ever calls SetTexture on
+-- the row's icon (AceGUIContainer-TreeGroup.lua:92-95), so desaturating the abilities with nothing
+-- switched on has to happen on the button itself, the way findTreeWidget already reaches the outer
+-- tree's rows. Returns how many rows it marked, so a spec can tell "ran and marked nothing" from
+-- "never ran".
+function Options.markAbilityIcons(tree)
+  local A = ns.AbilitySettings
+  local buttons = tree and tree.buttons
+  if not (A and buttons) then return 0 end
+  local marked = 0
+  for _, button in ipairs(buttons) do
+    local icon, value = button.icon, button.uniquevalue
+    if icon and icon.SetDesaturated and type(value) == "string" then
+      -- The All abilities row is never greyed: it is what the others inherit from, so "nothing
+      -- switched on" is not a thing it can be.
+      icon:SetDesaturated(value ~= A.ALL and not A.anyOn(value))
+      marked = marked + 1
+    end
+  end
+  return marked
+end
+
+-- AB1-D9(d): selecting another ability keeps the tab you were on. Each ability page is its own tab
+-- group with its own status table, so the Glow tab you were reading is "selected" for THAT ability
+-- and nothing at all for the next one -- which drops you back on General every time you compare two
+-- abilities. Copying the previous ability's `groups.selected` forward is the whole fix, and it has
+-- to happen BEFORE AceConfigDialog feeds the new group, which is why this runs from a chained
+-- OnGroupSelected rather than from the FeedGroup hook.
+local lastAbility = nil -- mutants: equivalent deleting the local only makes it a global; luacheck catches it
+function Options.keepAbilityTab(value)
+  local dialog = Options.dialog
+  local prev = lastAbility
+  lastAbility = value
+  if not (dialog and dialog.GetStatusTable and prev and value and prev ~= value) then return nil end
+  local from = dialog:GetStatusTable("Elmira", { "spells", "list", prev })
+  local tab = from and from.groups and from.groups.selected
+  if not tab then return nil end
+  local to = dialog:GetStatusTable("Elmira", { "spells", "list", value })
+  to.groups = to.groups or {}
+  to.groups.selected = tab
+  return tab
+end
+
+-- CHAINED, never replaced (this has cost two outages): AceGUI holds ONE callback per event name, so
+-- overwriting `OnGroupSelected` would silently delete AceConfigDialog's own GroupSelected and the
+-- tree would stop feeding pages at all. The prior callback is kept in a WEAK-KEYED table rather than
+-- on the widget: AceGUI pools TreeGroups across every Ace3 addon on the client, and `Release` wipes
+-- `widget.events` (AceGUI-3.0.lua:188-190) but not fields we invent -- so we invent none.
+local priorSelect = setmetatable({}, { __mode = "k" })
+local function abilitySelected(widget, event, value, ...)
+  Options.keepAbilityTab(value)
+  local prior = priorSelect[widget]
+  if prior then return prior(widget, event, value, ...) end
+end
+
+local function installAbilityTree(tree)
+  local events = tree.events
+  if events and events.OnGroupSelected ~= abilitySelected and tree.SetCallback then
+    priorSelect[tree] = events.OnGroupSelected
+    tree:SetCallback("OnGroupSelected", abilitySelected)
+  end
+  Options.markAbilityIcons(tree)
+end
+
 local function installTreeHook(dialog)
   if not (dialog and hooksecurefunc) then return end
   if not dialog.elmiraTreeHooked then
@@ -1332,6 +1387,11 @@ local function installTreeHook(dialog)
       if appName ~= "Elmira" then return end
       local tree = findTreeWidget(container)
       if not tree then return end
+      -- The inner Abilities tree: its own hook, and emphatically NOT the outer one's -- silencing
+      -- its tooltip would take the per-ability channel summary with it.
+      if path and path[1] == "spells" and path[2] == "list" then
+        return installAbilityTree(tree)
+      end
       if tree.SetCallback then tree:SetCallback("OnButtonEnter", noTooltip) end
       -- Clicking a row only SELECTS it (AceGUIContainer-TreeGroup.lua's `Button_OnClick`, ~181-191);
       -- only the tiny "+" or a double-click flips `status.groups[value]` open (`Expand_OnClick` /
@@ -1802,62 +1862,17 @@ function Options.table()
       -- PE6-D3: "Action bars" was 5 of the owner's M1a 1-8 top-level order. It is now an inline
       -- panel on General; order 5 is left unused rather than renumbered, because these numbers only
       -- have to sort and shifting them would touch four unrelated pages.
-      -- M1a: 6 of 8. Wording unchanged ("Glow", not "Glows").
+      -- M1a: 6 of 8. AB1: the controls that used to be here are per ability now -- Abilities >
+      -- All abilities > Glow sets what every ability falls back to, and any one of them can differ.
+      -- The node stays for this pass as a signpost so nobody hunts for a page that moved.
       glow = {
         type = "group", order = 6, name = L["Glow"],
         args = {
-          -- "Also glow your action bar" used to live here, and so did a "Glow the next cast"
-          -- master above it. Both are on Action Bars now: the bar toggle because a switch whose
-          -- effect is invisible without the status list beside it is where "I turned it on and
-          -- nothing happened" starts, and the master because PE7-D1 found it was the same switch
-          -- twice -- ADR-0015 had already taken the queue strip out of the glow set, leaving
-          -- `glow.enabled` gating nothing `glow.barGlow` did not gate.
-          style = {
-            type = "select", order = 3, name = L["Style"],
-            -- Derived from Glow.STYLES rather than repeated: a literal here silently drifts the
-            -- moment a style is added, offering a choice the renderer does not have.
-            values = function() return Options.glowStyleNames() end,
-            get = function() return profile().glow.style end,
-            set = function(_, v)
-              profile().glow.style = v
-              if ns.Glow then ns.Glow.StopAll() end   -- restart in the new style, don't layer them
-              redraw()
-            end,
-          },
-          color = {
-            type = "color", order = 4, name = L["Colour"], hasAlpha = false,
-            desc = L["The colour of the glow on your action bar."],
-            get = function()
-              local c = profile().glow.color or ns.Colors.HIGHLIGHT
-              return c.r, c.g, c.b
-            end,
-            set = function(_, r, g, b)
-              profile().glow.color = { r = r, g = g, b = b }
-              restyle()
-            end,
-          },
-          particles = numberRow(5, L["Particles"], "particles", 1, 20, 1,
-            L["How many dots or sparks travel around the button."]),
-          -- 0.025 rather than 0.05 so Autocast's own default of 0.125 is a step the slider can
-          -- land on; otherwise the first nudge jumps it to 0.15 and the look changes for no reason.
-          frequency = numberRow(6, L["Speed"], "frequency", 0.025, 2, 0.025,
-            L["How fast they travel."]),
-          thickness = numberRow(7, L["Thickness"], "thickness", 1, 6, 1,
-            L["How heavy the outline is."]),
-          speed = numberRow(8, L["Pulse length"], "speed", 0.2, 3, 0.1,
-            L["How long one pulse of the proc animation lasts, in seconds."]),
-          preview = {
-            type = "execute", order = 9, name = L["Preview Glow"],
-            desc = L["Flashes your current suggestion's button with these settings."],
-            func = function() Options.previewGlow() end,
-          },
-          reset = {
-            type = "execute", order = 10, name = L["Reset These to Defaults"],
-            desc = L["Puts every glow setting back the way it shipped, including the colour and "
-                  .. "the action-bar switches."],
-            confirm = true,
-            confirmText = L["Put every glow setting back to its default?"],
-            func = function() Options.resetGlow() end,
+          moved = {
+            type = "description", order = 1, width = "full", fontSize = "medium",
+            name = L["Glow style, colour and the sliders live on each ability now: Abilities > "
+                  .. "All abilities > Glow sets what everything falls back to. Whether your bars "
+                  .. "glow at all is on General > Action Bars."],
           },
         },
       },
@@ -1876,14 +1891,18 @@ function Options.table()
             type = "group", order = 2, name = L["Peripheral cues"],
             args = overlayGroup(),
           }
+          -- AB1-D8: renamed, and per CHARACTER (`db.char.sounds`) like every other ability
+          -- setting. One mute over everything the Abilities page's Sound tabs ask for; it does not
+          -- touch the per-category announcement sound above.
           args.sounds = {
-            type = "group", order = 3, name = L["Cue sounds"],
+            type = "group", order = 3, name = L["Ability sounds"],
             args = {
               enabled = {
-                type = "toggle", order = 1, name = L["Play cue sounds"],
-                desc = L["Sounds use the same per-cue opt-in as flares."],
-                get = function() return profile().sounds.enabled end,
-                set = function(_, v) profile().sounds.enabled = v end,
+                type = "toggle", order = 1, name = L["Play ability sounds"],
+                desc = L["Off silences every sound the Abilities page asks for, without changing "
+                      .. "what any ability is set to."],
+                get = function() return ns.Sounds ~= nil and ns.Sounds.abilitySoundsOn() end,
+                set = function(_, v) ns.db.char.sounds.enabled = v end,
               },
             },
           }
@@ -1950,6 +1969,23 @@ function Options.builderIdle()
   return true
 end
 
+-- AB1-D1: the inner Abilities tree opens at 220px rather than AceGUI's 175 (DEFAULT_TREE_WIDTH,
+-- AceGUIContainer-TreeGroup.lua) -- a spell name plus its "player added" colouring does not fit in
+-- 175. Seeded into the status table BEFORE anything can feed that path, because `SetStatusTable`
+-- fills `treewidth` in with the default the moment the widget is built and there is no pre-hook to
+-- get in front of it. Written once and never again: the tree is user-resizable and drags its own
+-- width back into this same field, which a second write would undo on the next open.
+local ABILITY_TREE_WIDTH = 220
+function Options.seedAbilityTree()
+  local dialog = Options.dialog
+  if not (dialog and dialog.GetStatusTable) then return false end
+  local status = dialog:GetStatusTable("Elmira", { "spells", "list" })
+  status.groups = status.groups or {}
+  if status.groups.treewidth then return false end
+  status.groups.treewidth = ABILITY_TREE_WIDTH
+  return true
+end
+
 -- `...` is an optional path into the options table, e.g. Options.Open("rotation") to land on the
 -- Rotation section. Fed to `dialog:SelectGroup` AFTER an unconditional `Open("Elmira")`, never as a
 -- path on Open itself: AceConfigDialog:Open(appName, container, ...) stores that path as the
@@ -1971,6 +2007,7 @@ function Options.Open(...)
     -- very call it wraps. That is what makes a refresh Options.Open never triggered (the range
     -- slider's OnMouseUp, AceConfigDialog-3.0.lua:856-862) still decorate and re-chain OnClose.
     local hooked = installRefreshHook(Options.dialog)
+    Options.seedAbilityTree()
     -- Independent of the refresh hook above: FeedGroup fires on every navigation, not only on Open,
     -- so this one is installed unconditionally rather than gating anything on it.
     installTreeHook(Options.dialog)

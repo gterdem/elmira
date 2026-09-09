@@ -525,31 +525,39 @@ describe("Options (overlay/peripheral cues)", function()
   -- ADR-0015 §3 makes the bar glow the single attention signal, so it gets the range of control
   -- that deserves. Every row below could be present and do nothing; these check it does something.
   describe("Glow appearance", function()
-    local function glowArgs() return Options.table().args.glow.args end
     -- PE7-D3: the cast-after-next cluster lives on General -> Action Bars -> Action bar glow now,
     -- under the switch that decides whether anything on the bars glows at all. Same controls, same
     -- behaviour, one page across -- so these assertions moved with them rather than being rewritten.
     local function hintArgs() return Options.table().args.general.args.bars.args.check.args end
 
     before_each(function()
-      ns.db.profile.glow = { style = "PIXEL", barGlow = true, color = false,
-                             particles = false, frequency = false, thickness = false,
-                             speed = false, secondary = false }
+      -- AB1-D3: the appearance half of `profile.glow` is per ability now (Core/AbilitySettings);
+      -- what is left here are the two switches that are not about any one ability.
+      ns.db.profile.glow = { barGlow = true, secondary = false }
+      ns.db.char = ns.db.char or {}
+      ns.db.char.abilities = {}
+      helper.load("Elmira/Core/AbilitySettings.lua")
       helper.load("Elmira/Display/Glow.lua")
       ns.Queue = { Layout = function() end }
     end)
 
-    it("still offers the cue-sound switch after the move under Notifications", function()
-      local row = Options.table().args.notifications.args.sounds.args.enabled
+    -- AB1-D8: renamed "Ability sounds", and stored per CHARACTER like everything else an ability
+    -- can be set to do.
+    it("offers the ability-sound mute, reading and writing db.char", function()
+      helper.load("Elmira/Display/Sounds.lua")
+      local sounds = Options.table().args.notifications.args.sounds
+      local row = sounds.args.enabled
       assert.equal("toggle", row.type)
       assert.equal(1, row.order)
-      assert.equal("Play cue sounds", row.name)
+      assert.equal("Ability sounds", sounds.name)
+      assert.equal("Play ability sounds", row.name)
       assert.is_truthy(row.desc)
-      ns.db.profile.sounds = { enabled = false }
+      ns.db.char.sounds = { enabled = false }
       assert.is_false(row.get())
       row.set(nil, true)
-      assert.is_true(ns.db.profile.sounds.enabled)
+      assert.is_true(ns.db.char.sounds.enabled)
       assert.is_true(row.get())
+      assert.is_nil(ns.db.profile.sounds, "the mute must not be written back into the profile")
     end)
 
     -- Reported from a client: the dim hint looked identical to the bright one on Proc, which
@@ -609,138 +617,50 @@ describe("Options (overlay/peripheral cues)", function()
         local lit
         ns.BarGlow = { buttonsFor = function() return { "BUTTON" } end }
         ns.Glow = { Start = function(_, _, secondary) lit = secondary; return true end,
-                    Stop = function() end, isRendererFrame = function() return false end }
+                    Stop = function() end, isRendererFrame = function() return false end,
+                    styleFor = function() return "PIXEL" end }
         Options.setCheckSpell("EXORCISM")
         row.func()
         assert.is_true(lit, "the dim preview lit the bright glow")
-        glowArgs().preview.func()
+        hintArgs().preview.func()
         assert.is_false(lit, "the ordinary preview should not be dim")
       end)
     end)
 
     -- The settings are worth playing with, and there was no way back: the colour picker's Default
-    -- button belongs to Blizzard's frame and never touched what we stored.
-    describe("resetting the section", function()
-      it("puts every glow setting back the way it shipped", function()
-        helper.load("Elmira/Core/DB.lua")
-        ns.db.profile.glow.style = "PROC"
-        ns.db.profile.glow.color = { r = 1, g = 0, b = 0 }
-        ns.db.profile.glow.secondary = true
-        ns.db.profile.glow.particles = 19
+    -- button belongs to Blizzard's frame and never touched what we stored. AB1-D3: it is the
+    -- All abilities > Glow reset now, and its BUTTON lives on that tab (options_spells_spec).
+    describe("resetting the glow (Options.resetGlow)", function()
+      it("puts the All abilities glow back to nothing chosen, and repaints", function()
+        local A = ns.AbilitySettings
+        A.set(A.ALL, "glow", "style", "PROC")
+        A.set(A.ALL, "glow", "particles", 19)
+        A.setInherit("EXORCISM", "glow", false)
+        A.set("EXORCISM", "glow", "enabled", false)
+        local stopped = 0
+        ns.Glow.StopAll = function() stopped = stopped + 1 end
         assert.is_true(Options.resetGlow())
-        local shipped = ns.DB.defaults.profile.glow
-        assert.equal(shipped.style, ns.db.profile.glow.style)
-        assert.equal(shipped.particles, ns.db.profile.glow.particles)
-        assert.equal(shipped.secondary, ns.db.profile.glow.secondary)
-        assert.equal(shipped.color, ns.db.profile.glow.color)
+        assert.equal("PIXEL", A.effective(A.ALL, "glow").style)
+        assert.is_false(A.effective(A.ALL, "glow").particles)
+        assert.same({}, ns.db.char.abilities[A.ALL], "the channel should be unset, not rewritten")
+        assert.equal(1, stopped, "a running glow keeps its old look until it is torn down")
+        -- One channel of ONE entry: an ability that has been unlinked and switched off stays off.
+        assert.is_false(A.effective("EXORCISM", "glow").enabled)
       end)
 
-      -- The defaults table is what every future profile is copied from: writing through a shared
-      -- reference would change the shipped default for everyone made afterwards.
-      it("never hands out the defaults table itself", function()
-        helper.load("Elmira/Core/DB.lua")
-        ns.DB.defaults.profile.glow.color = { r = 0.1, g = 0.2, b = 0.3 }
-        Options.resetGlow()
-        assert.is_not.equal(ns.DB.defaults.profile.glow, ns.db.profile.glow)
-        assert.is_not.equal(ns.DB.defaults.profile.glow.color, ns.db.profile.glow.color)
-        -- and the copy actually carries the values, rather than being an empty table that merely
-        -- happens not to be the same object.
-        assert.equal(0.1, ns.db.profile.glow.color.r)
-        assert.equal(0.2, ns.db.profile.glow.color.g)
-        assert.equal(0.3, ns.db.profile.glow.color.b)
-        ns.db.profile.glow.color.r = 0.9
-        assert.equal(0.1, ns.DB.defaults.profile.glow.color.r)
+      it("says so rather than erroring before the settings store is loaded", function()
+        ns.AbilitySettings = nil
+        assert.is_false(Options.resetGlow())
       end)
 
-      it("asks before throwing the settings away", function()
-        local row = glowArgs().reset
-        assert.equal("execute", row.type)
-        assert.is_true(row.confirm)
-        assert.is_truthy(row.confirmText)
-      end)
-
-      it("says so rather than erroring with no profile", function()
-        -- DB loaded, so the defaults exist and the PROFILE guard is the one that has to fire.
-        helper.load("Elmira/Core/DB.lua")
+      it("says so rather than erroring with no character data yet", function()
         ns.db = nil
         assert.is_false(Options.resetGlow())
       end)
-
-      it("says so rather than erroring before the defaults are loaded", function()
-        ns.DB = nil
-        assert.is_false(Options.resetGlow())
-      end)
-
-      it("repaints, or the buttons keep the glow you just reset away from", function()
-        helper.load("Elmira/Core/DB.lua")
-        local stopped = 0
-        ns.Glow = { StopAll = function() stopped = stopped + 1 end }
-        ns.Queue = { Layout = function() end }
-        Options.resetGlow()
-        assert.equal(1, stopped)
-      end)
-
-      it("is reachable from the panel", function()
-        helper.load("Elmira/Core/DB.lua")
-        ns.db.profile.glow.particles = 19
-        glowArgs().reset.func()
-        assert.equal(ns.DB.defaults.profile.glow.particles, ns.db.profile.glow.particles)
-      end)
     end)
 
-    it("offers Proc alongside the three older styles", function()
-      ns.Glow.available = function() return { PIXEL = true, PROC = true } end
-      local values = glowArgs().style.values()
-      assert.equal("Proc", values.PROC)
-      assert.equal("Pixel", values.PIXEL)
-    end)
-
-    -- Proc arrived in LibCustomGlow minor 25. Offering it against an older copy that won LibStub
-    -- is a menu entry that silently draws nothing.
-    it("does not offer a style the loaded library cannot draw", function()
-      ns.Glow.available = function() return { PIXEL = true } end
-      local values = glowArgs().style.values()
-      assert.is_nil(values.PROC)
-      assert.equal("Pixel", values.PIXEL)
-    end)
-
-    it("shows the brand highlight as the colour until one is picked", function()
-      local r, g, b = glowArgs().color.get()
-      assert.equal(ns.Colors.HIGHLIGHT.r, r)
-      assert.equal(ns.Colors.HIGHLIGHT.g, g)
-      assert.equal(ns.Colors.HIGHLIGHT.b, b)
-      glowArgs().color.set(nil, 0.1, 0.2, 0.3)
-      assert.same({ r = 0.1, g = 0.2, b = 0.3 }, ns.db.profile.glow.color)
-    end)
-
-    -- A row the current style cannot use would let the user move a slider and watch nothing happen.
-    it("hides the rows the chosen style has no use for", function()
-      assert.is_false(glowArgs().particles.hidden())
-      assert.is_false(glowArgs().thickness.hidden())
-      assert.is_true(glowArgs().speed.hidden())          -- Proc only
-      ns.db.profile.glow.style = "AUTOCAST"
-      assert.is_true(glowArgs().thickness.hidden())      -- Pixel only
-      assert.is_false(glowArgs().particles.hidden())
-      ns.db.profile.glow.style = "BUTTON"
-      assert.is_true(glowArgs().particles.hidden())
-      assert.is_false(glowArgs().frequency.hidden())
-      ns.db.profile.glow.style = "PROC"
-      assert.is_false(glowArgs().speed.hidden())
-      assert.is_true(glowArgs().frequency.hidden())
-    end)
-
-    it("shows the library's default in the slider, not zero", function()
-      assert.equal(8, glowArgs().particles.get())
-      assert.equal(1, glowArgs().thickness.get())
-      ns.db.profile.glow.style = "AUTOCAST"
-      assert.equal(4, glowArgs().particles.get())
-    end)
-
-    it("writes a real number once the slider moves", function()
-      glowArgs().particles.set(nil, 14)
-      assert.equal(14, ns.db.profile.glow.particles)
-      assert.equal(14, glowArgs().particles.get())
-    end)
+    -- The style picker, the colour, the four sliders, Preview and Reset are all on
+    -- Abilities > (an ability) > Glow now; tests/spec/options_spells_spec.lua owns them, per key.
 
     it("announces the learning-mode change as status rather than printing it", function()
       local said = {}
@@ -774,115 +694,26 @@ describe("Options (overlay/peripheral cues)", function()
       assert.is_true(ns.db.profile.glow.secondary)
     end)
 
-    it("builds each number row as a real slider with real bounds", function()
-      local row = glowArgs().particles
-      assert.equal("range", row.type)
-      assert.equal(5, row.order)
-      assert.equal("Particles", row.name)
-      assert.equal(1, row.min)
-      assert.equal(20, row.max)
-      assert.equal(1, row.step)
-      assert.is_truthy(row.desc)
-      local speed = glowArgs().speed
-      assert.equal(0.2, speed.min)
-      assert.equal(3, speed.max)
-      assert.equal(0.1, speed.step)
-      -- Autocast's own default is 0.125: a coarser step cannot land on it, so the first nudge
-      -- would change the look for no reason the user asked for.
-      local step = glowArgs().frequency.step
-      assert.equal(0.025, step)
-      assert.is_true(math.abs(0.125 / step - 5) < 1e-9, "Autocast's default is not on a step")
-    end)
-
-    it("builds the colour, hint and preview rows as the controls they claim to be", function()
-      assert.equal("color", glowArgs().color.type)
-      assert.equal("Colour", glowArgs().color.name)
-      assert.is_falsy(glowArgs().color.hasAlpha)
-      assert.is_truthy(glowArgs().color.desc)
+    -- PE7-D3's two hint rows are the last controls this page still owns: they are ON the Action
+    -- Bars panel, under the switch that decides whether the bars glow at all.
+    it("builds the hint rows as the controls they claim to be", function()
       assert.equal("toggle", hintArgs().secondary.type)
       -- PE7-D3 renamed it to the string PE7-D1 freed: with the old master gone, "Glow the next
       -- cast" is no longer taken, and it says what the toggle does better than "hint" did.
       assert.equal("Glow the next cast", hintArgs().secondary.name)
-      assert.equal("execute", glowArgs().preview.type)
-      assert.equal("Preview Glow", glowArgs().preview.name)
-      assert.is_truthy(glowArgs().preview.desc)
-    end)
-
-    -- PE1-D7: button labels are Title Case, the way the client's own UI writes them. Asserted as
-    -- the literal strings a player reads, so a future lowercase label is a test failure rather
-    -- than something only a screenshot review would catch. Minor words inside a phrase stay lower
-    -- case ("Reset These to Defaults"), and prose is untouched.
-    it("labels every glow button in Title Case", function()
-      assert.equal("Preview Glow", glowArgs().preview.name)
-      assert.equal("Reset These to Defaults", glowArgs().reset.name)
-      -- PE7-D3 dropped "hint" from the cluster's labels once the toggle stopped saying it, and the
-      -- amendment dropped the style picker altogether -- the next-cast glow follows the main style.
       assert.equal("Preview", hintArgs().previewDim.name)
       assert.is_nil(hintArgs().secondaryStyle)
       assert.equal("How dim it is", hintArgs().secondaryAlpha.name)
-    end)
-
-    -- The driver only repaints when the queue changes, so a colour change would otherwise not
-    -- appear until the rotation happened to move on.
-    it("repaints after an appearance change", function()
-      local redraws = 0
-      ns.Glow.StopAll = function() end
-      ns.Display.refresh = function() redraws = redraws + 1 end
-      glowArgs().color.set(nil, 1, 1, 1)
-      assert.equal(1, redraws)
     end)
 
     it("knows whether a preview is actually running", function()
       assert.is_false(Options.previewRunning())
       ns.BarGlow = { buttonsFor = function() return { { name = "bar" } }, "ElvUI" end }
       ns.Glow.Start = function() return true end
+      ns.Glow.styleFor = function() return "PIXEL" end
       Options.checkSpell = function() return "EXORCISM" end
       Options.previewGlow()
       assert.is_true(Options.previewRunning())
-    end)
-
-    it("previews from the Glow page too, not only from Action bars", function()
-      local fired = 0
-      Options.previewGlow = function() fired = fired + 1 end
-      glowArgs().preview.func()
-      assert.equal(1, fired)
-    end)
-
-    -- LibCustomGlow builds its frames from the arguments it was started with: a running glow cannot
-    -- be restyled, only replaced. Without the teardown the panel changes and the button does not.
-    it("tears down every running glow when an appearance setting changes", function()
-      local stopped = 0
-      ns.Glow.StopAll = function() stopped = stopped + 1 end
-      glowArgs().color.set(nil, 1, 1, 1)
-      glowArgs().particles.set(nil, 10)
-      glowArgs().frequency.set(nil, 0.5)
-      glowArgs().thickness.set(nil, 2)
-      ns.db.profile.glow.style = "PROC"
-      glowArgs().speed.set(nil, 2)
-      hintArgs().secondary.set(nil, true)
-      assert.equal(6, stopped)
-      -- The style picker has always done its own teardown; it must keep doing it.
-      glowArgs().style.set(nil, "BUTTON")
-      assert.equal(7, stopped)
-    end)
-
-    -- The preview is the one glow no render will ever redraw, so it has to be relit by hand.
-    it("relights a preview that was running, so it shows the new settings", function()
-      local previews = 0
-      ns.Glow.StopAll = function() end
-      Options.previewRunning = function() return true end
-      Options.previewGlow = function() previews = previews + 1 end
-      glowArgs().particles.set(nil, 10)
-      assert.equal(1, previews)
-    end)
-
-    it("does not start a preview that was not running", function()
-      local previews = 0
-      ns.Glow.StopAll = function() end
-      Options.previewRunning = function() return false end
-      Options.previewGlow = function() previews = previews + 1 end
-      glowArgs().particles.set(nil, 10)
-      assert.equal(0, previews)
     end)
   end)
 
@@ -988,19 +819,46 @@ describe("Options (overlay/peripheral cues)", function()
       end
     end)
 
-    -- PE14-D3: the cooldown row is off this page entirely -- announcing a long cooldown is a
-    -- property of the ability, not a routing choice, so it moves to the Abilities tab. It was the
-    -- only `shareable` category, so the Party and Raid toggles and the cooldown-length slider come
-    -- off the page with it. Nothing in the engine changed; only the page stopped offering it.
-    it("no longer offers the cooldown row, its group toggles or its length slider", function()
+    -- AB1-D10: the cooldown row is BACK, with the Party and Raid toggles that only it has ever
+    -- shown -- and with no length slider, because length no longer decides anything. Party/Raid
+    -- are gated on `shareable`, which is code, not a checkbox the player can widen.
+    it("offers the cooldown row with Party and Raid, and no length slider anywhere", function()
       local args = announceArgs()
-      assert.is_nil(args.catcooldown)
+      assert.is_not_nil(args.catcooldown)
+      assert.equal("toggle", args.catcooldown.args.party.type)
+      assert.equal("Party", args.catcooldown.args.party.name)
+      assert.equal("Raid", args.catcooldown.args.raid.name)
+      -- Two rows, two places: sharing one order puts them in whatever order `pairs` felt like.
+      assert.is_true(args.catcooldown.args.raid.order > args.catcooldown.args.party.order)
+      assert.is_true(args.catcooldown.args.party.order > args.catcooldown.args.sound.order)
       for _, c in ipairs(ns.Announce.listed()) do
         local row = args["cat" .. c.key].args
-        assert.is_nil(row.party, c.key .. " still offers party")
-        assert.is_nil(row.raid, c.key .. " still offers raid")
         assert.is_nil(row.floor, c.key .. " still offers the cooldown slider")
+        if not c.shareable then
+          assert.is_nil(row.party, c.key .. " must not offer party")
+          assert.is_nil(row.raid, c.key .. " must not offer raid")
+        end
       end
+    end)
+
+    -- The routing write is the one that has bitten before: creating the stored row first makes
+    -- `A.routes` stop falling back, so switching one channel on switched every other one off.
+    it("stores a party choice without silently clearing the row's other channels", function()
+      local row = announceArgs().catcooldown.args
+      assert.is_false(row.party.get())
+      row.party.set(nil, true)
+      assert.is_true(ns.db.profile.announce.routes.cooldown.party)
+      assert.is_true(row.party.get())
+      row.raid.set(nil, true)
+      assert.is_true(ns.db.profile.announce.routes.cooldown.raid)
+      assert.is_true(row.party.get(), "turning raid on cleared party")
+    end)
+
+    -- AB1-D10: the row has to say when it fires, and the answer is now "when an ability you
+    -- switched on is used" rather than "when a cooldown is longer than N seconds".
+    it("says the cooldown row fires from the ability's own Announcement tab", function()
+      local desc = announceArgs().catcooldown.args.chat.desc
+      assert.is_truthy(desc:find("Announcement tab", 1, true))
     end)
 
     -- The Log is the record, not a channel: no row can switch it off.
@@ -1178,13 +1036,15 @@ describe("Options (overlay/peripheral cues)", function()
       assert.equal(1, stopped)
     end)
 
-    -- PE14-D3: one message per kind THE PAGE SHOWS. The button and the routing table read the
-    -- same list, so it cannot go on testing a kind there is no row for.
+    -- One message per kind THE PAGE SHOWS. The button and the routing table read the same list,
+    -- so it cannot go on testing a kind there is no row for -- which since AB1-D10 is all of them.
     it("sends one message of every kind the page shows, and none it does not", function()
       announceArgs().test.func()
       assert.equal(#ns.Announce.listed(), #ns.Announce.log())
-      for _, entry in ipairs(ns.Announce.log()) do
-        assert.is_not.equal("cooldown", entry.category)
+      local seen = {}
+      for _, entry in ipairs(ns.Announce.log()) do seen[entry.category] = true end
+      for _, c in ipairs(ns.Announce.listed()) do
+        assert.is_true(seen[c.key] == true, c.key .. " was never sent")
       end
     end)
 
@@ -1529,35 +1389,22 @@ describe("Options (overlay/peripheral cues)", function()
   -- The WIDGET moved to Options/Rotation.lua's Share tab (ADR-0015 SS2); the state stayed here.
   -- This block drives that state through the accessors the tab reads, so it keeps testing the
   -- behaviour rather than the layout. The tab's own wiring is rotation_spec's job.
-  -- The category shipped routable to party with nothing ever emitting it, so "what will appear
-  -- here" was unanswerable from the panel. The slider is the answer, and its description is the
-  -- explanation the owner asked for.
-  -- PE14-D3: the SLIDER left the panel with the cooldown row -- a duration floor cannot tell a
-  -- tank's defensive save from a DPS burst, which is the distinction that decides whether a group
-  -- wants to hear about it, so it becomes a per-ability setting. The RULE stayed exactly where it
-  -- was: the engine still asks it on every cast, and the stored floor is still what answers.
+  -- AB1-D10: the cooldown floor is gone entirely -- from the page, from the profile defaults and
+  -- from Core. A duration cannot tell a tank's defensive save from a DPS burst, which is the
+  -- distinction that decides whether a group wants to hear about it, so the ability's own
+  -- Announcement tab decides instead.
   describe("what counts as a cooldown worth announcing", function()
-    it("is no longer asked anywhere on the Notifications page", function()
+    it("is not asked anywhere on the Notifications page, and no longer exists in Core", function()
       helper.load("Elmira/Core/Announce.lua")
       local page = Options.table().args.notifications.args
-      assert.is_nil(page.catcooldown)
       assert.is_nil(page.floor)
       for key, entry in pairs(page) do
         if type(entry) == "table" and type(entry.args) == "table" then
           assert.is_nil(entry.args.floor, key .. " still carries the cooldown slider")
         end
       end
-    end)
-
-    it("still decides, off the page, from the stored floor", function()
-      helper.load("Elmira/Core/Announce.lua")
-      ns.db.profile.announce = ns.db.profile.announce or {}
-      assert.equal(120, ns.Announce.cooldownFloor())
-      assert.is_true(ns.Announce.worthAnnouncing(180))
-      assert.is_false(ns.Announce.worthAnnouncing(30))
-      ns.db.profile.announce.cooldownFloor = 45
-      assert.equal(45, ns.Announce.cooldownFloor())
-      assert.is_true(ns.Announce.worthAnnouncing(60))
+      assert.is_nil(ns.Announce.cooldownFloor)
+      assert.is_nil(ns.Announce.worthAnnouncing)
     end)
   end)
 

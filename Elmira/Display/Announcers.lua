@@ -61,11 +61,12 @@ function Announcers.fonts()
   return out
 end
 
+-- AB1-D8: the list itself moved to Display/Sounds.lua, which both this file's category picker and
+-- the Abilities page's per-event pickers read. Kept as a member here because the Notifications
+-- page's `values` still asks Announcers for it and nothing is gained by making that page know
+-- about two Display modules.
 function Announcers.sounds()
-  local out = { None = "None" }
-  local lsm = media()
-  for _, name in ipairs((lsm and lsm:List("sound")) or {}) do out[name] = name end
-  return out
+  return ns.Sounds and ns.Sounds.list() or { None = "None" }
 end
 
 -- D25: which of the player's own chat windows actually shows System messages, rather than a stored
@@ -238,13 +239,7 @@ end
 -- thing, and every way this can fail -- no media library, a name the player's packs no longer
 -- provide, a client with no PlaySoundFile -- is a quiet `false`, because the options panel calls it.
 function Announcers.sound(cat)
-  local name = soundNameFor(cat and cat.key)
-  if not name or name == "None" then return false end
-  local lsm = media()
-  local path = lsm and lsm:Fetch("sound", name)
-  if not (path and PlaySoundFile) then return false end
-  PlaySoundFile(path)
-  return true
+  return ns.Sounds ~= nil and ns.Sounds.play(soundNameFor(cat and cat.key))
 end
 
 -- The only channel other people see. Core/Announce's dispatch gate (routes.party OR routes.raid)

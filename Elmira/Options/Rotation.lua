@@ -2062,7 +2062,8 @@ local function conditionArgs(model, index)
             disabled = function() return row.key == nil end,
             func = function()
               if ns.Options and ns.Options.dialog and ns.Options.dialog.SelectGroup then
-                ns.Options.dialog:SelectGroup("Elmira", "spells", row.key)
+                -- AB1-D11: `spells > list > <key>` -- the entries live in an inner tree now.
+                ns.Options.dialog:SelectGroup("Elmira", "spells", "list", row.key)
               end
             end,
           }

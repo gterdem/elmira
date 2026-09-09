@@ -18,9 +18,14 @@ describe("Options (action bars)", function()
     ns = helper.reset()
     ns.L = setmetatable({}, { __index = function(_, k) return k end })
     helper.load("Elmira/Core/Colors.lua")
-    ns.db = { profile = { glow = { barGlow = true, style = "PIXEL", secondary = false } } }
+    -- AB1-D3: the appearance half of `profile.glow` moved onto each ability; `barGlow` and the
+    -- next-cast pair are what this panel still owns.
+    ns.db = { profile = { glow = { barGlow = true, secondary = false } }, char = { abilities = {} } }
     ns.Display = { refresh = function() end, computeQueue = function() return { { spell = "EXORCISM" } } end }
-    ns.Glow = { STYLES = { PIXEL = {}, BUTTON = {}, AUTOCAST = {} }, StopAll = function() end }
+    -- `styleFor` is per ability now (AB1-D7): the preview asks Glow which style THIS spell draws
+    -- in rather than reading one style out of the profile.
+    ns.Glow = { STYLES = { PIXEL = {}, BUTTON = {}, AUTOCAST = {} }, StopAll = function() end,
+                styleFor = function() return "PIXEL" end }
     ns.Queue = { Layout = function() end }
     ns.addon = { ScheduleTimer = function() return "timer" end, CancelTimer = function() end }
     helper.load("Elmira/Options/Rotation.lua")
@@ -277,20 +282,14 @@ describe("Options (action bars)", function()
     end)
   end)
 
-  -- The style list is derived from what the LOADED library can draw rather than repeated. A literal
-  -- drifts the moment a style is added, offering the player a choice the renderer does not have --
-  -- and a style the library is too old for draws nothing at all.
-  it("offers exactly the glow styles the renderer implements", function()
-    ns.Glow.available = function() return { PIXEL = true, BUTTON = true, AUTOCAST = true } end
-    local values = Options.table().args.glow.args.style.values()
-    local names = {}
-    for key in pairs(values) do names[#names + 1] = key end
-    table.sort(names)
-    assert.same({ "AUTOCAST", "BUTTON", "PIXEL" }, names)
-
-    ns.Glow.available = function() return { PIXEL = true, PROC = true } end
-    local widened = Options.table().args.glow.args.style.values()
-    assert.is_not_nil(widened.PROC)
+  -- AB1: the style picker is on Abilities > (an ability) > Glow now (tests/spec/options_spells_spec)
+  -- and the top-level Glow page is a signpost to it. The one thing this file still asserts about
+  -- that node is that it SAYS where the controls went -- an empty page is a dead end.
+  it("leaves the Glow page pointing at where the controls went", function()
+    local args = Options.table().args.glow.args
+    assert.is_nil(args.style)
+    assert.truthy(args.moved.name:find("All abilities > Glow", 1, true))
+    assert.truthy(args.moved.name:find("General > Action Bars", 1, true))
   end)
 
   -- WeakAuras' View idea. This is the control that separates "the glow is broken" from "nothing is
@@ -357,12 +356,24 @@ describe("Options (action bars)", function()
     end)
 
     it("previews in the style you actually chose, not a hardcoded one", function()
-      ns.db.profile.glow.style = "AUTOCAST"
+      ns.Glow.styleFor = function() return "AUTOCAST" end
       local style
       ns.BarGlow = { buttonsFor = function() return { { "button" } } end }
       ns.Glow.Start = function(_, s) style = s; return true end
       Options.previewGlow()
       assert.equal("AUTOCAST", style)
+    end)
+
+    -- AB1-D7: the Abilities page's own Preview button previews THAT ability, not whatever is being
+    -- suggested. The key has to reach both `styleFor` and `Start`, or the flash is the wrong colour.
+    it("previews the ability it was given rather than the current suggestion", function()
+      local asked, started = {}, {}
+      ns.BarGlow = { buttonsFor = function(key) asked[#asked + 1] = key; return { { "button" } } end }
+      ns.Glow.styleFor = function(key) asked[#asked + 1] = "style:" .. tostring(key); return "BUTTON" end
+      ns.Glow.Start = function(_, s, secondary, key) started = { s, secondary, key }; return true end
+      assert.is_true(Options.previewGlow(false, "DIVINE_STORM"))
+      assert.same({ "DIVINE_STORM", "style:DIVINE_STORM" }, asked)
+      assert.same({ "BUTTON", false, "DIVINE_STORM" }, started)
     end)
 
     -- The button has to be wired to the function. A preview that works when a spec calls it

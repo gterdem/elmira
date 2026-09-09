@@ -60,16 +60,37 @@ Glow.STYLES = STYLES
 -- ADR exists because two things were competing for one glance, and a second glow is that again.
 Glow.SECONDARY_ALPHA = 0.35
 
+-- This ability's glow settings, resolved through Core/AbilitySettings (AB1-D3/D7): its own if it
+-- has any, the All abilities entry's otherwise. A nil key means the All abilities entry itself,
+-- which is what the options preview and any caller with no spell in hand wants.
+--
+-- Guarded rather than assumed: glow_spec drives this file without the Core store, and answering
+-- with the shipped defaults there is the same "a default install looks as it always did" promise
+-- the `false` sentinels below make.
+local function glowFor(key)
+  local A = ns.AbilitySettings
+  if not A then return {} end
+  return A.effective(key or A.ALL, "glow") or {}
+end
+
+-- Is the bar glow switched on for THIS ability (AB1-D7)? The All abilities entry ships it on, and
+-- the flag inherits, so a default install glows everything exactly as it did before this setting
+-- existed -- but one ability can now be silenced without silencing the bars.
+function Glow.enabledFor(key)
+  local A = ns.AbilitySettings
+  if not A then return true end
+  return A.channelOn(key or A.ALL, "glow")
+end
+
 -- Which style to draw with -- one answer for both glows. The next-cast glow always uses the SAME
--- style as the real suggestion, dimmed; it never picks its own. PE7 (owner, 2026-09-08): once each
--- ability carries its own glow style and colour, a global override for the second glow would
+-- style as the real suggestion, dimmed; it never picks its own. PE7 (owner, 2026-09-08): each
+-- ability carries its own glow style and colour, so a global override for the second glow would
 -- silently replace whatever the player configured for that ability. Brightness is the one
 -- difference this glow is allowed to make, which is why `secondaryAlpha` survives and a secondary
 -- style does not. No `secondary` argument: a parameter nothing reads is a promise the code cannot
 -- keep, and the call sites already say which glow they are starting.
-function Glow.styleFor()
-  local p = (ns.db and ns.db.profile) or ns.DB.defaults.profile
-  local g = (p and p.glow) or {}
+function Glow.styleFor(key)
+  local g = glowFor(key)
   return (g.style and STYLES[g.style]) and g.style or "PIXEL"
 end
 
@@ -94,9 +115,8 @@ end
 -- What the user has chosen. A numeric setting left alone is `false`, not a number, and a false
 -- setting passes NOTHING to the library: that is what keeps a default install rendering exactly as
 -- it did before any of these controls existed.
-function Glow.settings()
-  local p = (ns.db and ns.db.profile) or ns.DB.defaults.profile
-  local g = (p and p.glow) or {}
+function Glow.settings(key)
+  local g = glowFor(key)
   local c = g.color or ns.Colors.HIGHLIGHT
   return {
     color = { c.r, c.g, c.b, 1 },
@@ -109,9 +129,9 @@ end
 
 -- What a slider shows: the user's number, or the library's own default when they have not chosen.
 -- Without this the controls would all read zero and moving one would look like turning it back on.
-function Glow.effective(style, name)
+function Glow.effective(style, name, key)
   local def = STYLES[style] or STYLES.PIXEL
-  return Glow.settings()[name] or (def.default and def.default[name]) or nil
+  return Glow.settings(key)[name] or (def.default and def.default[name]) or nil
 end
 
 -- Does this style have anything to do with this setting? Pixel is the only one with a thickness,
@@ -145,7 +165,7 @@ local function startArgs(styleDef, frame, s, glowKey)
 end
 Glow.startArgs = startArgs
 
-function Glow.Start(frame, style, secondary)
+function Glow.Start(frame, style, secondary, key)
   if not frame then return false end
   local L = lib()
   if not L then return false end
@@ -160,7 +180,7 @@ function Glow.Start(frame, style, secondary)
   local def = STYLES[style]
   local fn = L[def.start]
   if not fn then return false end
-  local s = Glow.settings()
+  local s = Glow.settings(key)
   if secondary then
     s.color = { s.color[1], s.color[2], s.color[3], Glow.secondaryAlpha() }
   end
@@ -201,22 +221,24 @@ function Glow.SetNowSlot(slot, nextSlot)
   local g = p.glow or {}
   local wantNow, wantNext = {}, {}
 
+  local nowKey = slot and slot.spell or nil
+  local nextKey = nextSlot and nextSlot.spell or nil
   if g.barGlow and ns.BarGlow then
-    if slot and slot.spell then
-      local buttons = ns.BarGlow.buttonsFor(slot.spell)
+    if nowKey and Glow.enabledFor(nowKey) then
+      local buttons = ns.BarGlow.buttonsFor(nowKey)
       for _, button in ipairs(buttons or {}) do
         wantNow[button] = true
       end
       -- Say so when there is nothing to glow. A suggestion the player cannot see on their bars is
       -- the whole display failing in the way least likely to be noticed.
       if #(buttons or {}) == 0 and ns.BarGlow.noteMissing then
-        ns.BarGlow.noteMissing(slot.spell)
+        ns.BarGlow.noteMissing(nowKey)
       end
     end
     -- The cast after this one, dim, only if asked for. A spell that is both now and next gets the
     -- bright glow alone: two glows on one button is not "more information", it is a flicker.
-    if g.secondary and nextSlot and nextSlot.spell then
-      for _, button in ipairs(ns.BarGlow.buttonsFor(nextSlot.spell) or {}) do
+    if g.secondary and nextKey and Glow.enabledFor(nextKey) then
+      for _, button in ipairs(ns.BarGlow.buttonsFor(nextKey) or {}) do
         if not wantNow[button] then wantNext[button] = true end
       end
     end
@@ -231,10 +253,10 @@ function Glow.SetNowSlot(slot, nextSlot)
     if not wantNext[frame] then Glow.Stop(frame) end
   end
   for frame in pairs(wantNow) do
-    if not nowFrames[frame] then Glow.Start(frame, Glow.styleFor(), false) end
+    if not nowFrames[frame] then Glow.Start(frame, Glow.styleFor(nowKey), false, nowKey) end
   end
   for frame in pairs(wantNext) do
-    if not nextFrames[frame] then Glow.Start(frame, Glow.styleFor(), true) end
+    if not nextFrames[frame] then Glow.Start(frame, Glow.styleFor(nextKey), true, nextKey) end
   end
   nowFrames, nextFrames = wantNow, wantNext
 end

@@ -1597,11 +1597,13 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_truthy(link.name():find("CONSECRATION", 1, true))
         assert.is_truthy(link.name():find("in Abilities", 1, true))
         local navigated
-        ns.Options = { dialog = { SelectGroup = function(_, app, page, key)
-          navigated = { app, page, key }
+        ns.Options = { dialog = { SelectGroup = function(_, app, page, tab, key)
+          navigated = { app, page, tab, key }
         end } }
         link.func()
-        assert.same({ "Elmira", "spells", "CONSECRATION" }, navigated)
+        -- AB1-D11: the entries live in an INNER tree under the Abilities tab, so the path grew a
+        -- step. A two-part path lands on the page and leaves the tree wherever it happened to be.
+        assert.same({ "Elmira", "spells", "list", "CONSECRATION" }, navigated)
         -- The purely POWER condition alongside it links nowhere.
         assert.is_nil(builder().list.args.r1.args.body.args.conditions.args.c1.args.openSpell)
 

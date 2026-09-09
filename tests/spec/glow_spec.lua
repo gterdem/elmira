@@ -48,9 +48,19 @@ describe("Display.Glow", function()
     _G.LibStub = function(major) return major == "LibCustomGlow-1.0" and lib or nil end
     helper.load("Elmira/Core/Colors.lua")
     helper.load("Elmira/Core/DB.lua")
+    helper.load("Elmira/Core/AbilitySettings.lua")
     Glow = helper.load("Elmira/Display/Glow.lua")
-    ns.db = { profile = { glow = { style = "PIXEL", barGlow = false } } }
+    -- AB1-D3: what a glow LOOKS like is per ability and per character now. `barGlow`,
+    -- `secondary` and `secondaryAlpha` are the two switches that are not about any one ability and
+    -- stay in the profile.
+    ns.db = { profile = { glow = { barGlow = false } }, char = { abilities = {} } }
   end)
+
+  -- The All abilities entry, which is what every ability inherits from and what a call with no key
+  -- at all resolves to.
+  local function setGlow(field, value)
+    ns.AbilitySettings.set(ns.AbilitySettings.ALL, "glow", field, value)
+  end
 
   after_each(function() _G.LibStub = nil end)
 
@@ -154,9 +164,9 @@ describe("Display.Glow", function()
     end)
 
     it("PIXEL takes particles, speed and thickness at their own positions", function()
-      ns.db.profile.glow.particles = 12
-      ns.db.profile.glow.frequency = 0.5
-      ns.db.profile.glow.thickness = 3
+      setGlow("particles", 12)
+      setGlow("frequency", 0.5)
+      setGlow("thickness", 3)
       Glow.Start(frame(), "PIXEL")
       local c = calls[1]
       assert.equal(12, c.N)
@@ -168,10 +178,10 @@ describe("Display.Glow", function()
     end)
 
     it("AUTOCAST takes particles and speed, and has no thickness to take", function()
-      ns.db.profile.glow.style = "AUTOCAST"
-      ns.db.profile.glow.particles = 6
-      ns.db.profile.glow.frequency = 0.4
-      ns.db.profile.glow.thickness = 3
+      setGlow("style", "AUTOCAST")
+      setGlow("particles", 6)
+      setGlow("frequency", 0.4)
+      setGlow("thickness", 3)
       Glow.Start(frame(), "AUTOCAST")
       local c = calls[1]
       assert.equal(6, c.N)
@@ -182,8 +192,8 @@ describe("Display.Glow", function()
     end)
 
     it("BUTTON takes only speed", function()
-      ns.db.profile.glow.frequency = 0.6
-      ns.db.profile.glow.particles = 9
+      setGlow("frequency", 0.6)
+      setGlow("particles", 9)
       Glow.Start(frame(), "BUTTON")
       local c = calls[1]
       assert.equal(0.6, c.frequency)
@@ -191,7 +201,7 @@ describe("Display.Glow", function()
     end)
 
     it("PROC is called with an options table, not a row of arguments", function()
-      ns.db.profile.glow.speed = 2
+      setGlow("speed", 2)
       Glow.Start(frame(), "PROC")
       local c = calls[1]
       assert.equal("ProcGlow_Start", c.fn)
@@ -214,7 +224,7 @@ describe("Display.Glow", function()
     end)
 
     it("uses the chosen colour once there is one", function()
-      ns.db.profile.glow.color = { r = 0.1, g = 0.2, b = 0.3 }
+      setGlow("color", { r = 0.1, g = 0.2, b = 0.3 })
       Glow.Start(frame(), "PIXEL")
       assert.same({ 0.1, 0.2, 0.3, 1 }, calls[1].color)
     end)
@@ -244,7 +254,7 @@ describe("Display.Glow", function()
     end)
 
     it("shows the user's number once there is one", function()
-      ns.db.profile.glow.particles = 15
+      setGlow("particles", 15)
       assert.equal(15, Glow.effective("PIXEL", "particles"))
     end)
 
@@ -319,24 +329,24 @@ describe("Display.Glow", function()
     -- so brightness is the only difference the second glow is allowed to make.
     it("draws the next-cast glow in the SAME style as the main one", function()
       assert.equal("PIXEL", Glow.styleFor())
-      ns.db.profile.glow.style = "AUTOCAST"
+      setGlow("style", "AUTOCAST")
       assert.equal("AUTOCAST", Glow.styleFor())
       -- One answer for both glows: there is no argument to ask for the second one's shape, so a
       -- future override cannot be smuggled back in without this line failing.
-      ns.db.profile.glow.style = "NONSENSE"
+      setGlow("style", "NONSENSE")
       assert.equal("PIXEL", Glow.styleFor(), "an unknown style falls back rather than drawing nothing")
-      ns.db.profile.glow.style = "PIXEL"
+      setGlow("style", "PIXEL")
     end)
 
     it("lights the next-cast glow with the main style", function()
       ns.db.profile.glow.secondary = true
-      ns.db.profile.glow.style = "BUTTON"
+      setGlow("style", "BUTTON")
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
       local second
       for _, c in ipairs(calls) do if c.r == later then second = c end end
       assert.is_not_nil(second, "the next-cast glow was never lit")
       assert.equal("ButtonGlow_Start", second.fn)
-      ns.db.profile.glow.style = "PIXEL"
+      setGlow("style", "PIXEL")
     end)
 
     it("lights the second button under its own key, dimmed", function()
@@ -399,7 +409,7 @@ describe("Display.Glow", function()
     -- SetNowSlot picks the style out of the profile. Losing that line falls back to Pixel, which
     -- is invisible in any test that was already using Pixel.
     it("glows in the style the user chose, not always the fallback", function()
-      ns.db.profile.glow.style = "BUTTON"
+      setGlow("style", "BUTTON")
       Glow.SetNowSlot({ spell = "NOW" })
       assert.equal("ButtonGlow_Start", calls[1].fn)
     end)
@@ -408,7 +418,7 @@ describe("Display.Glow", function()
     -- ProcGlow_Stop looks for a frame that does not exist and the dim glow is never released.
     it("keys the dim Proc glow separately, so it can be released again", function()
       ns.db.profile.glow.secondary = true
-      ns.db.profile.glow.style = "PROC"
+      setGlow("style", "PROC")
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
       local second
       for _, c in ipairs(calls) do if c.r == later then second = c end end
@@ -426,6 +436,82 @@ describe("Display.Glow", function()
       ns.db.profile.glow.secondary = true
       Glow.Render({ { spell = "NOW" }, { spell = "LATER" } }, "K", true)
       assert.equal(2, Glow.activeCount())
+    end)
+  end)
+
+  -- AB1-D7: the glow is a PER-ABILITY setting now. The observable the decision asks for is two
+  -- keys with different colours reaching the library as two different colours -- one shared read of
+  -- `profile.glow` would pass every other test in this file and fail exactly this one.
+  describe("per-ability glow (AB1-D7)", function()
+    local now, later
+
+    before_each(function()
+      now, later = frame("now"), frame("later")
+      ns.db.profile.glow.barGlow = true
+      ns.BarGlow = {
+        buttonsFor = function(key)
+          if key == "NOW" then return { now }, "ElvUI" end
+          if key == "LATER" then return { later }, "ElvUI" end
+          return {}, nil
+        end,
+        noteMissing = function() end,
+      }
+    end)
+
+    it("starts each ability's glow with that ability's own colour and style", function()
+      local A = ns.AbilitySettings
+      A.set("NOW", "glow", "inherit", nil)   -- no-op: `inherit` is not a settable field
+      A.setInherit("NOW", "glow", false)
+      A.set("NOW", "glow", "color", { r = 1, g = 0, b = 0 })
+      A.set("NOW", "glow", "style", "BUTTON")
+      A.setInherit("LATER", "glow", false)
+      A.set("LATER", "glow", "color", { r = 0, g = 0, b = 1 })
+      ns.db.profile.glow.secondary = true
+      Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
+      local first, second
+      for _, c in ipairs(calls) do
+        if c.r == now then first = c end
+        if c.r == later then second = c end
+      end
+      assert.equal("ButtonGlow_Start", first.fn, "the now-slot's own style was ignored")
+      assert.same({ 1, 0, 0, 1 }, first.color)
+      assert.equal("PixelGlow_Start", second.fn, "the hint took the now-slot's style")
+      assert.same({ 0, 0, 1, Glow.SECONDARY_ALPHA }, second.color)
+    end)
+
+    it("does not glow an ability whose glow channel is switched off", function()
+      ns.AbilitySettings.setInherit("NOW", "glow", false)
+      ns.AbilitySettings.set("NOW", "glow", "enabled", false)
+      assert.is_false(Glow.enabledFor("NOW"))
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(0, Glow.activeCount())
+      assert.equal(0, #calls)
+    end)
+
+    it("glows every ability by default, and says so", function()
+      assert.is_true(Glow.enabledFor("NOW"))
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(1, Glow.activeCount())
+    end)
+
+    -- The dim hint obeys its own ability's switch too: leaving it out would light a button for a
+    -- spell the player has explicitly silenced.
+    it("does not draw the dim hint for an ability with its glow off", function()
+      ns.db.profile.glow.secondary = true
+      ns.AbilitySettings.setInherit("LATER", "glow", false)
+      ns.AbilitySettings.set("LATER", "glow", "enabled", false)
+      Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
+      assert.equal(1, Glow.activeCount())
+    end)
+
+    -- Guarded, not assumed: a spec (or a load order) without Core/AbilitySettings must still glow
+    -- rather than silently stop.
+    it("falls back to glowing everything with no settings store loaded", function()
+      ns.AbilitySettings = nil
+      assert.is_true(Glow.enabledFor("NOW"))
+      assert.equal("PIXEL", Glow.styleFor("NOW"))
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(1, Glow.activeCount())
     end)
   end)
 

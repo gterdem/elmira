@@ -48,6 +48,11 @@ Core\Conditions.lua
 # R2 (D53): the Spells registry. After Conditions.lua -- Spells.referencedKeys walks a build's
 # conditions through Conditions.field() to find every spell key one names.
 Core\Spells.lua
+# AB1-D3/D5: what each registered ability is allowed to do on screen, and the pure edge detector
+# that turns cooldown/aura readings into its five events. Both after Spells.lua, which owns the keys
+# they are stored under.
+Core\AbilitySettings.lua
+Core\Track.lua
 # Reads Schema's own KEY_SOURCE, so it follows Schema.
 Core\Diagnostics.lua
 Core\Recorder.lua
@@ -60,6 +65,9 @@ Display\BarGlow.lua
 Display\BarProviders.lua
 Display\Queue.lua
 Display\Overlay.lua
+# AB1-D8: the one LibSharedMedia fetch + PlaySoundFile path, shared by the announcement sink below
+# and by the Abilities page's per-event sounds. Before Announcers.lua, which now delegates to it.
+Display\Sounds.lua
 Display\Announcers.lua
 # D2: the one StaticPopup_Show call site in the addon. Loads before Setup\Wizard.lua and
 # Options\Rotation.lua, both of which use ns.Popups, so neither has to reach forward for it.

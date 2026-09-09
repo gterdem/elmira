@@ -42,17 +42,14 @@ Announce.CATEGORIES = {
   { key = "cooldown", label = "Long cooldowns used",   color = "OK",        shareable = true },
 }
 
--- PE14-D3 (2026-09-09): categories the Notifications page does NOT offer a routing row for.
+-- Categories the Notifications page does NOT offer a routing row for.
 --
--- KEEP THE COOLDOWN MACHINERY. Announcing a long cooldown is a property of the ABILITY, not a
--- routing choice -- a 120s floor cannot tell a tank's defensive save from a DPS burst, which is
--- exactly the distinction that decides whether a group announcement is welcome -- so the owner
--- moved it into the Abilities redesign as a per-ability setting. Everything below it (the category
--- itself, `shareable`, DEFAULT_ROUTES.cooldown, COOLDOWN_FLOOR/cooldownFloor/worthAnnouncing,
--- Display.announceCooldown, Announcers.party) is what that tab will drive and is deliberately
--- still here: `Announce.emit("cooldown", ...)` works exactly as it did. Only the page-side row is
--- gone. Do not delete any of it as unreferenced.
-Announce.OFF_PAGE = { cooldown = true }
+-- EMPTY since AB1-D10. `cooldown` was the only entry: PE14-D3 took its row off the page while the
+-- Abilities redesign decided what would drive it. That is now the per-ability Announcement tab,
+-- which says WHETHER a cooldown is announced; WHERE the resulting line goes -- chat, screen, party,
+-- raid -- is still a routing question, so the row belongs back on Notifications with the others.
+-- The table stays because `listed()` is the one filter both the page and `Announce.test()` read.
+Announce.OFF_PAGE = {}
 
 -- The categories the Notifications page shows a row for -- and therefore the ones `Announce.test()`
 -- sends a sample of. ONE list for both: a test button that announces a kind the page no longer
@@ -194,34 +191,6 @@ local function dispatch(cat, row, routes)
       pcall(fn, cat, row)
     end
   end
-end
-
--- The shortest cooldown worth saying out loud, in seconds.
---
--- "Cooldowns used" is the one category that can reach party chat, so what counts matters: Crusader
--- Strike at 6s and Divine Storm at 10s would be a line every global cooldown, which is noise in
--- your own chat and unforgivable in anyone else's. 120s is the owner's line (2026-09-05) and for a
--- paladin it is a clean one -- it takes Avenging Wrath (180s) and Aura Mastery (120s) and leaves
--- Holy Shock (30s) and everything below alone.
---
--- PE14-D3: the SLIDER for this left the Notifications page with the cooldown row; the rule stayed.
--- Display.announceCooldown still asks it on every cast, and the Abilities redesign will set it
--- per ability, which is the only place that can tell a defensive save from a burst cooldown.
-Announce.COOLDOWN_FLOOR = 120
-
-function Announce.cooldownFloor()
-  local d = db()
-  local stored = d and d.profile and d.profile.announce and d.profile.announce.cooldownFloor
-  local n = tonumber(stored)
-  if not n or n < 0 then return Announce.COOLDOWN_FLOOR end
-  return n
-end
-
--- Is this worth announcing as a cooldown? Pure, so the rule is testable without a client and lives
--- next to the category it decides for.
-function Announce.worthAnnouncing(cooldown)
-  local n = tonumber(cooldown)
-  return n ~= nil and n >= Announce.cooldownFloor()
 end
 
 -- Announce.emit(category, text, opts) -> the logged row, or nil

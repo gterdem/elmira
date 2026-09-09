@@ -582,6 +582,17 @@ describe("Core.Slash", function()
     assert.is_true(hasLineMatching(lines, "bar providers: 0"))
   end)
 
+  -- AB1-D3: the glow's style is a per-ability setting, so this line reports the All abilities one
+  -- -- what an ability that has been given none of its own draws in. It used to read
+  -- `profile.glow.style`, which is not a key any more and printed "style=nil".
+  it("'debug bars' reports the All abilities glow style, not a profile key that is gone", function()
+    local ns = _G.__ELM_NS
+    ns.db = { profile = { glow = { barGlow = true } }, char = { abilities = {} } }
+    ns.Glow = { styleFor = function() return "AUTOCAST" end, activeCount = function() return 2 end }
+    local lines = Slash.run("debug bars")
+    assert.is_true(hasLineMatching(lines, "glow: barGlow=true style=AUTOCAST active=2"))
+  end)
+
   -- The branch above is the degraded one, reached without Display. This is the real one, and its
   -- message used to name Elmira_ElvUI -- an addon that no longer exists (ADR-0014). What replaces
   -- it has to say what IS in use, or a reader with no bar addon concludes the glow is broken when

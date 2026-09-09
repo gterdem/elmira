@@ -26,6 +26,11 @@ local buffers = { {}, {} } -- the two queue tables the tick alternates between (
 local lastBuildKey
 local lastError = {}      -- renderer name -> the last error text reported, so it is said once
 local lastVisible         -- nil until the first tick decides; then true/false
+-- AB1-D5. `watched` is the tracked set Core/Track polls -- rebuilt only when the settings version
+-- or the pack changes, never per tick. `trackPrev` is Track's own memory between ticks, and
+-- `lastNowKey` is what the `suggested` event compares against. One declaration for the four:
+-- deleting any single `local` here would only make it a global, which no test can see.
+local watched, watchedVersion, watchedPack, trackPrev, lastNowKey = {}, nil, nil, nil, nil
 -- Which spells were statically live, and for which build (ADR-0015 amendment). One declaration:
 -- separately, deleting either only makes it a global, which no test can see.
 local gateSnapshot, gateKey
@@ -252,37 +257,101 @@ function Display.itemIcon(slot)
   return GetInventoryItemTexture("player", slot)
 end
 
--- The player cast something. Two things care: the strip, which pops the icon, and the
--- announcement, which says a long cooldown went out.
+-- The player cast something. Two things care: the strip, which pops the icon, and everything the
+-- ability's own settings say happens when it is used (AB1-D5's `used` event).
 --
 -- Both live here rather than in Queue because the strip's half is skipped when the strip is hidden
--- or still, and an announcement must not inherit that: someone who hides the queue and watches only
--- the bar glow still wants to be told a cooldown was used.
+-- or still, and a sound or an announcement must not inherit that: someone who hides the queue and
+-- watches only the bar glow still wants to be told a cooldown was used.
 function Display.noteCast(spellID)
   local key = ns.Queue and ns.Queue.keyForSpellID and ns.Queue.keyForSpellID(spellID)
-  if key then Display.announceCooldown(key) end
+  if key then Display.abilityEvent(key, "used") end
   if ns.Queue and ns.Queue.noteCast then ns.Queue.noteCast(spellID) end
   return key
 end
 
--- "Avenging Wrath used." -- the only category that may reach party chat, so the bar for what counts
--- is deliberately high (Core/Announce.cooldownFloor). Nothing emitted this category at all until
--- now: it had routing, a colour and the one party toggle, and no code path that fired it.
+-- Display.spellName(key) -> what a player calls it
 --
--- PE14-D3: KEPT ON PURPOSE, though the Notifications page no longer shows the `cooldown` row. This
--- is the exact path the Abilities redesign drives as a per-ability "announce when used" setting;
--- it still runs on every cast and still routes through Core/Announce. Not unreferenced, not dead.
-function Display.announceCooldown(key)
-  if not (ns.Announce and ns.Announce.worthAnnouncing) then return false end
+-- The client's own name for the id the merged registry holds, falling back to the readable form of
+-- the key. Both halves already existed inside announceCooldown; they are named here because the
+-- announcement is no longer the only sentence an ability's key has to appear in.
+function Display.spellName(key)
   local pack = Display.currentPack()
-  local data = pack and pack.spells and pack.spells[key]
-  if not (data and ns.Announce.worthAnnouncing(data.cooldown)) then return false end
-  local name = (data.id and ns.BarGlow and ns.BarGlow.spellName and ns.BarGlow.spellName(data.id))
+  local spells = (pack and ns.Spells and ns.Spells.merged and ns.Spells.merged(pack))
+    or (pack and pack.spells)
+  local data = (spells and spells[key]) or {}
+  return (data.id and ns.BarGlow and ns.BarGlow.spellName and ns.BarGlow.spellName(data.id))
     or (ns.Detect and ns.Detect.readableName and ns.Detect.readableName(key, data))
     or key
-  ns.Announce.emit("cooldown", string.format("%s used.", name),
-                   { icon = Display.spellIcon(key) })
+end
+
+-- "Divine Protection used -- 10s." (AB1-D10.)
+--
+-- No cooldown floor any more: a number of seconds cannot tell a tank's defensive save from a burst
+-- cooldown, and that is exactly the distinction that decides whether a line belongs in a group's
+-- chat. The ability's own Announcement tab decides, and it ships OFF for every ability including
+-- the long ones. Routing (chat / screen / party / raid) is still Core/Announce's.
+function Display.announceCooldown(key)
+  local A = ns.AbilitySettings
+  if not (ns.Announce and A) then return false end
+  local settings = A.effective(key, "announce")
+  if not settings.enabled then return false end
+  local name = Display.spellName(key)
+  local text = string.format("%s used.", name)
+  if settings.duration then
+    -- The buff's FULL length, State's third return -- not what is left of it, which at the instant
+    -- of the cast is the same number only by luck.
+    local state = ns.API and ns.API.GetState()
+    local full = state and select(3, state:buff(key)) or nil
+    -- Omitted when unknown, never guessed: "used -- 0s" reads as a fact we do not have.
+    if full and full > 0 then text = string.format("%s used -- %ds.", name, full) end
+  end
+  ns.Announce.emit("cooldown", text, { icon = Display.spellIcon(key) })
   return true
+end
+
+-- Display.watchedKeys() -> [{ key =, expiring = }]
+--
+-- The tracked set (AB1-D5): every registry key whose settings ask for something Core/Track has to
+-- watch the state for. Rebuilt only when Core/AbilitySettings' version counter moves or the pack
+-- changes -- a fresh walk of the whole registry on every tick would be the aura scan this addon
+-- spent M5 removing. Sorted, so two ticks report the same events in the same order.
+function Display.watchedKeys()
+  local A = ns.AbilitySettings
+  if not A then return watched end
+  local pack = Display.currentPack()
+  local v = A.version()
+  if watchedVersion == v and watchedPack == pack then return watched end
+  watchedVersion, watchedPack = v, pack
+  for i = #watched, 1, -1 do watched[i] = nil end
+  local spells = (ns.Spells and ns.Spells.merged and ns.Spells.merged(pack)) or (pack and pack.spells) or {}
+  for key in pairs(spells) do
+    if A.tracked(key) then
+      watched[#watched + 1] = { key = key, expiring = A.effective(key, "general").expiringSeconds }
+    end
+  end
+  table.sort(watched, function(a, b) return a.key < b.key end)
+  return watched
+end
+
+-- Display.abilityEvent(key, event) -> did anything happen
+--
+-- The one place one of AB1-D5's five events turns into something the player notices. Every channel
+-- that can answer for an event answers here, so "Only in combat" is asked once rather than once per
+-- channel -- a guard applied in four places is a guard that will be forgotten in one of them.
+function Display.abilityEvent(key, event)
+  local A = ns.AbilitySettings
+  if not A then return false end
+  if A.effective(key, "general").onlyInCombat then
+    local state = ns.API and ns.API.GetState()
+    if not (state and state:inCombat()) then return false end
+  end
+  local acted = false
+  if ns.Sounds and ns.Sounds.abilitySoundsOn() and A.channelOn(key, "sound") then
+    if ns.Sounds.play(A.effective(key, "sound")[event]) then acted = true end
+  end
+  if event == "used" and Display.announceCooldown(key) then acted = true end
+  return acted
 end
 
 -- Reads the live state, hands Core/Visibility booleans, returns show/hide plus the reason. The
@@ -372,6 +441,15 @@ function Display.tick(now)
   local t = Display.ticker()
   if not t:shouldRun(now) then return "skipped" end
 
+  -- AB1-D5: the tracker rides the loop that already exists -- same OnUpdate, same 10 Hz cap, no
+  -- second timer. Before the visibility branch on purpose: a screen flash or a sound for a spell
+  -- coming off cooldown is exactly what someone who has hidden the strip is relying on.
+  if ns.Track then
+    local fired, memory = ns.Track.tick(ns.API and ns.API.GetState(), Display.watchedKeys(), trackPrev)
+    trackPrev = memory
+    for _, e in ipairs(fired) do Display.abilityEvent(e.key, e.event) end
+  end
+
   -- Hidden costs one boolean read and no queue computation at all — which is the point, since for
   -- most of a session the answer is "hidden". The transition is painted once so the strip actually
   -- disappears and any bar glow is released; after that a hidden tick does nothing.
@@ -412,6 +490,14 @@ function Display.tick(now)
   end
 
   lastQueue, lastBuildKey = queue, key
+  -- The `suggested` event (AB1-D5): the now-slot became THIS ability. Compared separately from
+  -- `changed` above, which is true for any movement anywhere in the queue -- firing a cue because
+  -- the third icon changed is the strobe ADR-0009 is about.
+  local nowKey = queue[1] and queue[1].spell or nil
+  if nowKey ~= lastNowKey then
+    lastNowKey = nowKey
+    if nowKey then Display.abilityEvent(nowKey, "suggested") end
+  end
   renderAll(queue, key, true)
   return "rendered"
 end

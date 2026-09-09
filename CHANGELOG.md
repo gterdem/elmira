@@ -1,5 +1,34 @@
 # Changelog
 ## Unreleased
+- **New: every ability has its own settings, on a rebuilt Abilities page.** The page is two tabs
+  now, "Abilities" and "Share", and the abilities themselves sit in a list of their own with the
+  add box and a search row above it. Pick one and you get six tabs: General, Glow, Texture,
+  Screen-edge, Sound and Announcement. Texture and Screen-edge are placeholders in this update.
+- **New: "All abilities" is the first row of that list.** It holds what every ability falls back
+  to. Each ability opens with "Same as All abilities" switched on; turn it off to give that one
+  ability its own glow style, colour and sliders, its own sounds or its own wording. Whether a
+  screen flash, a sound or an announcement is switched ON is always the ability's own choice — it
+  can never be turned on for everything at once.
+- **New: sounds per ability.** Choose a sound for any of five moments: when Elmira suggests it, when
+  it comes off cooldown, when you use it, when its buff appears and when that buff is about to run
+  out. "None" everywhere by default, and the sound plays as you pick it. One master switch,
+  "Ability sounds", is on the Notifications page.
+- **New: "Announce when I use this" per ability**, optionally with how long the effect lasts
+  ("Divine Protection used — 10s."). Off for every ability, long cooldowns included. The old rule
+  that only announced cooldowns above two minutes is gone — length could not tell a defensive save
+  from a burst cooldown, and now you decide per ability.
+- **Changed: "Long cooldowns used" is back on the Notifications page**, with its Party and Raid
+  checkboxes, because where the line goes is still a routing choice. There is no length slider.
+- **Changed: the glow style, colour and sliders moved off the Glow page** onto Abilities ›
+  All abilities › Glow, where any single ability can now differ. Whether your bars glow at all is
+  still General › Action Bars, and the Glow page says where its controls went.
+- **Changed: ability settings are per character.** Glow, sounds and announcements do not switch with
+  your profile any more.
+- **New: an ability's row in the list shows its own spell icon**, greyed when nothing is switched on
+  for it, with a tooltip listing which of its five cues are on. The search row filters by name or by
+  which cue is configured.
+- **Fixed: "Add an ability" is one row instead of three panels** — your spellbook on the left, one
+  box for a spell ID or a name on the right. Digits are looked up as an ID, anything else as a name.
 - **Fixed: Elmira no longer announces its own uncertainty as a change to your character.** When the
   client would not say whether a spell is learned, a gated line counted as available again, so a
   reading that wobbled read as the ability being gained and lost — several messages a fight about a
