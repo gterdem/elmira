@@ -335,7 +335,7 @@ describe("Core.Diagnostics", function()
     local MINE, THEIRS
 
     -- A local rather than a `Diagnostics.identical` helper: nothing in the addon needs the boolean,
-    -- and a function only a spec calls is a bug report (the definition of done).
+    -- and a function only a spec calls is a bug report (docs/04-TESTING.md).
     local function unchanged(result)
       return #result.onlyMine == 0 and #result.onlyTheirs == 0
          and #result.changed == 0 and #result.moved == 0

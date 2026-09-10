@@ -23,7 +23,7 @@ Adapters\Vanilla.lua
 Adapters\Collector.lua
 Adapters\ItemRack.lua
 
-# Core — pure Lua, no WoW API (hard rule 3)
+# Core — pure Lua, no WoW API (docs/01-ARCHITECTURE.md; every client call lives in Adapters/)
 Core\Colors.lua
 Core\API.lua
 Core\Packs.lua

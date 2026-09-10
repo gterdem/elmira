@@ -4,7 +4,7 @@
 -- The IDs below are SYNTHETIC — sequential from 1000, deliberately not real game IDs. Core never
 -- reads `id`; it keys off the symbolic name, so the number is irrelevant to every test here. Making
 -- them obviously fake means no one can mistake this file for verified data or copy an ID out of it
--- into Data/, where hard rule 2 requires a fetched Wowhead source per ID.
+-- into Data/, where every shipped ID must carry a fetched Wowhead `-- src:` line.
 --
 -- The fields Core actually consumes: `proc` (suppressed for t>0 in simulation), `cdVolatile` (render
 -- marker), `cost` (subtracted from the virtual state), `cooldown` (seconds — Simulation cannot derive

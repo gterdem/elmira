@@ -796,7 +796,7 @@ local function spellPaletteArgs(editable)
     -- PE2-D3.2: the reason is a tooltip now; the label is the ability's name and its icon, nothing
     -- else, so three of them fit across a row without wrapping.
     local why -- mutants: equivalent deleting the declaration only makes it a global; luacheck catches it
-    local body
+    local body -- mutants: equivalent deleting the declaration only makes it a global; luacheck catches it
     if row.known == false then
       why = Rotation.reasonText(row)
       body = ns.Colors.wrap(ns.Colors.MUTED, row.label)
@@ -1060,7 +1060,11 @@ end
 local function draftTemplate(d)
   local p = pack()
   local _, origin, fork = findBuild(p, d.key)
-  if origin ~= "fork" or not (fork and fork.derivedFrom) then return nil end
+  -- Rotation.draft() has already refused anything but a fork, and `p.builds[nil]` is nil for a fork
+  -- that records no parent -- so this states the requirement rather than adding a second answer.
+  if origin ~= "fork" or not (fork and fork.derivedFrom) then
+    return nil -- mutants: equivalent draft() refused a non-fork already; p.builds[nil] is nil
+  end
   return p and p.builds and p.builds[fork.derivedFrom]
 end
 
@@ -1122,8 +1126,8 @@ function Rotation.resetToTemplate()
   end
   d.entries = entries
   -- The open body followed a line that no longer exists at that position; leaving the index would
-  -- expand whichever of the template's lines happens to sit there now.
-  syncExpanded()
+  -- expand whichever of the template's lines happens to sit there now. No syncExpanded() first:
+  -- the next line clears the index outright, which is everything a sync could have done to it.
   expandedIndex = nil
   return markDirty()
 end
@@ -1162,7 +1166,9 @@ function Rotation.moveRowTo(index, to)
   index, to = tonumber(index) or 0, tonumber(to) or 0
   if not (entries[index] and entries[to]) or index == to then return false end
   table.insert(entries, to, table.remove(entries, index))
-  syncExpanded()
+  -- Same as moveRow above: `isExpanded` is the only public reader and re-syncs on every call, so a
+  -- stale index this would have cleared is corrected before anything reads it.
+  syncExpanded() -- mutants: equivalent `isExpanded`, the only public reader, re-syncs for itself
   if expandedIndex == index then
     expandedIndex = to
   elseif expandedIndex then
@@ -1887,7 +1893,7 @@ local function looksProgrammatic(key)
 end
 
 local function prettyKey(key)
-  key = tostring(key)
+  key = tostring(key) -- mutants: equivalent every caller resolves its key out of Core/Conditions' own lists, which are strings
   if not looksProgrammatic(key) then return key end
   if ns.Detect and ns.Detect.readableName then return ns.Detect.readableName(key, nil) end
   return key

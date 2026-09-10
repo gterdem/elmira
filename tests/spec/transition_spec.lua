@@ -113,6 +113,26 @@ describe("Core.Transition", function()
       assert.equal("up", T.growth("up"))
       assert.is_true(T.isVertical("down"))
       assert.is_false(T.isVertical("left"))
+      -- The whole truth table, because `isVertical` no longer normalises through growth(): an
+      -- unusable direction has to answer "not vertical" on its own, or a stored `grow` of "sideways"
+      -- would lay the strip out down the screen.
+      assert.is_true(T.isVertical("up"))
+      assert.is_false(T.isVertical("right"))
+      assert.is_false(T.isVertical(nil))
+      assert.is_false(T.isVertical("sideways"))
+    end)
+
+    -- Every slot's x/y is computed in a pair of LOCALS. Both are assigned on all four branches
+    -- before either is read, so nothing about the geometry can see the declaration -- what it
+    -- keeps out is two names in the client's one shared global table, from a loop that runs on
+    -- every layout. `make lint` is the standing gate for that; this is the assertion that makes
+    -- the mutation gate see it too.
+    it("computes each slot's offsets without leaving anything in _G", function()
+      _G.x, _G.y = nil, nil
+      local slots = T.layout(5, "down", 4)
+      assert.equal(0, slots[1].x)
+      assert.is_nil(_G.x)
+      assert.is_nil(_G.y)
     end)
 
     -- The promote entrance means "this arrived from outside the strip". Keeping it literally

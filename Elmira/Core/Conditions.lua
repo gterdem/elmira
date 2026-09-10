@@ -33,7 +33,8 @@ local Conditions = {}
 Conditions.MODES = { "Single", "Cleave", "AoE" }
 Conditions.WEAPON_KINDS = { "2H", "1H", "Shield" }
 -- `state:targetType()` is UnitCreatureType, which answers a LOCALISED string. enUS only in v1
--- (house style), and a build that ships a creature type is shipping an English one.
+-- (every string via L[...], docs/01-ARCHITECTURE.md), and a build that ships a creature type is
+-- shipping an English one.
 Conditions.CREATURE_TYPES = {
   "Beast", "Critter", "Demon", "Dragonkin", "Elemental", "Giant", "Humanoid", "Mechanical", "Undead",
 }

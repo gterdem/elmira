@@ -77,6 +77,20 @@ describe("Options (the settings pages)", function()
       assert.equal(1, stopped)
     end)
 
+    -- PE11-D5, the same class of stranding one line down: Disable() stops the ticks, and
+    -- positioning mode is deliberately immune to the render loop -- so a strip left mid-positioning
+    -- would sit on screen under a switch that says "no queue", with nothing left running to take it
+    -- down. Only on the way OFF: switching the addon on must not end a mode nobody asked to end.
+    it("takes a strip left mid-positioning down with the master switch", function()
+      local stops = 0
+      ns.Glow = { StopAll = function() end }
+      ns.Queue.StopPositioning = function() stops = stops + 1 end
+      generalArgs().enabled.set(nil, true)
+      assert.equal(0, stops)
+      generalArgs().enabled.set(nil, false)
+      assert.equal(1, stops)
+    end)
+
     it("names the master switch for the addon, not for the strip", function()
       local row = generalArgs().enabled
       assert.equal("Enable Elmira", row.name)
@@ -102,12 +116,14 @@ describe("Options (the settings pages)", function()
       assert.equal("Show waits", queueArgs().waits.name)
       assert.equal("gcd", queueArgs().waits.get())
       assert.same({ "off", "gcd", "always" }, queueArgs().waits.sorting())
-      assert.equal("Only when longer than a GCD", queueArgs().waits.values().gcd)
+      assert.same({ off = "Off", gcd = "Only when longer than a GCD", always = "Always" },
+                  queueArgs().waits.values())
 
       assert.equal("Keybinds", queueArgs().keybinds.name)
       assert.equal("first", queueArgs().keybinds.get())
       assert.same({ "off", "first", "all" }, queueArgs().keybinds.sorting())
-      assert.equal("On every icon", queueArgs().keybinds.values().all)
+      assert.same({ off = "Off", first = "On the first icon only", all = "On every icon" },
+                  queueArgs().keybinds.values())
 
       assert.equal("Show the rule name", queueArgs().showReason.name)
       assert.is_false(queueArgs().showReason.get())
@@ -118,6 +134,27 @@ describe("Options (the settings pages)", function()
       assert.equal("always", ns.db.profile.waits)
       assert.equal("off", ns.db.profile.keybinds)
       assert.is_true(ns.db.profile.showReason)
+    end)
+
+    -- Every one of these six strip settings is written down TWICE: once as the shipped default in
+    -- Core/DB.lua, and once as this getter's own fallback for a profile that has never carried the
+    -- key. Two copies of one answer drift, and the drift is silent -- each reading is defensible on
+    -- its own, and the panel then shows one thing while the strip does another. So the pair is
+    -- asserted as a pair, which is also the only observable a shipped default HAS: with the
+    -- fallback beside it, deleting the default changes nothing a reader can see except this
+    -- agreement.
+    it("reads an unset profile as exactly the value Core/DB ships as the default", function()
+      local DB = helper.load("Elmira/Core/DB.lua")
+      helper.load("Elmira/Core/Transition.lua")  -- grow/spacing read their fallback out of it
+      local d = queueArgs()
+      -- None of the six is in ns.db.profile (see before_each), so each getter is answering from
+      -- its fallback here -- which is the case a stale profile hits in the client.
+      assert.equal(DB.defaults.profile.grow, d.grow.get())
+      assert.equal(DB.defaults.profile.spacing, d.spacing.get())
+      assert.equal(DB.defaults.profile.oocAlpha, d.oocAlpha.get())
+      assert.equal(DB.defaults.profile.waits, d.waits.get())
+      assert.equal(DB.defaults.profile.keybinds, d.keybinds.get())
+      assert.equal(DB.defaults.profile.showReason, d.showReason.get())
     end)
 
     it("repaints on each of the three new rows, or the change waits for the queue to move", function()
@@ -398,6 +435,71 @@ describe("Options (the settings pages)", function()
       assert.equal("Direction", queue.args.size.args.grow.name)
     end)
 
+    -- PE10-D1. The four directions come from Core/Transition.GROW rather than from a list written
+    -- out here, so the dropdown and the layout code cannot disagree about which directions exist --
+    -- and the ORDER is the list's, not alphabetical: "right" first because it is what shipped, then
+    -- its opposite, then the two vertical ones. AceConfig sorts a `values` table by its keys unless
+    -- `sorting` says otherwise, which would have put "down" at the top.
+    it("offers exactly the four growth directions Core/Transition names, in its order", function()
+      helper.load("Elmira/Core/Transition.lua")
+      local row = args().queue.args.size.args.grow
+      assert.same({ "right", "left", "down", "up" }, row.sorting())
+      assert.same({ right = "Right", left = "Left", down = "Down", up = "Up" }, row.values())
+      assert.equal(4, #row.sorting())
+      -- Reads and writes the same value Display/Queue lays the strip out from, and repaints: a
+      -- direction that only reaches the profile leaves the strip pointing the old way until the
+      -- rotation happens to move.
+      assert.equal("right", row.get())
+      local redraws = 0
+      ns.Display.refresh = function() redraws = redraws + 1 end
+      row.set(nil, "up")
+      assert.equal("up", ns.db.profile.grow)
+      assert.equal("up", row.get())
+      assert.equal(1, redraws)
+      -- A direction from a newer version reads as the shipped one rather than as an error.
+      ns.db.profile.grow = "sideways"
+      assert.equal("right", row.get())
+    end)
+
+    -- Every word on this page, pinned. The owner writes these tooltips as the page's actual
+    -- documentation -- the "which of these two did I just change" fixes, the "your lock setting is
+    -- left exactly as it was" promise, the sentence naming the three settings Learning mode
+    -- rewrites -- and each is several source lines of concatenation. A test that only asked whether
+    -- a desc was non-empty would pass with any one of those lines gone, which is how a promise
+    -- quietly stops being made. Equality, so removing a sentence fails here rather than in a
+    -- screenshot.
+    it("says on every control exactly what the owner wrote there", function()
+      local expected = {
+      when_oocAlpha = "How solid the strip is while you are not fighting. It goes back to full the moment you enter combat. To hide it entirely out of combat, use \"When to show it\" above instead.",
+      when_showQueue = "The row of icons showing what to press now and what comes after it. Turning it off hides the icons and keeps the action-bar glow, for players who watch only the highlighted button.",
+      when_visibility = "Which moments the strip and its bar glow are on screen. Hiding it also stops the update loop, so a hidden queue costs nothing at all. The default keeps it out of your way in town and up the moment you have something to fight.",
+      size_depth = "How many casts ahead the strip shows. The first icon is what to press now; the rest are what the rotation projects after it. One is the whole answer with nothing to read past it; five is a plan.",
+      size_grow = "Which way the strip lays out after the first icon. The first icon does not move, so you can position the strip first and pick a direction afterwards. Down or Up suits a strip beside your character; Left suits one anchored to the right of the screen.",
+      size_matchBars = "Measures a button on your action bars and sets the size above so the first icon is drawn the same. Needs one of the rotation's spells to be on a bar you can see.",
+      size_position = "Puts the strip on screen with sample icons and lets you drag it, even in the moments it would normally be hidden. Press it again when the strip is where you want it. Nothing is saved except the position: your lock setting is left exactly as it was, and closing this window ends it too.",
+      size_scale = "How large the queue icons are drawn on your screen. If you want them the size of the buttons you already read, use \"Match my action bars\" below rather than hunting for the number.",
+      size_spacing = "How many pixels apart the icons sit. Zero makes the strip read as one block; a wide gap makes the first icon easier to pick out of the corner of your eye.",
+      tells_animate = "Icons slide when the queue moves and pop when you cast the suggestion. The strip never glows, so movement is how it says something changed: with this off, a new first suggestion simply appears and is easy to miss.",
+      tells_keybinds = "Prints the key each suggestion is bound to on your action bars, in the icon's top-right corner. Nothing appears for an ability you have not put on a bar. On the first icon only by default: on a later icon it is a key NOT to press yet.",
+      tells_learning = "Shows one suggestion at a time, larger, with the name of the rule that chose it. It writes three settings on this page for you: \"Casts to show\" to 1, \"Size\" to 140% and \"Show the rule name\" on -- and puts all three back the way they were when you switch it off again. Anything you change yourself while it is on is yours and stays. Does not turn on any screen-edge cues; those stay your choice.",
+      tells_showReason = "Writes the name of the rule that chose the first suggestion underneath it, so you learn why rather than memorising an order. Works at any number of icons; Learning mode below switches it on for you.",
+      tells_waits = "Prints how many seconds until each later suggestion happens, in the icon's bottom-left corner. Most of the time the answer is just the next global cooldown, so by default the number only appears when the wait is longer than that -- which is exactly when it is worth knowing.",
+      }
+      local seen = 0
+      for panelKey, panel in pairs(args().queue.args) do
+        for rowKey, row in pairs(panel.args) do
+          local want = expected[panelKey .. "_" .. rowKey]
+          if want then
+            local got = type(row.desc) == "function" and row.desc() or row.desc
+            assert.equal(want, got, panelKey .. "." .. rowKey .. " no longer says what it said")
+            seen = seen + 1
+          end
+        end
+      end
+      -- A row that moved panels or lost its desc would silently drop out of the walk above.
+      assert.equal(14, seen)
+    end)
+
     -- PE11-D4. The third instance this session of "the master switch is off and the twelve
     -- controls under it still look live", so it is the page's rule now.
     describe("with the strip switched off", function()
@@ -458,6 +560,135 @@ describe("Options (the settings pages)", function()
         assert.is_truthy(fade().desc():find("combat only", 1, true))
         -- and it is still the stored number, not a zero
         assert.equal(1, fade().get())
+
+        -- A profile that has never chosen a mode is on the SHIPPED default, not on nothing: were
+        -- the shipped default combat-only, the fade would be just as dead and would have to say so.
+        ns.Visibility.DEFAULT = "combat"
+        ns.db.profile.visibility = nil
+        assert.is_true(fade().disabled())
+        ns.Visibility.DEFAULT = "always"
+        assert.is_falsy(fade().disabled())
+      end)
+    end)
+
+    -- ADR-0015 SS3. Which moments the strip and its bar glow are on screen at all. The list comes
+    -- from Core/Visibility rather than from a copy here, so a mode added there cannot appear in the
+    -- dropdown unnamed or in the wrong place -- and the glow is released on the way, because a mode
+    -- change that strands a lit action button leaves the panel promising something it is not doing.
+    describe("When to show it", function()
+      local function row() return args().queue.args.when.args.visibility end
+
+      before_each(function()
+        ns.Visibility = { MODES = { "always", "combat_or_target", "combat" }, DEFAULT = "combat_or_target" }
+      end)
+
+      it("offers Core/Visibility's own modes, in its own order, each with a name", function()
+        assert.same({ "always", "combat_or_target", "combat" }, row().sorting())
+        assert.same({ always = "Always",
+                      combat_or_target = "In combat, or when you have a target",
+                      combat = "In combat only" }, row().values())
+      end)
+
+      it("reads the shipped default until the player picks one", function()
+        assert.equal("combat_or_target", row().get())
+        ns.db.profile.visibility = "combat"
+        assert.equal("combat", row().get())
+      end)
+
+      it("releases every glow and repaints when the mode changes", function()
+        local stopped, redraws = 0, 0
+        ns.Glow = { StopAll = function() stopped = stopped + 1 end }
+        ns.Display.refresh = function() redraws = redraws + 1 end
+        row().set(nil, "always")
+        assert.equal("always", ns.db.profile.visibility)
+        assert.equal(1, stopped, "a bar button lit by the last suggestion stays lit")
+        assert.equal(1, redraws)
+      end)
+    end)
+
+    -- PE10-D2/D3/D4 and PE9-D4: the numbers. Each of these writes a value Display/Queue reads back
+    -- on the next paint, and each has to ASK for that paint -- changing a strip setting changes
+    -- neither the queue nor the build, so the driver would not repaint on its own and the panel
+    -- would look like it had done nothing.
+    describe("the numbers on the Queue page", function()
+      local redraws
+
+      before_each(function()
+        redraws = 0
+        ns.Display.refresh = function() redraws = redraws + 1 end
+      end)
+
+      it("offers the fade as a percentage, from a tenth up to solid", function()
+        local row = args().queue.args.when.args.oocAlpha
+        assert.equal(0.1, row.min)
+        assert.equal(1.0, row.max)
+        assert.equal(0.05, row.step)
+        assert.is_true(row.isPercent)
+        row.set(nil, 0.45)
+        assert.equal(0.45, ns.db.profile.oocAlpha)
+        assert.equal(1, redraws)
+      end)
+
+      it("offers the spacing in whole pixels, and zero is a real answer", function()
+        local row = args().queue.args.size.args.spacing
+        assert.equal(0, row.min)
+        assert.equal(20, row.max)
+        assert.equal(1, row.step)
+        helper.load("Elmira/Core/Transition.lua")
+        assert.equal(4, row.get(), "a profile that predates the setting reads as the shipped gap")
+        row.set(nil, 0)
+        assert.equal(0, ns.db.profile.spacing)
+        assert.equal(0, row.get())
+        assert.equal(1, redraws)
+      end)
+
+      it("writes the icon count and the size straight through, as percentages", function()
+        local depth, scale = args().queue.args.size.args.depth, args().queue.args.size.args.scale
+        assert.is_true(scale.isPercent)
+        depth.set(nil, 5)
+        scale.set(nil, 1.3)
+        assert.equal(5, ns.db.profile.depth)
+        assert.equal(1.3, ns.db.profile.scale)
+        assert.equal(2, redraws)
+      end)
+    end)
+
+    -- PE10-D4. The button beside the size slider it writes. Its whole point is that it says what
+    -- happened either way: one that computes nothing and reports nothing is indistinguishable from
+    -- one that is broken, and the player is left dragging the slider by eye again.
+    describe("Match my action bars", function()
+      local said, redraws
+
+      local function press()
+        said, redraws = {}, 0
+        -- The whole options table is built by args(), so the stub answers everything
+        -- announceGroup() asks of it as well as emit (the shape the learning-mode test uses).
+        ns.Announce = {
+          emit = function(cat, text) said[#said + 1] = { cat, text } end,
+          log = function() return {} end, category = function() return nil end,
+          plain = function(t) return t end, CATEGORIES = {}, listed = function() return {} end,
+          CHANNELS = { "chat", "screen", "sound", "party" }, routes = function() return {} end,
+        }
+        ns.Display.refresh = function() redraws = redraws + 1 end
+        args().queue.args.size.args.matchBars.func()
+      end
+
+      it("applies the measured scale, repaints, and says what it set", function()
+        ns.Queue.matchBarScale = function() ns.db.profile.scale = 0.87; return 0.87 end
+        press()
+        assert.equal(0.87, ns.db.profile.scale)
+        assert.equal(1, redraws, "the slider still shows the old number")
+        assert.equal(1, #said)
+        assert.equal("status", said[1][1])
+        assert.equal("Strip scale set to 87% to match your action bars.", said[1][2])
+      end)
+
+      it("says it could not measure one, and what to do about it", function()
+        ns.Queue.matchBarScale = function() return nil, "no button" end
+        press()
+        assert.equal(1, #said)
+        assert.is_truthy(said[1][2]:find("Could not measure an action button", 1, true))
+        assert.is_truthy(said[1][2]:find("on a bar you can see", 1, true))
       end)
     end)
 
@@ -684,6 +915,72 @@ describe("Options (the settings pages)", function()
       -- PE9-D5: the preset now switches a third setting on, and a sentence that still listed two
       -- would be the settings screen lying about what it just did.
       assert.is_truthy(said[1][2]:find("rule names on"))
+      assert.equal("Learning mode on: icons set to 1, scale to 140%, rule names on.", said[1][2])
+      -- ...and the toggle reads back what the preset wrote, or the checkbox says off while the
+      -- strip is plainly in learning mode.
+      ns.db.profile.learning = true
+      assert.is_true(Options.table().args.queue.args.tells.args.learning.get())
+    end)
+
+    -- PE12. Switching it OFF puts the settings back, and saying so matters just as much on the way
+    -- out: three controls on this page change under the player's hand either way. Only the ones
+    -- they left alone are named, because only those were restored -- anything they changed while
+    -- learning stayed theirs, and naming it would claim to have overwritten a deliberate choice.
+    it("names each setting that came back when learning mode goes off", function()
+      local said = {}
+      ns.Announce = {
+        emit = function(c, t) said[#said + 1] = { c, t } end,
+        log = function() return {} end, category = function() return nil end,
+        plain = function(t) return t end, CATEGORIES = {}, listed = function() return {} end,
+        CHANNELS = { "chat", "screen", "sound", "party" }, routes = function() return {} end,
+      }
+      local redraws = 0
+      ns.Display.refresh = function() redraws = redraws + 1 end
+      ns.Queue.ApplyLearningPreset = function()
+        return { restored = true, depth = 4, scale = 0.9, showReason = false }
+      end
+      Options.table().args.queue.args.tells.args.learning.set(nil, false)
+      assert.equal(1, #said)
+      assert.equal("status", said[1][1])
+      assert.equal("Learning mode off: icons back to 4, scale back to 90%, rule names off.",
+                   said[1][2])
+      assert.equal(1, redraws, "the three controls it just rewrote still show the old numbers")
+    end)
+
+    -- ...and it names only what actually came back. A setting the player changed themselves while
+    -- learning was never restored, so listing it would be the panel claiming to have overwritten a
+    -- deliberate choice.
+    it("names only the settings that were actually put back", function()
+      local said = {}
+      ns.Announce = {
+        emit = function(c, t) said[#said + 1] = { c, t } end,
+        log = function() return {} end, category = function() return nil end,
+        plain = function(t) return t end, CATEGORIES = {}, listed = function() return {} end,
+        CHANNELS = { "chat", "screen", "sound", "party" }, routes = function() return {} end,
+      }
+      ns.Queue.ApplyLearningPreset = function() return { restored = true, scale = 0.9 } end
+      Options.table().args.queue.args.tells.args.learning.set(nil, false)
+      assert.equal("Learning mode off: scale back to 90%.", said[1][2])
+    end)
+
+    -- PE7-D3 moved the cast-after-next controls onto this panel because they are a glow ON THE
+    -- BARS. That gives them a master here, and a master they do not follow is three live-looking
+    -- controls that change nothing. `disabled` only, never a get() that lies or a set() that
+    -- writes: turning the bar glow back on has to restore exactly what the player chose.
+    it("greys the cast-after-next controls when the bars are not glowing at all", function()
+      ns.db.profile.glow.secondary = true       -- so the two rows below it are not hidden as well
+      local function rows()
+        return { hintArgs().secondary, hintArgs().secondaryAlpha, hintArgs().previewDim }
+      end
+      for _, row in ipairs(rows()) do assert.is_false(row.disabled()) end
+      ns.db.profile.glow.barGlow = false
+      for _, row in ipairs(rows()) do
+        assert.is_true(row.disabled(), "a cast-after-next control still looks live")
+      end
+      -- ...and the stored choice is still what they show, not a false.
+      assert.is_true(hintArgs().secondary.get())
+      -- The switch itself is never greyed: it is the way back.
+      assert.is_nil(hintArgs().barGlow and hintArgs().barGlow.disabled)
     end)
 
     it("offers the dim second-suggestion hint, off, and says why", function()
@@ -975,6 +1272,23 @@ describe("Options (the settings pages)", function()
       assert.is_nil(row.get)
       ns.Announcers.isMoving = function() return true end
       assert.equal("Done Moving", announceArgs().move.name())
+    end)
+
+    -- Every word of the promise. "Your lock setting is left exactly as it was" is the sentence
+    -- that makes this a MODE rather than a setting, and the desc is several lines of concatenation
+    -- -- losing one of them loses the promise without emptying the tooltip.
+    it("says exactly what pressing it does, and what it does not touch", function()
+      assert.equal("Shows one sample of every kind so you can see how tall it gets, and lets you "
+        .. "drag it. Press it again when it is where you want it. Your lock setting is left "
+        .. "exactly as it was, and closing this window ends it too.", announceArgs().move.desc)
+    end)
+
+    -- The Notifications page is built whether or not Display/Announcers is loaded, so the button
+    -- exists before there is anything to move. Pressing it then must answer, not error.
+    it("does nothing rather than erroring with no announcers loaded", function()
+      local row = announceArgs().move
+      ns.Announcers = nil
+      assert.has_no.errors(function() row.func() end)
     end)
 
     it("stays usable, and says nothing about unlocking, while positions are locked", function()

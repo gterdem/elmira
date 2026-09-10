@@ -939,7 +939,7 @@ Slash.register{
   end,
 }
 
--- Not-yet-available verbs, in the order the project documents them, each honest about its milestone
+-- Not-yet-available verbs, in the order the README lists them, each honest about its milestone
 -- so `/elm` never claims a command it can't run.
 Slash.register{
   key = "config", args = "", desc = ns.L["Open the options"], order = 99,

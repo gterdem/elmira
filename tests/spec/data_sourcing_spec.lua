@@ -217,7 +217,7 @@ describe("Data sourcing policy (docs/03)", function()
     end
   end)
 
-  -- Rule 7 says every catalog entry carries `updated`, `phase`, `source` and `difficulty`,
+  -- Every catalog entry carries `updated`, `phase`, `source` and `difficulty` (ADR-0011),
   -- and the wizard shows `summary` and the Advisor reads `weapon`/`runes`/`ringRunes` -- but nothing
   -- enforced any of it, so a new entry could ship with a missing summary or an undated source and
   -- every spec would stay green (the mutation gate reported exactly that when Wrath-like landed).
@@ -283,7 +283,7 @@ describe("Data sourcing policy (docs/03)", function()
     end)
   end)
 
-  -- The catalog is the wizard's ONLY list (rule 7). An entry the wizard can offer whose
+  -- The catalog is the wizard's ONLY list (ADR-0011). An entry the wizard can offer whose
   -- build file does not exist resolves to nil and the user picks a playstyle that does nothing.
   it("marks a catalog entry available only when its build actually ships", function()
     -- Every build any shipped pack provides. A catalog entry may legitimately name a build that

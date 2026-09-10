@@ -1747,7 +1747,7 @@ local function queueBlocked(needsOutOfCombat)
   if needsOutOfCombat and (p.visibility or fallback) == "combat" then
     return L["\"When to show it\" is set to combat only, so there is no out-of-combat strip to fade."]
   end
-  return nil
+  return nil -- mutants: equivalent Lua's implicit nil return says the same thing
 end
 
 -- A row's own tooltip, plus WHY it is greyed out when it is. Both halves matter: a dead control with

@@ -316,6 +316,38 @@ describe("Core.Gates", function()
       assert.is_false(row.certain)
     end)
 
+    -- The same unreadable gate one level down, inside a composite. `all` and `any` each have to
+    -- carry a child's "nothing could read this" up with the nil verdict; a composite that answers
+    -- nil WITHOUT the flag reports the row certain, and PE15's whole suppression rests on the flag.
+    -- Authored gates are composites far more often than bare leaves, so this is the ordinary case.
+    it("carries an unreadable gate up out of all()", function()
+      local row = Gates.evaluate(
+        build({ spell = "X", when = { { "all", { "rune", "RUNE_WRATH" }, { "level", min = 1 } } } }),
+        state{ runes = {}, level = 60, known = { X = true } },
+        { capabilities = { runes = false } })[1]
+      assert.is_true(row.active)
+      assert.is_false(row.certain)
+    end)
+
+    it("carries an unreadable gate up out of any()", function()
+      local row = Gates.evaluate(
+        build({ spell = "X", when = { { "any", { "rune", "RUNE_WRATH" }, { "level", min = 60 } } } }),
+        state{ runes = {}, level = 40, known = { X = true } },
+        { capabilities = { runes = false } })[1]
+      assert.is_true(row.active)
+      assert.is_false(row.certain)
+    end)
+
+    -- ...and a composite whose children the client DID answer stays certain, or the two flags
+    -- above could be hard-wired to true and every announcement would go silent.
+    it("stays certain about a composite the client answered", function()
+      local row = Gates.evaluate(
+        build({ spell = "X", when = { { "all", { "rune", "RUNE_WRATH" }, { "level", min = 1 } } } }),
+        state{ runes = { RUNE_WRATH = true }, level = 60, known = { X = true } }, ctx)[1]
+      assert.is_true(row.active)
+      assert.is_true(row.certain)
+    end)
+
     it("answers empty rather than erroring with nothing to evaluate", function()
       assert.same({}, Gates.evaluate(nil, state{}, ctx))
       assert.same({}, Gates.evaluate(build({ spell = "X" }), nil, ctx))

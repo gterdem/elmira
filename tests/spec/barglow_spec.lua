@@ -121,6 +121,68 @@ describe("Display.BarGlow", function()
     end)
   end)
 
+  -- PE10-D4. How big one of the player's real action buttons is ON SCREEN, so the queue strip can
+  -- be scaled to match it. `GetWidth` alone is the wrong reading, and that is the whole reason this
+  -- is not a one-liner at the call site: a button reports its width in its OWN coordinate space and
+  -- every bar addon scales its bars, so a 32-wide button on a bar at 1.25 covers 40 screen pixels --
+  -- and matching against the 32 leaves the strip a fifth too small with no hint as to why.
+  describe("measuring an action button (PE10-D4)", function()
+    local function button(width, scale)
+      local b = { GetWidth = function() return width end }
+      -- Only when the client offers one: an older frame, or a bar addon's own table, may not.
+      if scale then b.GetEffectiveScale = function() return scale end end
+      return b
+    end
+
+    before_each(function()
+      setPack{ EXORCISM = { id = 415073 }, JUDGEMENT = { id = 20271 } }
+    end)
+
+    it("answers in screen pixels, not the button's own, and says what it measured", function()
+      API.RegisterBarProvider{ name = "ElvUI", buttonsForSpell = function(id)
+        if id == 415073 then return { button(32, 1.25) } end
+        return {}
+      end }
+      local size, key = BarGlow.buttonSize({ "JUDGEMENT", "EXORCISM" })
+      assert.equal(40, size)
+      assert.equal("EXORCISM", key)
+    end)
+
+    it("takes a button at its own width when the client gives no usable scale", function()
+      local scale
+      API.RegisterBarProvider{ name = "ElvUI", buttonsForSpell = function(id)
+        if id == 415073 then return { button(32, scale) } end
+        return {}
+      end }
+      assert.equal(32, BarGlow.buttonSize({ "EXORCISM" }), "no GetEffectiveScale at all")
+      scale = 0
+      assert.equal(32, BarGlow.buttonSize({ "EXORCISM" }), "a scale of zero is not a scale")
+      scale = "big"
+      assert.equal(32, BarGlow.buttonSize({ "EXORCISM" }))
+    end)
+
+    -- The keys arrive best-candidate-first (what is on screen, then the rest of the rotation), so
+    -- one unreadable button must not end the search: all the buttons on a bar are the same size and
+    -- any of them answers the question.
+    it("moves on to the next spell when a button will not answer", function()
+      local good = button(36)
+      API.RegisterBarProvider{ name = "ElvUI", buttonsForSpell = function(id)
+        if id == 415073 then return { { GetWidth = function() error("no width here") end } } end
+        if id == 20271 then return { good } end
+        return {}
+      end }
+      assert.equal(36, BarGlow.buttonSize({ "EXORCISM", "JUDGEMENT" }))
+    end)
+
+    -- Nil is the answer the caller has to treat as "say so and change nothing" -- never as a
+    -- default. Display/Queue.matchBarScale leaves the size setting exactly as it found it.
+    it("says nothing at all when none of the keys is on a visible bar", function()
+      assert.is_nil(BarGlow.buttonSize({ "EXORCISM", "JUDGEMENT" }))
+      assert.is_nil(BarGlow.buttonSize({}))
+      assert.is_nil(BarGlow.buttonSize())
+    end)
+  end)
+
   describe("providers precede the Blizzard scan", function()
     it("a provider returning a non-empty list wins over a Blizzard-mapped button", function()
       mock.actionInfo[1] = { "spell", 415073 }

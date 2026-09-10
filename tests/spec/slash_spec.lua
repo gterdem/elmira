@@ -945,7 +945,7 @@ describe("Core.Slash", function()
     end)
   end)
 
-  -- Contract (docs/01 §2, rule 3): ns.now() is the addon's single source of time. It reads
+  -- Contract (docs/01-ARCHITECTURE.md §2): ns.now() is the addon's single source of time. It reads
   -- ns.API.GetState():now() and never calls the client's GetTime() directly. Nothing ever assigned
   -- ns.now, and every call site guarded it as `ns.now and ns.now() or 0`, so a real 4-fight recording
   -- stamped every mark at=0, elapsed=0, startedAt=0 — a recording with no time axis at all.
@@ -1090,6 +1090,26 @@ describe("Core.Slash", function()
       -- Sorted and de-duplicated: one line per spell, in the same order every time.
       assert.equal("  DIVINE_STORM = cannot tell", lines[3])
       assert.equal("  JUDGEMENT = true", lines[4])
+    end)
+
+    -- A rotation can gate on items alone (a trinket line, an engineering glove tinker): there is no
+    -- spell to ask about, so the section is not printed at all. A bare "known:" heading with
+    -- nothing under it reads as "the client answered nothing for everything", which is the opposite
+    -- of what it would mean.
+    it("prints no known section at all when no gated row names a spell", function()
+      helper.ns().Display = {
+        inactiveRows = function() return {}, "PALADIN_EXODIN" end,
+        gateRows = function()
+          return {}, { { index = 1, item = 13, active = true, reasons = {} } }, "PALADIN_EXODIN"
+        end,
+      }
+      helper.ns().API = { GetState = function()
+        return { known = function() return true end }
+      end }
+      local lines = Slash.run("debug gates")
+      for _, line in ipairs(lines) do
+        assert.is_nil(line:find("known", 1, true), "printed a known section with nothing in it")
+      end
     end)
 
     it("says it has nothing to ask when there is no state", function()

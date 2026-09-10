@@ -223,7 +223,7 @@ function BarGlow.buttonSize(spellKeys)
       end
     end
   end
-  return nil
+  return nil -- mutants: equivalent Lua's implicit nil return says the same thing
 end
 
 function BarGlow.keybindFor(spellKey)

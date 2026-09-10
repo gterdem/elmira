@@ -7,8 +7,9 @@ ns = ns or _G.__ELM_NS or {}
 local API = {}
 API.version = 1 -- integer; a module checks the minimum it needs and disables itself otherwise
 
--- Identity-string locale shim: keeps every user-facing string routed through `ns.L[...]` (house
--- style) while staying dofile-able headlessly. A real Locale/enUS.lua (AceLocale-3.0) drops in front
+-- Identity-string locale shim: keeps every user-facing string routed through `ns.L[...]` (the
+-- localisation rule, docs/01-ARCHITECTURE.md) while staying dofile-able headlessly. A real
+-- Locale/enUS.lua (AceLocale-3.0) drops in front
 -- of this at M3 with no retrofit needed.
 ns.L = ns.L or setmetatable({}, { __index = function(_, k) return k end })
 
@@ -24,7 +25,7 @@ ns.registry = registry
 
 -- A malformed module must never break core: every Register* validates and returns `true` or
 -- `false, reason` — it never errors. This is what lets a class pack fail closed instead of taking
--- the whole addon down (hard rule 9: modules only via Elmira.API).
+-- the whole addon down (ADR-0007: modules reach core only through Elmira.API).
 local function fail(label, reason)
   ns.log("rejected %s registration (%s)", label, reason)
   return false, reason

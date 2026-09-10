@@ -10,7 +10,7 @@ ignore = {
 -- Only two globals may ever be written, anywhere in the addon family.
 globals = { "Elmira", "ElmiraDB" }
 
--- Top-level read_globals is deliberately minimal. This IS hard rule 3: Core never calls
+-- Top-level read_globals is deliberately minimal. This IS the Core boundary (docs/01-ARCHITECTURE.md): Core never calls
 -- the WoW API. `read_globals` inside a files[...] block below is ADDITIVE to this list, never a
 -- substitute for it, so naming a WoW global here would silently permit it everywhere, including
 -- Elmira/Core/. Keep this list to libraries only.
@@ -56,7 +56,7 @@ local WOW_API = {
 -- Core is pure Lua: naming a WoW global anywhere under Elmira/Core/ is a lint ERROR, by omission.
 files["Elmira/Core/"] = { read_globals = {} }
 
--- Adapters/ is the only place the WoW API may be named (hard rule 3).
+-- Adapters/ is the only place the WoW API may be named (docs/01-ARCHITECTURE.md).
 files["Elmira/Adapters/"] = { read_globals = WOW_API }
 
 -- Presentation only. Note the absence of GetTime: Display takes its time from ns.now() like

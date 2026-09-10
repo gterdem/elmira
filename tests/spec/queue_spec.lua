@@ -48,13 +48,32 @@ describe("Display.Queue", function()
     function f:SetPoint(p, rel, rp, x, y)
       if type(rel) == "string" then p, rel, rp, x, y = p, nil, rel, rp, x end
       self.point = { p, rel, rp, x, y }
+      -- EVERY point, not just the last: a frame anchored twice without a ClearAllPoints between
+      -- is stretched between both in the client, and `GetPoint` alone cannot tell that from a
+      -- frame that was moved.
+      self.points = self.points or {}
+      self.points[#self.points + 1] = self.point
     end
     function f:GetPoint()
       local pt = self.point or {}
       return pt[1], pt[2], pt[3], pt[4], pt[5]
     end
-    function f:ClearAllPoints() self.point = nil; self.cleared = (self.cleared or 0) + 1 end
-    function f:SetTexture(t) self.texture = t end
+    function f:ClearAllPoints()
+      self.point, self.points = nil, {}
+      self.cleared = (self.cleared or 0) + 1
+    end
+    function f:SetTexture(t) self.texture = t; self.colorTexture = nil end
+    -- PE11-D5's sample paints flat brand squares where it has no icon to show, and the swallowed
+    -- version of this call made "a coloured square" and "the icon that happened to be there
+    -- already" the same observation.
+    function f:SetColorTexture(r, g, b, a) self.colorTexture = { r, g, b, a }; self.texture = nil end
+    -- AB4-D1's cooldown swipe. `Clear` is what takes a sweep back off a slot, and every path that
+    -- stops showing a suggestion calls it -- so a no-op here would make "cleared" untestable.
+    function f:SetCooldown(start, duration) self.cooldown = { start, duration } end
+    function f:Clear() self.cooldown = nil; self.cdCleared = (self.cdCleared or 0) + 1 end
+    -- Only UIParent is ever given one (PE10-D4's scale match reads it); every other frame answers
+    -- nil, exactly as the catch-all did.
+    function f:GetEffectiveScale() return self.effectiveScale end
     function f:SetAllPoints() self.allPoints = true end
     function f:SetTexCoord(...) self.texCoord = { ... } end
     function f:Show() self.shown = true end
@@ -681,6 +700,11 @@ describe("Display.Queue", function()
       assert.equal(0.9, ns.db.profile.scale, "the size was not put back")
       assert.is_false(ns.db.profile.showReason)
       assert.is_truthy(restored and restored.restored, "the caller cannot say what came back")
+      -- WHICH settings came back, not just that some did: the Queue page names them in the line it
+      -- prints, and a report of "something was restored" is a report of nothing.
+      assert.equal(4, restored.depth)
+      assert.equal(0.9, restored.scale)
+      assert.is_false(restored.showReason)
       assert.is_nil(ns.db.profile.learningPrior, "the remembered values outlived their use")
     end)
 
@@ -707,6 +731,38 @@ describe("Display.Queue", function()
       Queue.ApplyLearningPreset(false)
       assert.equal(3, ns.db.profile.depth)
       assert.equal(0.8, ns.db.profile.scale)
+    end)
+
+    -- Switching it OFF having never switched it on through us: a hand-edited or imported profile
+    -- can arrive with `learning` already set, and there is nothing of that player's to put back.
+    it("says nothing when it was never the one that switched it on", function()
+      Queue.Create()
+      -- The settings already ARE the preset's and there is no record of us having written them:
+      -- an imported or hand-edited profile. Nothing of this player's exists to put back, and the
+      -- one thing that must not happen is the toggle inventing values.
+      ns.db.profile.depth, ns.db.profile.scale, ns.db.profile.showReason = 1, 1.4, true
+      ns.db.profile.learning = true
+      assert.is_nil(Queue.ApplyLearningPreset(false))
+      assert.is_false(ns.db.profile.learning)
+      assert.equal(1, ns.db.profile.depth)
+      assert.equal(1.4, ns.db.profile.scale)
+      assert.is_true(ns.db.profile.showReason)
+    end)
+
+    -- ...and the answer is built fresh every time. The one before it described a different
+    -- switch-off, and reporting it again would name settings that nothing has just changed.
+    it("does not report the previous switch-off's restore a second time", function()
+      Queue.Create()
+      ns.db.profile.depth, ns.db.profile.scale, ns.db.profile.showReason = 4, 0.9, false
+      Queue.ApplyLearningPreset(true)
+      assert.is_truthy(Queue.ApplyLearningPreset(false), "the first restore never happened")
+
+      Queue.ApplyLearningPreset(true)
+      -- Every setting changed by hand while learning, so every one of them is theirs to keep.
+      ns.db.profile.depth, ns.db.profile.scale, ns.db.profile.showReason = 5, 1.8, false
+      assert.is_nil(Queue.ApplyLearningPreset(false),
+        "reported a restore that belonged to the previous time it was switched off")
+      assert.equal(5, ns.db.profile.depth)
     end)
   end)
 
@@ -1287,5 +1343,569 @@ describe("Display.Queue", function()
       assert.is_true(Queue.StartPositioning())
       assert.is_true(Queue.StopPositioning())
     end)
+  end)
+
+  -- PE11-D5. Positioning mode replaces the rotation with a SAMPLE, and the sample is the thing the
+  -- placement is judged by: it has to be the real strip at the real settings, showing the real
+  -- rotation's icons, and it must carry NOTHING a live render left on the slots -- no tooltip about
+  -- a suggestion nobody is making, no countdown to a cast that is not coming, no greyed-out icon.
+  -- Every line of it was eyeballed in the client and none of it was pinned.
+  describe("the sample shown while the strip is being positioned (PE11-D5)", function()
+    local function liveRender()
+      ns.db.profile.keybinds, ns.db.profile.waits = "all", "always"
+      ns.db.profile.showReason = true
+      ns.BarGlow = { keybindFor = function() return "Q" end }
+      ns.API = { GetState = function()
+        return FakeState.new{ now = 0, cooldowns = { EXORCISM = 5 }, baseCooldown = { EXORCISM = 10 },
+                              usable = { EXORCISM = false }, noResource = { EXORCISM = true } }
+      end }
+      Queue.Render({ { spell = "EXORCISM", t = 0, label = "Seal expiring" },
+                     { spell = "JUDGEMENT", t = 5 } }, "PALADIN_EXODIN", true)
+    end
+
+    before_each(function()
+      stubBuild({ { spell = "EXORCISM" }, { spell = "JUDGEMENT" } })
+      Queue.Create()
+    end)
+
+    it("carries nothing a live render left on the slots", function()
+      liveRender()
+      local one, two = icons()[1], icons()[2]
+      -- Asserted BEFORE the mode starts, or every assertion below could pass against a strip that
+      -- had never drawn anything in the first place.
+      assert.is_truthy(one.slot)
+      assert.equal("Q", one.keybind.text)
+      assert.is_truthy(two.waitUntil)
+      assert.is_true(one.reason.shown)
+      assert.is_truthy(one.cd.cooldown)
+      assert.is_true(one.icon.desaturated)
+
+      Queue.StartPositioning()
+      assert.is_nil(one.slot, "hovering a sample icon would explain a suggestion nobody is making")
+      assert.is_nil(one.waitUntil)
+      assert.is_nil(two.waitUntil)
+      assert.equal("", one.keybind.text)
+      assert.equal("", two.wait.text)
+      assert.is_false(one.reason.shown)
+      assert.is_nil(one.cd.cooldown)
+      assert.is_false(one.icon.desaturated)
+    end)
+
+    it("shows the active rotation\'s own icons, which is the point of sampling at all", function()
+      Queue.StartPositioning()
+      assert.equal("icon", icons()[1].icon.texture)
+      assert.equal("icon", icons()[2].icon.texture)
+      assert.is_nil(icons()[1].icon.colorTexture, "a real icon must not be painted over")
+    end)
+
+    -- No rotation chosen yet is exactly when someone positions the strip for the first time. Flat
+    -- brand squares rather than an `Interface\\Icons\\...` path written from memory: Classic Era
+    -- ships a subset of retail\'s icons and a missing one draws nothing at all.
+    it("falls back to flat brand squares when there is no rotation to sample", function()
+      ns.Display.activeBuild = function() return nil, nil, "no pack" end
+      Queue.StartPositioning()
+      assert.same({ ns.Colors.BRAND.r, ns.Colors.BRAND.g, ns.Colors.BRAND.b, 0.8 },
+                  icons()[1].icon.colorTexture)
+      assert.is_nil(icons()[1].icon.texture)
+    end)
+
+    -- The sample is the strip AT THE SETTINGS IN FORCE. The panel writes depth, direction and
+    -- spacing while the strip is hidden and nothing lays it out, so entering the mode is where they
+    -- have to land -- otherwise the thing being positioned is the shape it had last time.
+    it("lays the strip out at the settings in force right now", function()
+      ns.db.profile.grow, ns.db.profile.depth, ns.db.profile.spacing = "down", 5, 10
+      Queue.StartPositioning()
+      local _, _, _, x1, y1 = icons()[1]:GetPoint()
+      local _, _, _, x2, y2 = icons()[2]:GetPoint()
+      assert.equal(0, x1)
+      assert.equal(0, x2, "slot two is beside slot one, not under it")
+      assert.is_true(y2 < y1, "the strip is still laid out the way it grew last time")
+      -- ...and the fifth slot the deeper strip added exists to be dragged with the rest.
+      assert.is_true(icons()[5].shown)
+    end)
+
+    -- The mode shows the grip whatever the lock says, because something has to be draggable. What
+    -- it must not do is leave it out afterwards: the grip is how a player TELLS whether the strip
+    -- is locked.
+    it("puts the drag handle back where the saved lock says it belongs", function()
+      ns.db.profile.locked = true
+      Queue.StartPositioning()
+      assert.is_true(container().grip.shown)
+      Queue.StopPositioning()
+      assert.is_false(container().grip.shown)
+
+      ns.db.profile.locked = false
+      Queue.StartPositioning()
+      Queue.StopPositioning()
+      assert.is_true(container().grip.shown)
+    end)
+
+    it("puts the strip on screen at full opacity with its drag handle out", function()
+      ns.db.profile.locked = true          -- the grip is normally hidden while locked
+      container().grip:Hide()
+      container():Hide()
+      container():SetAlpha(0.3)            -- as the out-of-combat fade would have left it
+      assert.is_true(Queue.StartPositioning())
+      assert.is_true(container().shown)
+      assert.equal(1, container().alpha, "you cannot place what you can barely see")
+      assert.is_true(container().grip.shown, "there is nothing to grab hold of")
+      -- ...and the lock the player saved is not rewritten to get it (PE11-D5).
+      assert.is_true(ns.db.profile.locked)
+    end)
+
+    -- D38\'s nudge sits where the sample is about to be drawn, and a left click on it opens the
+    -- Rotations page -- which, mid-drag, is the last thing that should happen.
+    it("takes the no-rotation nudge down and stops it answering clicks", function()
+      ns.db.profile.activeBuild = false
+      ns.API = { GetState = function() return FakeState.new{ inCombat = false } end }
+      Queue.Render({}, nil, true)
+      assert.is_true(container().placeholder.shown)
+      local opened = 0
+      ns.Options = { Open = function() opened = opened + 1 end,
+                     BeginMove = function() end, EndMove = function() end }
+      container().scripts.OnMouseUp(container(), "LeftButton")
+      assert.equal(1, opened, "the click this mode has to suppress does not happen at all")
+
+      Queue.StartPositioning()
+      assert.is_false(container().placeholder.shown)
+      container().scripts.OnMouseUp(container(), "LeftButton")
+      assert.equal(1, opened)
+    end)
+
+    -- Layout is what every settings change runs, and a deeper strip or a new direction reveals a
+    -- slot that was hidden. Without the repaint those arrive as blank squares in the middle of the
+    -- thing being placed.
+    it("repaints the sample when a setting changes mid-drag", function()
+      Queue.StartPositioning()
+      assert.is_false(icons()[4].shown)
+      ns.db.profile.depth = 5
+      Queue.Layout()
+      assert.is_true(icons()[4].shown)
+      assert.same({ ns.Colors.BRAND.r, ns.Colors.BRAND.g, ns.Colors.BRAND.b, 0.8 },
+                  icons()[4].icon.colorTexture)
+    end)
+
+    it("ignores the render loop, so no tick pulls the strip out from under the drag", function()
+      Queue.StartPositioning()
+      Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", false)
+      assert.is_true(container().shown)
+      assert.is_nil(icons()[1].slot)
+      -- The live repaint stands down too: there is no countdown to run and no mana to check, and
+      -- paintFade would dim a strip the player is trying to see well enough to drag.
+      assert.is_false(Queue.Tick(0))
+    end)
+
+    it("takes the strip back off screen when the mode ends", function()
+      local refreshes = 0
+      ns.Display.refresh = function() refreshes = refreshes + 1 end
+      Queue.StartPositioning()
+      assert.is_true(Queue.StopPositioning())
+      assert.is_false(container().shown, "a preview with no way to dismiss it")
+      assert.equal(1, refreshes, "nothing asks for the real strip back")
+    end)
+
+    -- `rendered` is what the next paint animates OUT of, and after the mode the buttons are
+    -- carrying sample art the rotation was never in.
+    it("forgets what was on screen, so the paint after the mode is a first paint", function()
+      local function played()
+        local total = 0
+        for _, f in ipairs(icons()) do
+          for _, g in ipairs(f.groups or {}) do total = total + g.played end
+        end
+        return total
+      end
+      local first = { { spell = "EXORCISM" }, { spell = "JUDGEMENT" } }
+      local second = { { spell = "JUDGEMENT" }, { spell = "EXORCISM" } }
+      Queue.Render(first, "PALADIN_EXODIN", true)
+      Queue.Render(second, "PALADIN_EXODIN", true)
+      assert.is_true(played() > 0, "an ordinary second paint animates; the control is broken")
+
+      local before = played()
+      Queue.StartPositioning()
+      Queue.StopPositioning()
+      Queue.Render(first, "PALADIN_EXODIN", true)
+      assert.equal(before, played())
+    end)
+  end)
+
+  -- PE10-D4, "Match my action bars". The arithmetic is in SCREEN pixels on both sides, which is the
+  -- only place a strip scale and an action button are comparable -- and the button it measures has
+  -- to be one this character actually uses, or it measures nothing.
+  describe("matching the action bars (PE10-D4)", function()
+    local asked
+
+    before_each(function()
+      asked = nil
+      Queue.Create()
+      _G.UIParent.effectiveScale = nil
+      ns.BarGlow = { buttonSize = function(keys) asked = keys; return 36 end }
+    end)
+
+    it("offers what is on screen first, then the rest of the rotation, each key once", function()
+      stubBuild({ { spell = "EXORCISM" }, { spell = "HOLY_SHOCK" }, { item = 13 } })
+      ns.Display.currentQueue = function()
+        return { { spell = "JUDGEMENT" }, { spell = "EXORCISM" } }
+      end
+      Queue.matchBarScale()
+      assert.same({ "JUDGEMENT", "EXORCISM", "HOLY_SHOCK" }, asked)
+    end)
+
+    it("sets the scale so slot one is drawn the size of a real button, to the whole percent",
+      function()
+        -- 36px of screen against slot one\'s 52 container-pixels, through UIParent\'s own scale.
+        _G.UIParent.effectiveScale = 0.8
+        assert.equal(0.87, Queue.matchBarScale())        -- 36 / (52 * 0.8) = 0.8654, to the percent
+        assert.equal(0.87, ns.db.profile.scale, "the slider still shows the old number")
+        -- A client that will not give a scale is assumed to be at 1, not left at nothing.
+        _G.UIParent.effectiveScale = nil
+        assert.equal(0.69, Queue.matchBarScale())        -- 36 / 52 = 0.6923
+      end)
+
+    -- Both ends of the Queue page\'s Size slider, so a computed scale can never leave the panel
+    -- showing a value the control cannot represent.
+    it("never computes a scale the size slider could not show", function()
+      ns.BarGlow = { buttonSize = function() return 400 end }
+      assert.equal(2.0, Queue.matchBarScale())
+      assert.equal(2.0, Queue.SCALE_MAX)
+      ns.BarGlow = { buttonSize = function() return 4 end }
+      assert.equal(0.5, Queue.matchBarScale())
+      assert.equal(0.5, Queue.SCALE_MIN)
+    end)
+
+    -- Nil MUST leave the setting alone: a button that silently applies a made-up number is worse
+    -- than one that says it could not find a bar, because the player then has to undo something
+    -- they cannot see the cause of.
+    it("changes nothing and says why when no button can be measured", function()
+      ns.db.profile.scale = 1.25
+      ns.BarGlow = { buttonSize = function() return nil end }
+      local scale, why = Queue.matchBarScale()
+      assert.is_nil(scale)
+      assert.equal("no button", why)
+      assert.equal(1.25, ns.db.profile.scale)
+
+      ns.BarGlow = nil
+      scale, why = Queue.matchBarScale()
+      assert.is_nil(scale)
+      assert.equal("no button", why)
+      assert.equal(1.25, ns.db.profile.scale)
+    end)
+  end)
+
+  -- What a render has to FORGET. Every one of these is a value captured for a moment that has
+  -- passed: a countdown to a cast that is no longer coming, a suggestion on a slot the strip does
+  -- not show any more. They look right on screen because the icon is hidden -- and then the strip
+  -- comes back, or the tooltip is opened, and the stale value is what answers.
+  describe("what a render forgets", function()
+    local queue = { { spell = "EXORCISM", t = 0 }, { spell = "JUDGEMENT", t = 5 } }
+
+    local function withWaits()
+      ns.db.profile.waits = "always"
+      ns.API = { GetState = function() return FakeState.new{ now = 0, inCombat = false } end }
+      Queue.Create()
+      Queue.Render(queue, "PALADIN_EXODIN", true)
+      assert.is_truthy(icons()[2].waitUntil, "nothing was captured to forget")
+    end
+
+    it("drops every countdown when the strip is switched off", function()
+      withWaits()
+      ns.db.profile.showQueue = false
+      Queue.Render(queue, "PALADIN_EXODIN", true)
+      assert.is_nil(icons()[2].waitUntil)
+    end)
+
+    it("drops every countdown when the strip goes out of sight", function()
+      withWaits()
+      Queue.Render(queue, "PALADIN_EXODIN", false)
+      assert.is_nil(icons()[2].waitUntil)
+    end)
+
+    -- The placeholder replaces the whole strip, so anything captured for the rotation that WAS
+    -- chosen is about a rotation that is no longer running.
+    it("drops every countdown, and the fade, when the placeholder takes over", function()
+      ns.db.profile.oocAlpha = 0.3
+      withWaits()
+      assert.equal(0.3, container().alpha, "the fade under test never happened")
+      ns.db.profile.activeBuild = false
+      Queue.Render({}, nil, true)
+      assert.is_true(container().placeholder.shown)
+      assert.is_nil(icons()[2].waitUntil)
+      assert.equal(1, container().alpha,
+        "the one message asking for a rotation is the one thing the fade could hide")
+    end)
+
+    -- A rotation that ran out of suggestions leaves slots 2..n empty rather than hidden, and an
+    -- empty slot that keeps its countdown prints a time for a cast that is not coming at all.
+    it("drops the countdown from a slot the rotation no longer fills", function()
+      withWaits()
+      Queue.Render({ { spell = "EXORCISM", t = 0 } }, "PALADIN_EXODIN", true)
+      assert.is_nil(icons()[2].slot)
+      assert.is_nil(icons()[2].waitUntil)
+      assert.equal("", icons()[2].wait.text)
+    end)
+
+    it("drops a countdown the settings just turned off", function()
+      withWaits()
+      ns.db.profile.waits = "off"
+      Queue.Render(queue, "PALADIN_EXODIN", true)
+      assert.is_nil(icons()[2].waitUntil)
+      assert.equal("", icons()[2].wait.text)
+    end)
+
+    -- A shallower strip hides slots 3..5 without repainting them, so the suggestion and the
+    -- countdown they were last given would answer a tooltip about a strip that is not on screen.
+    it("clears the slots a shallower strip no longer shows", function()
+      ns.db.profile.depth, ns.db.profile.waits = 5, "always"
+      ns.API = { GetState = function() return FakeState.new{ now = 0, inCombat = false } end }
+      Queue.Create()
+      Queue.Render({ { spell = "EXORCISM", t = 0 }, { spell = "JUDGEMENT", t = 5 },
+                     { spell = "EXORCISM", t = 10 }, { spell = "JUDGEMENT", t = 15 } },
+                   "PALADIN_EXODIN", true)
+      assert.is_truthy(icons()[4].slot)
+      assert.is_truthy(icons()[4].waitUntil)
+      ns.db.profile.depth = 2
+      Queue.Render({ { spell = "EXORCISM", t = 0 }, { spell = "JUDGEMENT", t = 5 } },
+                   "PALADIN_EXODIN", true)
+      assert.is_nil(icons()[4].slot)
+      assert.is_nil(icons()[4].waitUntil)
+    end)
+  end)
+
+  -- PE9-D1. "Is this wait worth saying" is measured against how long a global cooldown LASTS on
+  -- THIS character -- not against `gcd`, which is how much of one is LEFT, and not against a number
+  -- written down here. A haste-stacked caster at a 1.0s global and a warrior at 1.5s do not want
+  -- the same strip.
+  describe("how long a global cooldown lasts", function()
+    local queue = { { spell = "EXORCISM", t = 0 }, { spell = "JUDGEMENT", t = 2.0 } }
+
+    before_each(function()
+      ns.db.profile.waits = "gcd"
+      Queue.Create()
+    end)
+
+    it("says nothing about a two-second gap on a client whose global is three seconds", function()
+      ns.API = { GetState = function() return FakeState.new{ now = 0, gcdDuration = 3.0 } end }
+      _G.oneGCD = nil
+      Queue.Render(queue, "PALADIN_EXODIN", true)
+      assert.is_nil(icons()[2].waitUntil)
+      -- The threshold is a LOCAL: `oneGCD` in the client's one global table would carry this
+      -- character's global cooldown into whatever rendered next. `make lint` is the standing gate
+      -- for that; this is what lets the mutation gate see it too.
+      assert.is_nil(_G.oneGCD)
+    end)
+
+    it("says so about the same gap when the global is the usual second and a half", function()
+      ns.API = { GetState = function() return FakeState.new{ now = 0, gcdDuration = 1.5 } end }
+      Queue.Render(queue, "PALADIN_EXODIN", true)
+      assert.equal(2.0, icons()[2].waitUntil)
+    end)
+
+    -- A State that will not answer at all (Adapters/Interface: an answer of nil is a reading the
+    -- client refused, not a duration). The shipped 1.5s stands in -- pinned to the VALUE, because a
+    -- fallback of nil errors and a fallback of zero makes every slot announce a wait.
+    it("falls back to the shipped global when the client will not say", function()
+      local blind = setmetatable({ gcdDuration = false },
+                                 { __index = FakeState.new{ now = 0 } })
+      ns.API = { GetState = function() return blind end }
+      Queue.Render(queue, "PALADIN_EXODIN", true)
+      assert.equal(2.0, icons()[2].waitUntil)
+      Queue.Render({ { spell = "EXORCISM", t = 0 }, { spell = "JUDGEMENT", t = 1.0 } },
+                   "PALADIN_EXODIN", true)
+      assert.is_nil(icons()[2].waitUntil, "a one-second gap IS the global; it is not news")
+    end)
+  end)
+
+  -- PE10-D1. The saved anchor positions the container's BOX, and the box changes shape with the
+  -- growth direction: a strip grown right is 140x52 with slot one at its left end, the same strip
+  -- grown up is 52x140 with slot one at its bottom. Re-placing the same box point after a flip
+  -- would slide the icon the player spent time putting under their character halfway across the
+  -- screen -- and nothing about the anchor it saved and read back would look wrong.
+  describe("where the container is placed", function()
+    -- An off-centre anchor, because the compensation is zero for a CENTER one: half the arithmetic
+    -- only exists for a strip anchored by an edge, which is where anyone puts it.
+    before_each(function()
+      ns.db.profile.anchor = { point = "LEFT", relPoint = "LEFT", x = 40, y = -20 }
+      Queue.Create()
+    end)
+
+    it("keeps slot one on the same pixel in all four directions", function()
+      local function slotOne(grow)
+        ns.db.profile.grow = grow
+        Queue.Layout()
+        local point, _, relPoint, x, y = container():GetPoint()
+        assert.equal("LEFT", point)
+        assert.equal("LEFT", relPoint)
+        local slots, width = ns.Transition.layout(3, grow, 4)
+        -- Anchored by its LEFT edge, so the container's centre is half a width to the right of it.
+        return { x + width / 2 + slots[1].x, y + slots[1].y }
+      end
+      local right = slotOne("right")
+      assert.same(right, slotOne("left"))
+      assert.same(right, slotOne("down"))
+      assert.same(right, slotOne("up"))
+      -- ...and the anchor on disk is untouched, so a profile switch or an import still reads it.
+      assert.equal(40, ns.db.profile.anchor.x)
+      assert.equal(-20, ns.db.profile.anchor.y)
+    end)
+
+    it("leaves the container on exactly one anchor point, however often it is laid out", function()
+      Queue.Layout()
+      Queue.Layout()
+      assert.equal(1, #container().points)
+    end)
+  end)
+
+  describe("Layout, continued", function()
+    it("shows exactly the slots the depth asks for, whatever was on screen before", function()
+      Queue.Create()
+      for _, b in ipairs(icons()) do b:Hide() end
+      ns.db.profile.depth = 3
+      Queue.Layout()
+      assert.is_true(icons()[3].shown, "a slot the depth asks for is still hidden")
+      assert.is_false(icons()[4].shown)
+
+      for _, b in ipairs(icons()) do b:Show() end
+      Queue.Layout()
+      assert.is_false(icons()[5].shown, "a slot past the depth is still on screen")
+    end)
+
+    -- The Queue page's "Position the Strip" button relabels itself from this, and /elm lock and
+    -- "Lock all positions" both end the mode without going near the panel.
+    it("answers whether the strip is being positioned", function()
+      Queue.Create()
+      assert.is_false(Queue.isPositioning())
+      Queue.StartPositioning()
+      assert.is_true(Queue.isPositioning())
+      Queue.StopPositioning()
+      assert.is_false(Queue.isPositioning())
+    end)
+
+    -- Every icon forwards its drag here, and a drag can arrive before anything has been built:
+    -- an OnDragStart fired against a strip that is not on screen must answer, not error.
+    it("cannot be dragged before it exists", function()
+      ns.db.profile.locked = false     -- unlocked, so nothing else can be what refuses the drag
+      assert.is_false(Queue.StartMoving())
+      assert.is_false(Queue.StopMoving())
+      assert.has_no.errors(function() Queue.Layout() end)
+    end)
+
+    -- Nothing this file declares may end up in the client's one global table. `make lint` is the
+    -- standing gate; it cannot run here, and a forward declaration or a loop-local is invisible to
+    -- every other assertion in this spec -- a global works exactly as well right up until two
+    -- addons pick the same name.
+    it("leaves nothing of its own in _G", function()
+      for _, name in ipairs({ "paintSample", "oneGCD", "restored" }) do _G[name] = nil end
+      ns.db.profile.depth, ns.db.profile.scale = 4, 0.9
+      Queue.Create()
+      Queue.ApplyLearningPreset(true)
+      Queue.ApplyLearningPreset(false)
+      Queue.StartPositioning()
+      Queue.Layout()
+      Queue.StopPositioning()
+      Queue.Render({ { spell = "EXORCISM", t = 0 }, { spell = "JUDGEMENT", t = 5 } },
+                   "PALADIN_EXODIN", true)
+      for _, name in ipairs({ "paintSample", "oneGCD", "restored" }) do
+        assert.is_nil(_G[name], name .. " leaked into the global table")
+      end
+    end)
+  end)
+
+  -- PE9-D3. Both labels drawn ON an icon are sized from the slot they sit on, so slot one's 30%
+  -- larger icon does not end up carrying the proportionally smallest text. The re-fonting reads the
+  -- fontstring's OWN file back rather than naming one, so a locale whose client ships different
+  -- glyphs (zhCN, koKR) keeps them -- which means it also has to cope with a client that will not
+  -- answer.
+  describe("sizing the labels on an icon", function()
+    before_each(function() Queue.Create() end)
+
+    -- PE9-D1/D3. Diagonally opposite corners, so however long either label gets they can never
+    -- collide: the keybind is a fact about the cast you are making now and reads as a label, the
+    -- countdown is a projection and reads as an aside.
+    it("puts the two labels in opposite corners, in their own weights", function()
+      local b = icons()[1]
+      assert.equal("TOPRIGHT", b.keybind.point[1])
+      assert.equal("BOTTOMLEFT", b.wait.point[1])
+      assert.same({ 1, 1 }, { b.wait.point[2], b.wait.point[3] })
+      assert.same({ ns.Colors.LABEL.r, ns.Colors.LABEL.g, ns.Colors.LABEL.b }, b.keybind.textColor)
+      assert.same({ ns.Colors.MUTED.r, ns.Colors.MUTED.g, ns.Colors.MUTED.b }, b.wait.textColor)
+    end)
+
+    it("outlines each label and scales it to the slot it sits on", function()
+      local one, two = icons()[1], icons()[2]
+      assert.equal("Fonts\\FRIZQT__.TTF", one.keybind.font[1])
+      assert.equal("OUTLINE", one.keybind.font[3])
+      -- Slot one is 52 across, the rest are 40: the keybind is 30% of that, the wait 28%.
+      assert.equal(16, one.keybind.font[2])
+      assert.equal(15, one.wait.font[2])
+      assert.equal(12, two.keybind.font[2])
+      assert.equal(11, two.wait.font[2])
+    end)
+
+    -- The strip's geometry is data (Core/Transition.LAYOUT), not a constant written here, so a
+    -- smaller base is a change someone can make -- and text that scales all the way down stops
+    -- being text. The floor is what keeps a label readable rather than merely present.
+    it("never sizes a label below the readable floor", function()
+      ns.Transition.LAYOUT.base = 12
+      Queue.Layout()
+      assert.equal(8, icons()[1].keybind.font[2])
+      assert.equal(8, icons()[2].wait.font[2])
+    end)
+
+    -- Both of these are about a client that answers differently from ours. Neither may take the
+    -- layout down with it: the strip is drawn from Layout, and an error here means no strip at all.
+    it("lays the strip out anyway when a label cannot be re-fonted", function()
+      for _, b in ipairs(icons()) do
+        b.keybind = setmetatable({}, { __index = function() return nil end })
+      end
+      assert.has_no.errors(function() Queue.Layout() end)
+      assert.same({ 52, 52 }, icons()[1].size, "the layout stopped at the first odd fontstring")
+    end)
+
+    it("leaves a label alone rather than re-fonting it to nothing", function()
+      _G.STANDARD_TEXT_FONT = nil
+      for _, b in ipairs(icons()) do
+        b.wait.font = nil
+        b.wait.GetFont = function() return nil end
+      end
+      Queue.Layout()
+      assert.is_nil(icons()[1].wait.font, "SetFont was called with no font file at all")
+      -- The label beside it, whose client DID answer, is still re-fonted.
+      assert.equal(16, icons()[1].keybind.font[2])
+    end)
+  end)
+
+  -- PE10-D2. How opaque the strip is while you are NOT fighting: for people who keep it up out of
+  -- combat and want it quieter, not gone. It multiplies the per-slot ramp rather than replacing it,
+  -- and it never applies in combat.
+  describe("the out-of-combat fade", function()
+    local function renderAt(alpha, inCombat)
+      ns.db.profile.oocAlpha = alpha
+      ns.API = { GetState = function() return FakeState.new{ now = 0, inCombat = inCombat } end }
+      Queue.Create()
+      Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      return container().alpha
+    end
+
+    it("goes back to full the moment you enter combat", function()
+      assert.equal(0.3, renderAt(0.3, false))
+      assert.equal(1, renderAt(0.3, true))
+    end)
+
+    -- The slider stops at 10%, but a profile can carry anything (an import, a hand-edit). A strip
+    -- at 2% is one the player cannot find to fix.
+    it("never fades the strip past the point of finding it again", function()
+      assert.equal(0.1, renderAt(0.02, false))
+    end)
+  end)
+
+  -- PE10-D1. The promotion entrance drops in ACROSS the strip, never along it, so it can never be
+  -- mistaken for an ordinary shift -- which means the render has to know which way the strip grows.
+  it("drops a promoted icon in across the direction the strip actually grows", function()
+    ns.db.profile.grow, ns.db.profile.animate = "up", true
+    Queue.Create()
+    Queue.Render({ { spell = "EXORCISM" }, { spell = "JUDGEMENT" } }, "PALADIN_EXODIN", true)
+    Queue.Render({ { spell = "HOLY_SHOCK" }, { spell = "EXORCISM" }, { spell = "JUDGEMENT" } },
+                 "PALADIN_EXODIN", true)
+    -- Slot one is 52 wide; on a strip that grows UP the entrance is horizontal.
+    assert.same({ 52, 0 }, icons()[1].slideMove.offset)
   end)
 end)

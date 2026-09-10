@@ -348,6 +348,43 @@ describe("Display.Driver", function()
       assert.is_truthy(said[1].text:find("Divine Storm is now active"))
     end)
 
+    -- The half of PE15 that the alternating test above cannot see, and the reason `checkGates`
+    -- REMEMBERS rather than merely stays quiet. One unreadable tick between a certain `false` and a
+    -- certain `true`: if the guess is allowed to overwrite the remembered verdict, the `true` is
+    -- compared against an uncertain snapshot, suppressed as well, and the real change -- the player
+    -- engraving the rune -- is lost for good. Silence in the middle is not enough; the verdict
+    -- underneath has to survive the blind moment intact.
+    it("keeps the remembered verdict through an unreadable tick, so the real change still lands",
+      function()
+        knownAnswers(false)
+        Display.checkGates()
+        knownAnswers(nil)
+        assert.is_nil(Display.checkGates())
+        assert.equal(0, #said)
+        knownAnswers(true)
+        assert.is_truthy(Display.checkGates())
+        assert.equal(1, #said)
+        assert.is_truthy(said[1].text:find("Divine Storm is now active"))
+      end)
+
+    -- And the other side of the same carry-forward: what is remembered belongs to ONE rotation. A
+    -- player who switches build while the client is unreadable must not have the old rotation's
+    -- verdict quietly filed under the new one -- that is a first sighting, and a first sighting is
+    -- never news. (The mechanism this pins: the remembered value is scoped to the call, so a build
+    -- change leaves the spell unrecorded instead of re-using the previous call's memory.)
+    it("does not carry a verdict across a build change made while the client was unreadable",
+      function()
+        knownAnswers(false)
+        Display.checkGates()          -- records: blocked, certain, under PALADIN_EXODIN
+        knownAnswers(nil)
+        Display.checkGates()          -- unreadable: keeps the blocked verdict
+        ns.Display.activeBuild = function() return { entries = entries }, "PALADIN_PROT", "pinned" end
+        assert.is_nil(Display.checkGates())  -- still unreadable, and now a different rotation
+        knownAnswers(true)
+        assert.is_nil(Display.checkGates())
+        assert.equal(0, #said)
+      end)
+
     -- An ordinary gear swap changes nothing about which rows can fire, and must be silent.
     it("says nothing when nothing about the rotation changed", function()
       Display.checkGates()

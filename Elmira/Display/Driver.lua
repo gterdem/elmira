@@ -543,7 +543,7 @@ end
 function Display.Enable()
   if not frame then
     frame = CreateFrame("Frame", nil, UIParent)   -- plain frame, never a secure template (rule 1)
-    -- ns.now(), not GetTime: all time comes from the injected clock (house style), which
+    -- ns.now(), not GetTime: all time comes from the injected clock (docs/01-ARCHITECTURE.md), which
     -- is what lets tick() be driven from a spec.
     frame:SetScript("OnUpdate", function()
       Display.tick(ns.now())

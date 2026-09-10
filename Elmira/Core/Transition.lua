@@ -72,8 +72,11 @@ function Transition.spacing(gap)
 end
 
 -- Is this direction a column rather than a row? Asked by everything that has to choose an axis.
+--
+-- No `Transition.growth` normalisation here, deliberately: growth() only ever maps an unusable
+-- value onto "right", which is not vertical, and neither is the unusable value -- so the call was a
+-- step with no answer of its own to give. Anything that must also STORE the direction normalises.
 function Transition.isVertical(grow)
-  grow = Transition.growth(grow)
   return grow == "down" or grow == "up"
 end
 

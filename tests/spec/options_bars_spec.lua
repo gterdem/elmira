@@ -100,6 +100,27 @@ describe("Options (action bars)", function()
     assert.truthy(text:find("FAIL", 1, true))
   end)
 
+  -- The marks come from Options/Rotation.lua, which the Options file does not require and cannot
+  -- assume: a panel that renders unmarked rows is better than one that errors, and this list is
+  -- exactly where a player who has just been told "nothing is glowing" arrives.
+  it("still lists the bars, unmarked and grey, when the marks are not loaded", function()
+    ns.BarProviders = { status = function() return {
+      { name = "ElvUI", state = "active", activeName = "ElvUI" },
+      { name = "Dominos", state = "absent" },
+    } end }
+    ns.Rotation = nil
+    local text
+    for _, row in pairs(group().bars.args) do
+      local name = type(row.name) == "function" and row.name() or row.name
+      if name:find("ElvUI", 1, true) and not name:find("glowing buttons", 1, true) then text = name end
+    end
+    assert.is_truthy(text, "the bar list disappeared rather than degrading")
+    assert.is_truthy(text:find("ElvUI", 1, true))
+    -- No mark, and the state word falls back to the old grey rather than to no colour at all.
+    assert.is_nil(text:find("Interface\\AddOns\\Elmira", 1, true))
+    assert.is_truthy(text:find("|cff9AA0A6Detected", 1, true))
+  end)
+
   -- PE6-D5: four states, four different pictures and three different text colours. The ASCII this
   -- replaced drew ONE mark for "active" and the SAME mark for the other three, so "installed but
   -- something else is driving your bars" and "not installed at all" were indistinguishable -- the

@@ -557,6 +557,63 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_truthy(row.name:find("|cff9AA0A6", 1, true), "the un-known row is not dimmed")
     end)
 
+    -- PE2-D3.2: two different reasons, two different sentences. "Engrave X" is an instruction the
+    -- player can act on today; an ability with no rune behind it is simply not learned yet, and
+    -- naming a rune for it would send them shopping for something that does not exist.
+    it("says which of the two reasons an ability cannot be used", function()
+      installPalette(function() return false end)
+      local args = Rotation.group().args.builder.args.spells.args
+      local byName = {}
+      for key, row in pairs(args) do
+        if key ~= "search" and key ~= "add" then byName[row.name] = row end
+      end
+      local rune, plain
+      for name, row in pairs(byName) do
+        if name:find("DIVINE_STORM", 1, true) then rune = row
+        elseif name:find("EXORCISM", 1, true) then plain = row end
+      end
+      assert.is_truthy(rune and plain, "the palette lost one of its two rows")
+      assert.is_truthy(rune.name:find("Engrave", 1, true))
+      assert.is_truthy(plain.name:find("You have not learned this ability yet.", 1, true),
+        "an ability with no rune behind it does not say why it is greyed")
+      assert.is_nil(plain.name:find("Engrave", 1, true),
+        "an ability with no rune behind it was told to engrave one")
+    end)
+
+    -- PE2-D3.1 (owner ruling): three across, not one full-width button per entry -- seventeen
+    -- centred rows was most of the page. Both shapes carry it, or a template's palette and a
+    -- fork's lay out differently from one another.
+    it("lays the palette three across in both its shapes", function()
+      installPalette(function() return true end)
+      local inert = Rotation.group().args.builder.args.spells.args
+      for key, row in pairs(inert) do
+        if key ~= "search" and key ~= "add" then
+          assert.equal("description", row.type)
+          assert.equal("relative", row.width, key .. " is not a relative-width row")
+          assert.equal(0.32, row.relWidth, key .. " does not fit three across")
+        end
+      end
+    end)
+
+    -- PE4-D3: the box only exists once the palette is bigger than 30 entries, and the size it
+    -- measures is the REGISTRY -- which the palette seeds from the class pack on every read. Asked
+    -- before anything else has read the palette, the count has to seed it for itself or a pack of
+    -- forty abilities answers zero and the box never appears.
+    it("counts the palette by seeding the registry for itself", function()
+      installPalette(function() return true end)
+      assert.equal(2, Rotation.paletteSize())
+    end)
+
+    it("draws the search box as a full-width input, and says what it filters", function()
+      installBigPalette(31)
+      local row = Rotation.group().args.builder.args.spells.args.search
+      assert.equal("input", row.type)
+      assert.equal(0, row.order, "the search box is no longer above the abilities it filters")
+      assert.equal("full", row.width)
+      assert.equal("Search", row.name)
+      assert.equal("Filters the abilities below. Plain text, not a pattern.", row.desc)
+    end)
+
     it("does not dim anything when the client cannot tell what is known", function()
       installPalette(function() return nil end)
       for _, row in pairs(Rotation.group().args.builder.args.spells.args) do
@@ -963,6 +1020,19 @@ describe("Options/Rotation (the Rotation section)", function()
         :find("cannot be edited", 1, true))
     end)
 
+    -- Every draft edit is reachable with no draft open: a template is the page's normal state
+    -- (read-only, ADR-0005) and each of these is a public entry point. "No" is the answer; an error
+    -- out of a rotation page that is merely being LOOKED at is not.
+    it("answers no, rather than erroring, to every draft edit on a template", function()
+      install("pack")
+      assert.is_nil(Rotation.draft(), "the template opened a draft, so this proves nothing")
+      assert.is_false(Rotation.moveRow(1, 1))
+      assert.is_false(Rotation.moveRowTo(1, 2))
+      assert.is_false(Rotation.setRowDisabled(1, true))
+      assert.is_false(Rotation.canReset())
+      assert.is_false(Rotation.resetToTemplate())
+    end)
+
     it("offers all three on a rotation of your own", function()
       install("fork")
       local args = Rotation.group().args.builder.args.list.args
@@ -1310,6 +1380,30 @@ describe("Options/Rotation (the Rotation section)", function()
           assert.equal(3, #Rotation.listRows())
         end)
 
+        -- The comparison is a DEEP one over the authored fields. A changed condition leaves the
+        -- row count and every spell key exactly as the template has them, so anything shallower
+        -- greys Reset out against a draft that differs in the only place the player edited.
+        it("counts a changed condition as something to go back from", function()
+          assert.is_false(Rotation.canReset(), "a fresh fork already reads as different")
+          assert.is_true(Rotation.setCondition(1, 1, "value", 55))
+          assert.is_true(Rotation.canReset())
+        end)
+
+        it("counts a removed condition as something to go back from", function()
+          assert.is_true(Rotation.removeCondition(1, 1))
+          assert.is_true(Rotation.canReset())
+        end)
+
+        -- The open body followed a line that no longer exists at that position; leaving it open
+        -- would expand whichever of the template's lines happens to sit there now.
+        it("closes the expanded body, which now belongs to a line that is gone", function()
+          Rotation.removeRow(1)
+          Rotation.selectRow(2)
+          assert.is_true(Rotation.isExpanded(2))
+          Rotation.resetToTemplate()
+          assert.is_false(Rotation.isExpanded(2))
+        end)
+
         -- A deep copy, exactly as a fork is: a draft holding a reference into the shipped template
         -- would edit it for every character on the account, and the edit would vanish on reload
         -- with no sign it had ever been made.
@@ -1343,6 +1437,58 @@ describe("Options/Rotation (the Rotation section)", function()
         Rotation.selectRow(3)
         Rotation.moveRow(2, 1)  -- swaps 2 and 3, so the expanded body follows to 2
         assert.is_true(Rotation.isExpanded(2))
+      end)
+
+      -- PE2-D2.1's Top and Bottom. A move to an arbitrary position, NOT a loop over `moveRow`:
+      -- looping the swap would mark the draft dirty once per hop and drag every row it passed
+      -- through one place the wrong way for a frame.
+      it("moves a line straight to another position, shifting the block it passes", function()
+        local function order()
+          local out = {}
+          for i, row in ipairs(Rotation.listRows()) do out[i] = row.spell or ("item" .. row.item) end
+          return out
+        end
+        local was = order()
+        assert.is_true(Rotation.moveRowTo(4, 1))
+        assert.same({ was[4], was[1], was[2], was[3], was[5] }, order())
+        assert.is_true(Rotation.moveRowTo(1, 3))
+        assert.same({ was[1], was[2], was[4], was[3], was[5] }, order())
+      end)
+
+      it("refuses a move that would not be one", function()
+        local before = #Rotation.listRows()
+        assert.is_false(Rotation.moveRowTo(2, 2), "a line onto itself is not a change")
+        assert.is_false(Rotation.moveRowTo(1, 99))
+        assert.is_false(Rotation.moveRowTo(99, 1))
+        assert.is_false(Rotation.moveRowTo(nil, nil))
+        assert.equal(before, #Rotation.listRows())
+        -- The indices are numbers however they arrive: `entries["2"]` is not `entries[2]`, and a
+        -- public entry point that silently does nothing for a numeric string is the worst of both.
+        assert.is_true(Rotation.moveRowTo("2", "1"))
+      end)
+
+      -- The expanded body follows the LINE it is on, not the position. Moving a row you are
+      -- editing must not silently switch the conditions on screen to a different ability -- and
+      -- neither must moving some OTHER row past it.
+      it("carries the expanded body through a move to any position", function()
+        Rotation.selectRow(4)
+        Rotation.moveRowTo(4, 1)
+        assert.is_true(Rotation.isExpanded(1), "the body stayed behind on the old position")
+
+        Rotation.discard()
+        Rotation.selectRow(1)
+        Rotation.moveRowTo(4, 1)          -- a row lands ON TOP of the expanded one
+        assert.is_true(Rotation.isExpanded(2))
+
+        Rotation.discard()
+        Rotation.selectRow(3)
+        Rotation.moveRowTo(1, 4)          -- a row leaves from ABOVE the expanded one
+        assert.is_true(Rotation.isExpanded(2))
+
+        Rotation.discard()
+        Rotation.selectRow(5)
+        Rotation.moveRowTo(1, 4)          -- ...and one entirely below the block does not move
+        assert.is_true(Rotation.isExpanded(5))
       end)
 
       it("switches a line off in the draft, storing nil rather than false", function()
@@ -2069,6 +2215,20 @@ describe("Options/Rotation (the Rotation section)", function()
           :find("|TInterface\\AddOns\\Elmira\\media\\mark_blocked:12|t", 1, true))
       end)
 
+      -- Grey covers several states and they are NOT the same news: a line the player switched off
+      -- is grey because they said so, and a line their character cannot run is grey because of
+      -- their gear. The blocked cross on a line you turned off yourself sends you looking for a
+      -- rune you already have.
+      it("draws a line you switched off with the off mark, not the blocked cross", function()
+        assert.is_true(Rotation.setRowDisabled(1, true))
+        assert.is_true(Rotation.save())
+        queue = queueOf(2)
+        assert.equal("grey", Rotation.lineState(1))
+        local status = builder().list.args.r1.args.status
+        assert.equal(Rotation.MARKS.off.mark, status.name)
+        assert.are_not.equal(Rotation.MARKS.blocked.mark, status.name)
+      end)
+
       it("reads amber for a dynamic condition that is merely not true yet, and renders the amber dot", function()
         Rotation.addCondition(3, "buff")
         Rotation.setCondition(3, 1, "key", "VENGEANCE_BUFF") -- not up on the fake state
@@ -2356,8 +2516,15 @@ describe("Options/Rotation (the Rotation section)", function()
         -- a permanent line in the most-read panel on the page that hedged about refresh timing and
         -- that the owner had to ask the meaning of.
         assert.equal(" ", lines[3], "the queue and the legend run together as one paragraph again")
-        assert.is_truthy(lines[4]:find("|TInterface\\AddOns\\Elmira\\media\\mark_firing:12|t", 1, true),
-          "the legend explains the markers")
+        -- PE2-D1: six states, and the legend names every one of them. Asserted whole, because a
+        -- legend that lists five of six is exactly the panel telling the player the sixth mark
+        -- means something it does not.
+        assert.equal(string.format(
+          "%s firing now   %s waiting   %s not active for you   %s off   %s unsaved   %s needs fixing",
+          Rotation.MARKS.firing.mark, Rotation.MARKS.waiting.mark, Rotation.MARKS.blocked.mark,
+          Rotation.MARKS.off.mark, Rotation.MARKS.unsaved.mark,
+          Rotation.MARKS.wrong.mark .. Rotation.MARKS.wrong.colour), lines[4],
+          "the legend no longer explains the markers")
         assert.equal(4, #lines, "an extra line is back in the queue mirror")
         assert.is_nil(table.concat(lines, " "):find("last time the queue changed", 1, true))
       end)
@@ -2468,6 +2635,32 @@ describe("Options/Rotation (the Rotation section)", function()
 
       -- A tooltip is the only place several of these controls explain themselves, and an execute
       -- with no `desc` is a button whose consequence is invisible until it has happened.
+      -- PE2-D2.1: Top and Bottom join Up and Down, the four ItemRack and Rotation Master both
+      -- ship together. Each says which way it goes, because "Top" and "Up" one beside the other
+      -- are a pair a player has to be told apart.
+      it("wires Top and Bottom to the ends of the list, and says which is which", function()
+        local function order()
+          local out = {}
+          for i, row in ipairs(Rotation.listRows()) do out[i] = row.spell or ("item" .. row.item) end
+          return out
+        end
+        local was = order()
+        local args = builder().list.args
+        assert.equal("Moves this line to the top of the rotation.", args.r3.args.top.desc)
+        assert.equal("Moves this line one place up the rotation.", args.r3.args.up.desc)
+        assert.equal("Moves this line one place down the rotation.", args.r3.args.down.desc)
+        assert.equal("Moves this line to the bottom of the rotation.", args.r3.args.bottom.desc)
+
+        args.r3.args.top.func()
+        assert.equal(was[3], order()[1])
+
+        Rotation.discard()
+        builder().list.args.r2.args.bottom.func()
+        local now = order()
+        assert.equal(was[2], now[#now], "Bottom did not reach the end of the list")
+        assert.equal(#was, #now)
+      end)
+
       it("explains every control whose effect is not obvious from its label", function()
         local args = builder()
         -- Collapsed: the tooltip says what expanding it does.
@@ -2476,6 +2669,15 @@ describe("Options/Rotation (the Rotation section)", function()
         args = builder()
         -- Expanded: the SAME button now says what clicking it again does.
         assert.is_truthy(args.list.args.r1.args.expand.desc:find("Collapse", 1, true))
+        -- PE2-D1: the state's own sentence rides on the expander, the one control on the row that
+        -- can show a tooltip at all -- a `description` becomes an AceGUI Label, which never fires
+        -- OnEnter, so the mark beside it has nowhere to explain itself.
+        local mark = args.list.args.r1.args.status
+        local expand = args.list.args.r1.args.expand.desc
+        assert.is_truthy(expand:find(mark.name, 1, true),
+          "the row's own mark is not on the one control that can explain it")
+        assert.is_truthy(expand:find(mark.desc, 1, true),
+          "the mark is shown with no sentence saying what it means")
         assert.is_truthy(args.list.args.r1.args.remove.desc:find("Discard", 1, true))
         assert.is_truthy(args.spells.args.s1.desc:find("bottom of the draft", 1, true))
         assert.is_truthy(args.items.args.i1.desc:find("bottom of the draft", 1, true))
@@ -2567,12 +2769,102 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_nil(text:find("SOUL_OF_THE_EXILE", 1, true))
       end)
 
+      -- The other two sources with words of their own in the class data. A set has a `name` and a
+      -- soul has the `short` its shoulder enchant is spelled with -- neither is the key, and the
+      -- key is what a player would have to go and look up.
+      it("labels a set key with the set's own name and a soul key with its enchant name", function()
+        Rotation.addCondition(3, "set")
+        local key = builder().list.args.r3.args.body.args.conditions.args.c1.args.key
+        assert.equal("Inquisition Shockplate (T3.5)", key.values.PALADIN_T35_INQUISITION)
+        assert.is_nil(key.values.PALADIN_T35_INQUISITION:find("PALADIN_T35", 1, true))
+
+        Rotation.setCondition(3, 1, "kind", "enchant")
+        local soul = builder().list.args.r3.args.body.args.conditions.args.c1.args.key
+        assert.equal("Soul of the Exile", soul.values.SOUL_OF_THE_EXILE)
+      end)
+
+      -- A soul the pack records with no `short` still has to be named. The prettifier is the
+      -- fallback, never the raw key.
+      it("prettifies a soul the pack gives no enchant name for", function()
+        PACK.souls.SOUL_OF_THE_NOBODY = {}
+        ns.Detect = { readableName = function(k) return "READABLE:" .. k end }
+        Rotation.addCondition(3, "enchant")
+        local key = builder().list.args.r3.args.body.args.conditions.args.c1.args.key
+        assert.equal("READABLE:SOUL_OF_THE_NOBODY", key.values.SOUL_OF_THE_NOBODY)
+      end)
+
+      -- Only a key that is WRITTEN like one gets prettified: a mode, a weapon kind and a creature
+      -- type are already display words, and the prettifier lower-cases before it re-capitalises, so
+      -- it would answer "Aoe" for the first of them.
+      it("prettifies a programmatic key and leaves a display word alone", function()
+        ns.Detect = { readableName = function(k) return "READABLE:" .. k end }
+        Rotation.addCondition(3, "resource")
+        local power = builder().list.args.r3.args.body.args.conditions.args.c1.args.key
+        assert.equal("READABLE:MANA", power.values.MANA)
+
+        Rotation.setCondition(3, 1, "kind", "mode")
+        local modes = builder().list.args.r3.args.body.args.conditions.args.c1.args.key
+        assert.equal("AoE", modes.values.AoE, "a mode IS its own label")
+      end)
+
+      -- Core/Detect is a different file and may not be loaded at all (the panel is built before it
+      -- on a fresh login). The key itself is a worse label and a far better answer than nothing.
+      it("falls back to the key itself with no prettifier loaded", function()
+        ns.Detect = nil
+        Rotation.addCondition(3, "resource")
+        local power = builder().list.args.r3.args.body.args.conditions.args.c1.args.key
+        assert.equal("MANA", power.values.MANA)
+      end)
+
       -- Nothing to say is said as nothing: a spell-shaped key would otherwise grow a tooltip line
       -- that only repeats the label already on the control.
       it("gives a spell key no source tooltip at all", function()
         Rotation.addCondition(3, "buff")
         local key = builder().list.args.r3.args.body.args.conditions.args.c1.args.key
         assert.is_nil(key.desc())
+      end)
+
+      -- The source tooltip answers for two sources and no others. Everything else keeps an empty
+      -- tooltip rather than growing one from whatever happens to sit under the same key elsewhere
+      -- in the pack -- set and bonus keys are routinely named after one another.
+      it("says nothing about a source it does not speak for", function()
+        PACK.bonuses.PALADIN_T35_INQUISITION = { note = "a bonus named after the set",
+                                                 from = { { set = "PALADIN_T35_INQUISITION",
+                                                            pieces = 4 } } }
+        Rotation.addCondition(3, "set")
+        Rotation.setCondition(3, 1, "key", "PALADIN_T35_INQUISITION")
+        local key = builder().list.args.r3.args.body.args.conditions.args.c1.args.key
+        assert.is_nil(key.desc(), "a set row grew the tooltip of the bonus of the same name")
+      end)
+
+      it("names a soul source by its enchant, and says nothing before one is chosen", function()
+        Rotation.addCondition(3, "enchant")
+        local function desc()
+          return builder().list.args.r3.args.body.args.conditions.args.c1.args.key.desc()
+        end
+        Rotation.setCondition(3, 1, "key", "SOUL_OF_THE_EXILE")
+        local text = desc()
+        assert.is_truthy(text:find("Soul of the Exile", 1, true))
+        assert.is_truthy(text:find("a shoulder enchant", 1, true))
+        assert.is_nil(text:find("SOUL_OF_THE_EXILE", 1, true))
+        -- A saved line naming a soul this pack no longer records -- a pack update, or a build
+        -- imported from another one. There is nothing to say about it, so nothing is said.
+        PACK.souls.SOUL_OF_THE_EXILE = nil
+        assert.is_nil(desc(), "a soul the pack does not record grew a tooltip anyway")
+      end)
+
+      -- A bonus with no `from` at all, and one whose `from` names neither a set nor a soul: there
+      -- is nothing to say, so nothing is said. A "From:" with an empty list after it would be the
+      -- panel promising an answer it does not have.
+      it("says nothing for a bonus with no source to name", function()
+        Rotation.selectRow(2)
+        local function desc(key)
+          Rotation.setCondition(2, 1, "key", key)
+          return builder().list.args.r2.args.body.args.conditions.args.c1.args.key.desc()
+        end
+        assert.is_nil(desc("HOLY_WRATH_INSTANT"), "a bonus with no `from` grew a source line")
+        PACK.bonuses.MYSTERY = { note = "something", from = { { nothing = true } } }
+        assert.is_nil(desc("MYSTERY"))
       end)
 
       -- PE3-D4: the Value dropdown takes a row of its own. At 1.1 widths it landed at the end of a
@@ -5354,6 +5646,8 @@ describe("Options/Rotation (the Rotation section)", function()
       local fork = Rotation.group().args.PALADIN_EXODIN.args.USER_MINE
       assert.equal("My Exodin", fork.name)
       assert.is_truthy(fork.args.header.args.from.name:find("Exodin", 1, true))
+      assert.equal("medium", fork.args.header.args.from.fontSize,
+        "the row is drawn two points smaller than the name beside it")
     end)
 
     it("carries the key and marks the running fork active", function()

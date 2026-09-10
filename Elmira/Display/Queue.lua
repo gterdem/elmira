@@ -88,7 +88,7 @@ local function sizeFont(fs, px)
   local size = math.floor(px + 0.5)
   if size < MIN_FONT then size = MIN_FONT end
   fs:SetFont(file, size, "OUTLINE")
-  return true
+  return true -- mutants: equivalent nothing reads sizeFont's answer -- Queue.Layout calls it for the effect
 end
 
 -- PE9-D1. One decimal below ten seconds, whole seconds above: "2.4s" is a number you act on,
@@ -229,8 +229,9 @@ local function anchorShift(p)
   return rx - gx, ry - gy
 end
 
+-- No `container` guard: both callers (Queue.Create, which has just built it, and Queue.Layout,
+-- which returns early without one) have already established it.
 local function placeContainer()
-  if not container then return end
   local p = profile()
   local a = p.anchor or {}
   local dx, dy = anchorShift(p)
@@ -512,7 +513,7 @@ function Queue.Create()
   if container then return container end
   local p = profile()
   container = CreateFrame("Frame", "ElmiraQueue", UIParent)
-  placeContainer()
+  placeContainer() -- mutants: equivalent Queue.Layout at the end of Create places it again
   container:SetScale(p.scale or 1.0)
   container:SetMovable(true)
   container:SetClampedToScreen(true)
@@ -608,8 +609,10 @@ function Queue.ApplyLearningPreset(on)
 
   local restored
   for key, presetValue in pairs(PRESET) do
+    -- No normalising of `current` here: every value in PRESET is compared with `==`, so testing
+    -- `x == true` against `true` is the same test as testing `x` against `true`. The capture above
+    -- DOES normalise, because `prior` is written back and has to be a real boolean.
     local current = p[key]
-    if key == "showReason" then current = current == true end
     if current == presetValue and prior[key] ~= presetValue then
       p[key] = prior[key]
       restored = restored or { restored = true }
@@ -669,7 +672,9 @@ local function sampleKeys()
   for _, entry in ipairs((compiled and compiled.entries) or {}) do
     if type(entry.spell) == "string" then
       out[#out + 1] = entry.spell
-      if #out >= MAX_SLOTS then break end
+      -- Only slots 1..MAX_SLOTS are ever read back out of this, so the break bounds the WORK a
+      -- hundred-line rotation does, not the answer it gives.
+      if #out >= MAX_SLOTS then break end -- mutants: equivalent bounds the work; nothing reads past MAX_SLOTS
     end
   end
   return out
@@ -695,9 +700,12 @@ function paintSample()
       else
         b.icon:SetColorTexture(ns.Colors.BRAND.r, ns.Colors.BRAND.g, ns.Colors.BRAND.b, 0.8)
       end
-      b:Show()
+      -- Queue.Layout runs immediately before every paintSample there is (StartPositioning calls it,
+      -- and Layout's own tail is the other caller), and it has already shown or hidden this slot by
+      -- the same depth -- so these two repeat a decision rather than making one.
+      b:Show() -- mutants: equivalent Queue.Layout, which always runs first, shows the same slots
     else
-      b:Hide()
+      b:Hide() -- mutants: equivalent Queue.Layout, which always runs first, hides the same slots
     end
   end
 end
@@ -713,7 +721,7 @@ function Queue.StartPositioning()
   -- through SetLocked, which would write `locked` to the profile.
   if container.grip then container.grip:Show() end
   Queue.Layout()
-  paintSample()
+  paintSample() -- mutants: equivalent Queue.Layout above repaints the sample whenever positioning is on
   container.placeholder:Hide()
   placeholderShown = false
   -- Never the out-of-combat fade: you cannot place what you can barely see.
@@ -740,8 +748,10 @@ function Queue.StopPositioning()
   -- display is switched off, so handing the strip back without hiding it is exactly how a preview
   -- becomes a strip stuck on screen with no way to dismiss it.
   if container then container:Hide() end
+  -- No forgetWaits() here: entering the mode painted the sample, which nils every slot's
+  -- `waitUntil` outright, and nothing between the two can capture another one -- Render and Tick
+  -- both stand down while positioning. A second clear had nothing left to clear.
   rendered, pendingCast, pendingCastAt, placeholderShown = nil, nil, nil, false
-  forgetWaits()
   -- FX1-D5: and the options window comes back where it was. Every way out of this mode passes
   -- through here, which is the point of putting the call here.
   if ns.Options and ns.Options.EndMove then ns.Options.EndMove() end
@@ -1083,7 +1093,7 @@ end
 -- every visible tick whose queue came back unchanged -- which is most of them -- so the countdown
 -- keeps running between recomputations and the dimming reflects the mana you have now, not the mana
 -- you had when the rotation last moved. No frame, no OnUpdate, no timer of its own: the render loop
--- is already capped at 10 Hz and a second ticker is exactly what the style rules forbid.
+-- is already capped at 10 Hz, and one ticker at that cap is the whole update budget (docs/01-ARCHITECTURE.md).
 function Queue.Tick(now)
   if not container or not container:IsShown() or placeholderShown then return false end
   -- PE11-D5: the sample has no countdown to run and no mana to check, and paintFade would apply the
