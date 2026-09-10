@@ -161,5 +161,15 @@ files["tests/"] = {
     "GameTooltip", "CLOSE",
     -- R2 (D59): the combo-point mock pair.
     "GetComboPoints", "MAX_COMBO_POINTS",
+    -- FX2: tests/ace3.lua loads the real AceGUI/AceConfigDialog (tests/spec/options_real_window_spec)
+    -- against the mock's frames. These are the client's own table/string extensions and the FrameXML
+    -- globals those libraries read: button labels, font objects, the sound a closing window plays,
+    -- and the two halves of the Escape key -- the list of frame names it closes and the function
+    -- that closes them, which AceConfigDialog wraps.
+    "wipe", "table.wipe", "strsplit", "string.split",
+    "PlaySound", "ACCEPT", "CANCEL", "OKAY", "NEW", "SAVE", "DELETE",
+    "GameFontNormal", "GameFontNormalSmall", "GameFontHighlight", "GameFontHighlightSmall",
+    "GameFontHighlightLarge", "GameFontDisable", "ChatFontNormal",
+    "UISpecialFrames", "CloseSpecialWindows", "hooksecurefunc",
   },
 }

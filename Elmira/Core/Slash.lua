@@ -385,11 +385,16 @@ Slash.register{
       -- one is -- so "my configuration window vanished" is a question this command now has an
       -- answer to, for a player who missed the little bar at the top of the screen.
       local moving = ns.Options and ns.Options.moveSubject and ns.Options.moveSubject()
+      -- FX2-D3: and whether the window that is on screen still has its title bar and its version
+      -- text, so "the header lost its version and I can only drag it from the middle" is a thing
+      -- this command answers rather than a thing that needs a screenshot.
+      local chrome = ns.Options and ns.Options.chromeState and ns.Options.chromeState()
       return {
         string.format("project=%s version=%s interface=%s", tostring(d.project), tostring(d.version), tostring(d.interface)),
         "capabilities: " .. table.concat(caps, " "),
         "state: " .. tostring(d.state),
         "moving: " .. tostring(moving or "nothing"),
+        "window chrome: " .. tostring(chrome or "no window open"),
       }
     elseif sub == "gates" then
       -- Which rows of the active build cannot fire for this character, and why. The same answer

@@ -1,5 +1,12 @@
 # Changelog
 ## Unreleased
+- **Fixed: the options window can no longer come back without its header.** Every time the window is
+  put back on screen — after Position the Strip, Move This Texture or any other Move mode — its
+  full-width drag bar and the version text on the left are re-applied, so a window that lost them
+  while it was out of the way comes back dressed instead of staying stripped until you close and
+  reopen it. A failure to size or place the window no longer takes the header down with it either.
+  `/elm debug state` now says `window chrome: dressed` or `stripped`, so a missing header can be
+  reported without a screenshot.
 - **New: a texture can sweep its own cooldown or buff.** "Fill with" on an ability's Texture tab
   draws a progress sweep over the indicator showing how much of that ability's cooldown is left, or
   how much of its buff is — the buff one drains the other way, so what is lit is what is left.

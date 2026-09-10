@@ -250,11 +250,108 @@ C_Engraving = {
   RefreshRunesList = function() end,
 }
 
+-- ---------------------------------------------------------------- frames and regions
+--
+-- A frame here answers the WoW frame API for real, not with a no-op: it remembers its anchors, its
+-- textures and font strings, its children, its scripts -- and, above all, it FIRES OnShow/OnHide
+-- when its shown state actually changes, exactly as the client does (and, as the client does, not
+-- when Hide() is called on something already hidden).
+--
+-- That last line is not decoration. AceGUI's Frame container wires `frame:SetScript("OnHide",
+-- Frame_OnClose)` (AceGUIContainer-Frame.lua:28-30, 195), so HIDING the options window is what runs
+-- AceConfigDialog's whole close path -- clearing OpenFrames and handing the widget back to the
+-- shared pool. A mock that hid quietly could not reach that path at all, which is how a window that
+-- comes back stripped of its title bar passes a green suite (FX2).
+--
+-- Anything NOT modelled here still answers, but only for a name that starts with a capital letter:
+-- every WoW frame method does, and nothing else may, or `frame.elmiraVersion` on a frame that has
+-- never had one would come back as a function and read as "already created".
+local function noop() end
+local frameMeta = { __index = function(_, key)
+  if type(key) == "string" and key:match("^%u") then return noop end
+  return nil
+end }
+
+-- The half of the API a texture and a font string share with a frame. Anchors are stored the way
+-- GetPoint hands them back, because restoring an anchor byte for byte is exactly what
+-- Options.Undecorate does with them.
+local function newRegion(kind, parent)
+  local r = { __points = {}, __shown = true, __parent = parent }
+  function r:GetObjectType() return kind end
+  function r:GetParent() return self.__parent end
+  function r:SetParent(p) self.__parent = p end
+  function r:ClearAllPoints() self.__points = {} end
+  function r:SetPoint(...) self.__points[#self.__points + 1] = { ... } end
+  function r:GetNumPoints() return #self.__points end
+  function r:GetPoint(i) return unpack(self.__points[i or 1] or {}) end
+  function r:SetAllPoints(other) self.__allPoints = other end
+  function r:SetWidth(v) self.__width = v end
+  function r:SetHeight(v) self.__height = v end
+  function r:SetSize(w, h) self.__width, self.__height = w, h end
+  function r:GetWidth() return self.__width or 0 end
+  function r:GetHeight() return self.__height or 0 end
+  -- AceGUI sizes a Button from its label (AceGUIWidget-Button.lua:51); any monotonic answer will do.
+  function r:GetStringWidth() return #tostring(self.__text or "") * 6 end
+  function r:SetTexture(t) self.__texture = t end
+  function r:GetTexture() return self.__texture end
+  function r:SetText(t) self.__text = t end
+  function r:GetText() return self.__text end
+  function r:Show() self.__shown = true end
+  function r:Hide() self.__shown = false end
+  function r:SetShown(v) self.__shown = v and true or false end
+  function r:IsShown() return self.__shown and true or false end
+  -- Visibility, unlike shown-ness, walks up the parents: a region on a hidden frame is not visible.
+  function r:IsVisible()
+    local node = self
+    while node do
+      if not node.__shown then return false end
+      node = node.__parent
+    end
+    return true
+  end
+  return setmetatable(r, frameMeta)
+end
+
 -- A scanning tooltip: CreateFrame("GameTooltip", name, ...) must also publish the per-line font
 -- strings as globals, because that is the only way Classic exposes tooltip text.
 function CreateFrame(frameType, name, parent, template)
-  local frame = {}
+  local frame = newRegion(frameType or "Frame", parent)
+  -- A frame starts hidden, the way CreateFrame hands one back, so the first Show() is a real
+  -- transition and fires OnShow.
+  frame.__shown = false
+  frame.__regions, frame.__children = {}, {}
   local lines = {}
+  function frame:GetName() return name end
+  function frame:CreateTexture()
+    local t = newRegion("Texture", self)
+    self.__regions[#self.__regions + 1] = t
+    return t
+  end
+  function frame:CreateFontString()
+    local fs = newRegion("FontString", self)
+    self.__regions[#self.__regions + 1] = fs
+    return fs
+  end
+  -- A button built from a template already owns its label (AceGUI reads it back rather than making
+  -- one, AceGUIWidget-Button.lua:85).
+  function frame:GetFontString()
+    if not self.__fontString then self.__fontString = self:CreateFontString() end
+    return self.__fontString
+  end
+  function frame:GetRegions() return unpack(self.__regions) end
+  function frame:GetChildren() return unpack(self.__children) end
+  function frame:GetNumChildren() return #self.__children end
+  -- The three state textures are objects in the client, not the values that were set: AceConfigDialog
+  -- sets one and immediately calls SetTexCoord on what it gets back (AceConfigDialog-3.0.lua:589).
+  local function stateTexture(self, which)
+    self.__stateTextures = self.__stateTextures or {}
+    if not self.__stateTextures[which] then self.__stateTextures[which] = newRegion("Texture", self) end
+    return self.__stateTextures[which]
+  end
+  for _, which in ipairs({ "Normal", "Pushed", "Highlight", "Disabled" }) do
+    frame["Set" .. which .. "Texture"] = function(self, v) stateTexture(self, which):SetTexture(v) end
+    frame["Get" .. which .. "Texture"] = function(self) return stateTexture(self, which) end
+  end
   -- Real RegisterEvent/SetScript bookkeeping, not the generic no-op fallback below: without this,
   -- a frame-driven watcher (`watcher:SetScript("OnEvent", fn)`)
   -- cannot be proven wired at all — the call would succeed silently whether or not it did anything.
@@ -264,6 +361,36 @@ function CreateFrame(frameType, name, parent, template)
   function frame:IsEventRegistered(event) return registered[event] == true end
   function frame:SetScript(event, handler) scripts[event] = handler end
   function frame:GetScript(event) return scripts[event] end
+  -- The real HookScript APPENDS: the original handler still runs, and the new one runs after it. A
+  -- fake that replaced would let a SetScript -- which deletes whatever AceGUI installed there --
+  -- pass, and one-handler-per-name is the rule that has already cost this addon two outages.
+  function frame:HookScript(event, handler)
+    local prior = scripts[event]
+    scripts[event] = function(...)
+      if prior then prior(...) end
+      return handler(...)
+    end
+  end
+  -- Show/Hide fire OnShow/OnHide, and only on a real change of state -- the client's own rule, and
+  -- the one that makes hiding the options window run AceGUI's OnClose chain.
+  function frame:Show()
+    if self.__shown then return end
+    self.__shown = true
+    if scripts.OnShow then scripts.OnShow(self) end
+  end
+  function frame:Hide()
+    if not self.__shown then return end
+    self.__shown = false
+    if scripts.OnHide then scripts.OnHide(self) end
+  end
+  function frame:SetShown(v) if v then self:Show() else self:Hide() end end
+  -- Button:Click() runs OnClick whatever the button's visibility -- which is load-bearing here:
+  -- Elmira hides AceGUI's stock Close button and its own X clicks the hidden one, so that
+  -- AceConfigDialog's FrameOnClose still clears OpenFrames and releases the widget to the pool.
+  function frame:Click(button, down)
+    local handler = scripts.OnClick
+    if handler then return handler(self, button or "LeftButton", down or false) end
+  end
   -- NOT a real WoW frame method. A spec-only hook to simulate the client delivering a REGISTERED
   -- event to this frame, mirroring how the client actually dispatches: every event, whichever one
   -- fired, is delivered through the single "OnEvent" script (not a script named after the event),
@@ -292,7 +419,16 @@ function CreateFrame(frameType, name, parent, template)
       end
     end
   end
-  setmetatable(frame, { __index = function() return function() end end })
+  -- A child is reachable from its parent, which is how AceGUI's stock Close button and the title
+  -- drag bar are found at all (both are anonymous; ElvUI identifies the first by its text,
+  -- Config.lua:1441-1447, and Elmira finds the second by the script it carries).
+  if parent and rawget(parent, "__children") then
+    parent.__children[#parent.__children + 1] = frame
+  end
+  -- Named frames are reachable by name, because that is the whole contract UISpecialFrames rests on:
+  -- the client's Escape closes frames by GLOBAL NAME, so a frame that never published its own could
+  -- not be closed by Escape in a spec any more than in game.
+  if name then _G[name] = frame end
   -- NOT a real WoW global. A file that builds its own event-watcher frame at load time (e.g.
   -- a bar provider's own watcher frame) gives a spec no other handle on it; the cheapest way to
   -- reach "the frame that file just made" without inventing a return value CreateFrame never has.
@@ -364,6 +500,25 @@ WOW_PROJECT_ID, WOW_PROJECT_CLASSIC = 2, 2
 -- spec) is mirroring the client, not inventing a fixture that asserts the spec's own assumptions.
 -- LibStub itself expects this WoW string-library alias (`strmatch(minor, "%d+")` in NewLibrary).
 strmatch = string.match
+-- The client's table/string extensions, which Ace3 uses as bare globals and as string METHODS
+-- (AceGUIContainer-TreeGroup.lua:530 does `("\001"):split(uniquevalue)`, i.e. separator first).
+function wipe(t) for k in pairs(t) do t[k] = nil end return t end
+table.wipe = wipe
+function strsplit(sep, str)
+  local out, escaped = {}, sep:gsub("(%W)", "%%%1")
+  for piece in (str .. sep):gmatch("([^" .. escaped .. "]*)" .. escaped) do out[#out + 1] = piece end
+  return unpack(out)
+end
+string.split = strsplit
+-- WoW's xpcall forwards the extra arguments to `func`; stock Lua 5.1's does not. Ace3's `safecall`
+-- captures `xpcall` as a FILE-SCOPE upvalue (AceGUI-3.0.lua:58, AceConfigDialog-3.0.lua:37), so a
+-- spec that loads the real libraries has to install this before they load -- which is exactly when
+-- the client installs its own. Handed out rather than written into _G: busted's own machinery runs
+-- on the stock one, and every callback Ace3 fires would arrive with a nil `self` without it.
+function M.wowXpcall(f, handler, ...)
+  local args, n = { ... }, select("#", ...)
+  return xpcall(function() return f(unpack(args, 1, n)) end, handler)
+end
 function geterrorhandler() return function(err) return err end end
 function IsLoggedIn() return true end
 function GetLocale() return "enUS" end

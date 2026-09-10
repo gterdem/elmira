@@ -656,6 +656,23 @@ describe("Core.Slash", function()
       assert.is_true(hasLineMatching(lines, "^moving: the indicator row$"))
       assert.is_false(hasLineMatching(lines, "^moving: nothing$"))
     end)
+
+    -- FX2-D3. The owner reported the window's header losing its version text and its full-width
+    -- drag bar, and answering "is it dressed right now" needed a screenshot. This is the line that
+    -- replaces the screenshot.
+    it("says whether the window on screen still has its title bar and version", function()
+      _G.__ELM_NS.Options = { chromeState = function() return "dressed" end }
+      assert.is_true(hasLineMatching(Slash.run("debug state"), "^window chrome: dressed$"))
+      _G.__ELM_NS.Options = { chromeState = function() return "stripped" end }
+      assert.is_true(hasLineMatching(Slash.run("debug state"), "^window chrome: stripped$"))
+    end)
+
+    it("says so plainly when there is no standalone window to inspect", function()
+      assert.is_true(hasLineMatching(Slash.run("debug state"), "^window chrome: no window open$"))
+      -- ...and with Options loaded but no window up, which is what chromeState answers with nil.
+      _G.__ELM_NS.Options = { chromeState = function() return nil end }
+      assert.is_true(hasLineMatching(Slash.run("debug state"), "^window chrome: no window open$"))
+    end)
   end)
 
   it("verb matching is case-insensitive", function()

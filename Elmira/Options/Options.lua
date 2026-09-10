@@ -1209,12 +1209,51 @@ end
 function Options.Decorate()
   local widget = openWidget()
   if not (widget and widget.frame) then return false end
-  Options.ApplyWindow()
+  -- FX2-D2. Geometry first, but never at the chrome's expense: this is the one step here that hands
+  -- numbers to the CLIENT (SetScale, SetResizeBounds against whatever UIParent reports), and the
+  -- chrome below depends on none of them. Unguarded, a single throw in there left the window
+  -- wearing AceGUI's 100px drag tab and no version -- the reported symptom exactly -- and, worse,
+  -- took `chainClose` down with it, so the next close released the frame to the shared pool still
+  -- carrying our title bar and our X (the D15/M5g leak, from a new direction).
+  local ok, err = pcall(Options.ApplyWindow)
+  if not ok then
+    ns.log("could not size or place the options window: %s", tostring(err))
+  end
   decorateTitle(widget)
   decorateVersion(widget)
   decorateButtons(widget)
   decorateDrag(widget)
   return true
+end
+
+-- FX2-D3. Is the window on screen actually wearing its chrome, or is it the stock AceGUI frame?
+--
+-- The owner reported the two things Decorate does that you can SEE -- "lost the Version info on top
+-- left" and "the only way to drag the popup is clicking the Elmira in the middle" -- and neither
+-- has a diagnostic behind it, so answering "is it dressed" needed a screenshot. This reads exactly
+-- those two: the title bar reaching from the window's left edge (which is what makes the whole
+-- strip draggable, since AceGUI's invisible drag frame is SetAllPoints(titlebg)), and the version
+-- font string being shown. `/elm debug state` prints the answer.
+--
+-- nil, not "stripped", when no standalone window is open: "there is nothing on screen" and "what is
+-- on screen is undressed" are different answers and the caller says so differently.
+local function titleSpansWindow(widget)
+  local titlebg = widget.titlebg
+  -- BOTH corners, not just the left one: AceGUI anchors this texture at a single point and leaves
+  -- it 100px wide (AceGUIContainer-Frame.lua:226), so a bar that merely starts at the window's edge
+  -- is still a tab. Two anchors is what stretches it -- and the invisible drag frame with it.
+  if not (titlebg and titlebg.GetNumPoints and titlebg:GetNumPoints() == 2) then return false end
+  local point, relativeTo = titlebg:GetPoint(1)
+  return point == "TOPLEFT" and relativeTo == widget.frame
+end
+
+function Options.chromeState()
+  local widget = openWidget()
+  local frame = widget and widget.frame
+  if not frame then return nil end
+  local version = frame.elmiraVersion
+  local shown = version ~= nil and version.IsShown ~= nil and version:IsShown()
+  return (shown and titleSpansWindow(widget)) and "dressed" or "stripped"
 end
 
 -- Undoes Decorate, called from Options.Open's chained OnClose BEFORE AceConfigDialog's own
@@ -1376,6 +1415,13 @@ local function showPanel()
     return
   end
   widget.frame:Show()
+  -- FX2-D3: dressed the moment it is visible, and never later. Every OTHER way this window reaches
+  -- the screen goes through AceConfigDialog:Open, which the refresh hook decorates after -- this
+  -- one does not, so a frame that lost its chrome while it was hidden (our own close chain fires
+  -- from the frame's OnHide, and anything that hides it without `hiddenForMove` set runs
+  -- Undecorate) would come back stripped, and every later Decorate would be a no-op until a real
+  -- close and re-open. Cheap and idempotent, which is what Decorate has had to be since D15.
+  Options.Decorate()
   local dialog = Options.dialog
   if path and #path > 0 and dialog and dialog.SelectGroup then
     dialog:SelectGroup("Elmira", unpack(path))
@@ -1551,7 +1597,17 @@ local function installRefreshHook(dialog)
     dialog.elmiraRefreshHooked = true
     hooksecurefunc(dialog, "Open", function(_, appName)
       if appName ~= "Elmira" then return end
-      Options.Decorate()
+      -- FX2-D3, the same pcall discipline the close chain has always had: ours must never be the
+      -- reason the rest is skipped. `chainClose` below is what keeps AceConfigDialog's own
+      -- FrameOnClose behind Options.Undecorate, and AceConfigDialog re-installs its raw callback on
+      -- EVERY Open -- so a throw in Decorate that skipped this line would silently leave the close
+      -- path unchained for the rest of the session, and the frame would go back to the shared pool
+      -- still dressed in ours. Reported rather than swallowed: an undressed window is exactly the
+      -- kind of fault nobody files, because it does not look like an error.
+      local ok, err = pcall(Options.Decorate)
+      if not ok then
+        ns.log("could not dress the options window: %s", tostring(err))
+      end
       chainClose(dialog)
       -- Last, and only while a Move mode is running: see rehideForMove.
       rehideForMove()
