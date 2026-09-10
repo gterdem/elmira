@@ -1116,26 +1116,61 @@ describe("Options window", function()
       assert.is_false(tree:showsATooltip())
     end)
 
-    -- The click-selects-but-does-not-expand bug ("menu click never activates"): only the tiny "+"
-    -- or a double-click flips `status.groups[value]` open on its own
-    -- (AceGUIContainer-TreeGroup.lua's `Expand_OnClick`/`Button_OnDoubleClick`); an ordinary click
-    -- only selects. This is `SelectGroup`'s OWN write (AceConfigDialog-3.0.lua:471-474
-    -- `treestatus.groups[treevalue] = true`) made from the other path there is to a node -- a click.
-    it("marks the just-selected node's own uniquevalue expanded, and redraws the tree", function()
-      open()
-      local tree = fakeTree()
-      feed("Elmira", tree, { "rotation", "PALADIN_EXODIN" })
-      local status = Options.dialog:GetStatusTable("Elmira", {})
-      assert.is_true(status.groups["rotation\001PALADIN_EXODIN"])
-      assert.equal(1, tree.refreshed)
-    end)
+    -- PD2-D3. Expansion of the outer tree belongs to AceConfigDialog, and this is the spec that
+    -- decided it. Elmira used to force the just-clicked node open here, for the template/fork
+    -- sub-pages PD2 deleted -- and modelled against the real widget it turns out it never opened
+    -- anything: `BuildLevel` (AceGUIContainer-TreeGroup.lua:370-385) draws a node's children only
+    -- while `tree.status.groups[uniquevalue]` is set, and `tree.status` IS the root status table's
+    -- own `.groups` (AceConfigDialog-3.0.lua:1733-1738), so the write landed one level above the
+    -- map that is read. Builder and Share open from the "+" arrow or from `SelectGroup`, which
+    -- makes that write itself (:471-474).
+    --
+    -- Asserted as ROWS, not as a flag: "the menu shows Builder and Share" is the only form of this
+    -- claim a player could tell apart from success. And the tree is POOLED across every Ace3 addon
+    -- on the client, so the second half -- that feeding a page invents no key of ours in its status
+    -- table -- is what keeps our bookkeeping off ElvUI's window.
+    it("leaves the outer tree's expansion to AceConfigDialog, inventing no status key of its own",
+      function()
+        open()
+        local definition = {
+          { value = "general", text = "General" },
+          { value = "rotation", text = "Rotations", children = {
+              { value = "builder", text = "Builder" }, { value = "share", text = "Share" } } },
+        }
+        local tree = fakeTree()
+        -- Wired exactly the way AceConfigDialog wires it (AceConfigDialog-3.0.lua:1733-1738) and
+        -- the way TreeGroup:SetStatusTable then fills it in (AceGUIContainer-TreeGroup.lua:341-346).
+        local rootStatus = Options.dialog:GetStatusTable("Elmira", {})
+        rootStatus.groups = {}
+        tree.status = rootStatus.groups
+        tree.status.groups = {}
+        -- `BuildLevel`, in shape: a child row exists on screen only while its parent is expanded.
+        local function rows()
+          local out, groups = {}, tree.status.groups
+          local function level(nodes, prefix)
+            for _, node in ipairs(nodes) do
+              local unique = prefix and (prefix .. "\001" .. node.value) or node.value
+              out[#out + 1] = unique
+              if node.children and groups[unique] then level(node.children, unique) end
+            end
+          end
+          level(definition, nil)
+          return out
+        end
 
-    it("does nothing to the status table or the tree on the root render, path is empty", function()
-      open()
-      local tree = fakeTree()
-      feed("Elmira", tree, {})
-      assert.is_nil(tree.refreshed, "an empty path was treated as a node to expand")
-    end)
+        feed("Elmira", tree, { "rotation" })
+        assert.same({ "general", "rotation" }, rows())
+        -- What the hook IS still for on this tree, on the same feed.
+        assert.is_false(tree:showsATooltip())
+        -- Nothing of ours anywhere in the pooled widget's status table, at either level.
+        assert.same({}, tree.status.groups)
+        assert.is_nil(rootStatus.groups["rotation"])
+        assert.is_nil(tree.refreshed, "the tree was redrawn for a change nobody made")
+
+        -- The library's own write, for contrast: THIS is what opens the two children.
+        tree.status.groups["rotation"] = true
+        assert.same({ "general", "rotation", "rotation\001builder", "rotation\001share" }, rows())
+      end)
 
     it("never mutates AceConfigDialog.tooltip -- only the tree widget it found", function()
       open()
@@ -1167,7 +1202,7 @@ describe("Options window", function()
       end)
     end)
 
-    it("does nothing when the tree cannot answer SetCallback or RefreshTree", function()
+    it("does nothing when the tree cannot answer SetCallback at all", function()
       open()
       assert.has_no.errors(function() feed("Elmira", { type = "TreeGroup" }, { "rotation" }) end)
     end)

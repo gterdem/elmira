@@ -63,6 +63,16 @@ describe("Options/Rotation (the Rotation section)", function()
     return Rotation.group().args.playstyles.args
   end
 
+  -- PD2-D2: a playstyle's or a rotation's content is drawn ONCE, in the shared detail area under
+  -- the cards, so every assertion about that content reaches it the way a player does -- by having
+  -- that card selected. `Rotation.select` is exactly what a card-body click calls (PD1-D2).
+  local function detailOf(key)
+    if key then Rotation.select(key) end
+    local d = Rotation.group().args.detail
+    assert.is_table(d, "nothing is selected, so there is no detail area to read")
+    return d.args
+  end
+
   -- PE5-D1/D2: a detail header row right-aligns its buttons by FILLING the row -- every control
   -- relative, the relWidths summing to exactly 1.0. AceGUI's Flow layout starts a new row the moment
   -- they exceed it (AceGUI-3.0.lua:730), which would drop the last button onto a line of its own.
@@ -189,120 +199,47 @@ describe("Options/Rotation (the Rotation section)", function()
     end)
   end)
 
-  -- D30. The tree's own shape: templates in catalog order, their forks nested inside them, a
-  -- no-template fork sitting directly under Rotations, and the depth cap that puts a copy of a copy
-  -- under the ORIGINAL template rather than under the fork it happened to be copied from.
-  describe("the tree (D30)", function()
+  -- D30/PD2-D1. What the left-hand menu shows under Rotations: two nodes, Builder and Share, and
+  -- nothing else. The playstyles and your own rotations are CARDS on the root page (PD1) with one
+  -- shared detail area below them -- they stopped being menu entries in PD2.
+  describe("the section's own children (D30, PD2-D1)", function()
     before_each(function() installPack() end)
 
-    it("gives every catalog template its own top-level page, in catalog order", function()
-      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
-                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
-      local args = Rotation.group().args
-      assert.equal("group", args.PALADIN_EXODIN.type)
-      assert.is_falsy(args.PALADIN_EXODIN.inline)
-      assert.equal("group", args.PALADIN_SHOCKADIN.type)
-      assert.is_true(args.PALADIN_EXODIN.order < args.PALADIN_SHOCKADIN.order)
-    end)
-
-    it("nests a fork inside the template it was forked from", function()
-      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
-      installUserBuilds{
-        list = function() return { "USER_MINE" } end,
-        find = function(pk, key)
-          if key == "USER_MINE" then
-            return { entries = {} }, "fork", { name = "My Exodin", derivedFrom = "PALADIN_EXODIN" }
-          end
-          if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
-        end,
-      }
-      local template = Rotation.group().args.PALADIN_EXODIN
-      assert.is_table(template.args.USER_MINE, "the fork is not nested under its template")
-      assert.equal("My Exodin", template.args.USER_MINE.name)
-    end)
-
-    it("puts a fork with no template directly under Rotations", function()
-      installWizard{}
-      installUserBuilds{
-        list = function() return { "USER_SCRATCH" } end,
-        find = function(_, key)
-          if key == "USER_SCRATCH" then return { entries = {} }, "fork", { name = "Scratch" } end
-        end,
-      }
-      local root = Rotation.group().args
-      assert.is_table(root.USER_SCRATCH)
-      assert.equal("Scratch", root.USER_SCRATCH.name)
-    end)
-
-    -- Depth cap: a copy of a copy nests under the ORIGINAL template, not under the fork it was
-    -- copied from -- otherwise the tree could grow one level deeper every time someone forked a fork.
-    it("nests a copy of a copy under the original template, not under the fork it copied", function()
-      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
-      installUserBuilds{
-        list = function() return { "USER_A", "USER_B" } end,
-        find = function(pk, key)
-          if key == "USER_A" then
-            return { entries = {} }, "fork", { name = "Copy A", derivedFrom = "PALADIN_EXODIN" }
-          elseif key == "USER_B" then
-            return { entries = {} }, "fork", { name = "Copy of Copy A", derivedFrom = "USER_A" }
-          end
-          if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
-        end,
-      }
-      local template = Rotation.group().args.PALADIN_EXODIN
-      assert.is_table(template.args.USER_A)
-      assert.is_table(template.args.USER_B, "the copy of a copy is missing from the template's page")
-      assert.is_nil(template.args.USER_A.args and template.args.USER_A.args.USER_B,
-        "the copy of a copy nested a level too deep, under the fork instead of the template")
-    end)
-
-    it("Rotation.rootParent resolves a fork-of-a-fork chain to the original template", function()
-      installUserBuilds{
-        find = function(pk, key)
-          if key == "USER_B" then return {}, "fork", { derivedFrom = "USER_A" } end
-          if key == "USER_A" then return {}, "fork", { derivedFrom = "PALADIN_EXODIN" } end
-          if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
-        end,
-      }
-      ns.Display.currentPack = function()
-        return { class = "PALADIN", builds = { PALADIN_EXODIN = {} } }
-      end
-      assert.equal("PALADIN_EXODIN", Rotation.rootParent("USER_B"))
-    end)
-
-    it("Rotation.rootParent answers nil for a fork derived from nothing", function()
-      installUserBuilds{ find = function() return {}, "fork", {} end }
-      assert.is_nil(Rotation.rootParent("USER_SCRATCH"))
-    end)
-
-    -- A key that resolves to NEITHER a shipped build nor a fork record: `fork` itself is nil here,
-    -- not merely one with no `derivedFrom` -- indexing it without the guard would error instead of
-    -- answering "no parent".
-    it("Rotation.rootParent answers nil for a key that is not a build or a fork at all", function()
-      installUserBuilds{ find = function() return nil end }
-      assert.is_nil(Rotation.rootParent("GARBAGE"))
-    end)
-
-    -- A hand-edited SavedVariables file could in principle name itself as its own ancestor; the
-    -- bound in the loop is what stops that from hanging the whole options panel.
-    it("Rotation.rootParent does not hang on a cycle", function()
-      installUserBuilds{ find = function(_, key)
-        if key == "USER_A" then return {}, "fork", { derivedFrom = "USER_B" } end
-        return {}, "fork", { derivedFrom = "USER_A" }
-      end }
-      assert.is_nil(Rotation.rootParent("USER_A"))
-    end)
-
-    it("Rotation.rootParent answers nil for a nil key, rather than erroring", function()
-      assert.is_nil(Rotation.rootParent(nil))
-    end)
-
-    -- Never a real chain (nothing the addon writes grows one), but a hand-edited SavedVariables
-    -- file could -- the bound is what stops that from hanging the whole options panel.
-    it("Rotation.rootParent gives up after enough hops, on a chain that never repeats or resolves",
+    -- The whole of PD2-D1, walked rather than listed: whatever the class ships and whatever the
+    -- player has forked, no template and no fork may appear as a node. A non-inline group is
+    -- exactly what AceConfigDialog turns into a tree node (BuildGroups, AceConfigDialog-3.0.lua:
+    -- 1039-1070), so that is the property asserted, not the absence of two particular keys.
+    it("has exactly two nodes -- Builder and Share -- with templates and forks of both kinds present",
       function()
-        installUserBuilds{ find = function(_, key) return {}, "fork", { derivedFrom = key .. "X" } end }
-        assert.is_nil(Rotation.rootParent("USER_START"))
+        installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
+                       { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+        installUserBuilds{
+          list = function() return { "USER_MINE", "USER_SCRATCH" } end,
+          find = function(pk, key)
+            if key == "USER_MINE" then
+              return { entries = {} }, "fork", { name = "My Exodin", derivedFrom = "PALADIN_EXODIN" }
+            elseif key == "USER_SCRATCH" then
+              return { entries = {} }, "fork", { name = "Scratch" }
+            end
+            if pk and pk.builds and pk.builds[key] then return pk.builds[key], "pack" end
+          end,
+        }
+        local args = Rotation.group().args
+        local nodes = {}
+        for key, row in pairs(args) do
+          if row.type == "group" and not row.inline then nodes[#nodes + 1] = key end
+        end
+        table.sort(nodes)
+        assert.same({ "builder", "share" }, nodes)
+        -- ...and the rows themselves are still all there, as cards, in catalog order, with the
+        -- forks in their own group below them.
+        assert.equal("Exodin", cards().card1.arg.title)
+        assert.equal("Shockadin", cards().card2.arg.title)
+        local mine = Rotation.group().args.yourRotations.args
+        assert.equal("My Exodin", mine.card1.arg.title)
+        assert.equal("Scratch", mine.card2.arg.title)
+        assert.equal(2, #Rotation.templateRows())
+        assert.equal(2, #Rotation.forkRows())
       end)
 
     it("says so, without erroring, when the class ships no templates at all", function()
@@ -1728,9 +1665,8 @@ describe("Options/Rotation (the Rotation section)", function()
     -- revert, which no test before it did.
     describe("a registry spell, the whole way through the Builder (D83)", function()
       it("appends, reports no problems, enables Save, saves, and renders live with its icon", function()
-        -- The tree only nests a fork under its template when the Wizard names that template as a
-        -- row -- otherwise `byParent["TEMPLATE"]` has nowhere to attach, and `args.TEMPLATE` (read
-        -- below) would not exist for a reason unrelated to anything D79-D83 touch.
+        -- The fork's own lines are read below through the shared detail area (PD2-D2); the wizard
+        -- row keeps the root page the shape it has in game, with a playstyle card above them.
         installWizard({ { build = "TEMPLATE", playstyle = "Template", fits = true } })
         -- Exactly what Options/Spells.lua's "add by id" writes: a registry entry the PACK has never
         -- heard of, keyed by its own slugged name rather than any pack key.
@@ -1756,7 +1692,7 @@ describe("Options/Rotation (the Rotation section)", function()
         -- key `lineRows` just carried through -- proving D80 handed the render layer a key it can
         -- actually look up, not a placeholder that happens to satisfy `#rows`.
         ns.Display.spellIcon = function(k) return k == key and "tex:registry" or nil end
-        local lineArgs = Rotation.group().args.TEMPLATE.args[forkKey].args.lines.args
+        local lineArgs = detailOf(forkKey).lines.args
         local rendered = lineArgs["l" .. #rows].name
         assert.is_truthy(rendered:find("|Ttex:registry:0|t", 1, true),
           "the rendered row must carry the registry spell's icon")
@@ -2292,7 +2228,7 @@ describe("Options/Rotation (the Rotation section)", function()
     end)
 
     -- R3 (D85): one vocabulary. The header sentence folds a condition through the SAME
-    -- `Conditions.describe` the read-only template page's row summary already uses -- proving the
+    -- `Conditions.describe` the read-only detail area's row summary already uses -- proving the
     -- two can never say the same rule in two different words.
     describe("the header sentence (D85)", function()
       it("matches the wording the read-only page already uses for the same condition", function()
@@ -3173,14 +3109,14 @@ describe("Options/Rotation (the Rotation section)", function()
           :find("DIVINE_STORM (3 HP)", 1, true))
       end)
 
-      -- It hangs off the stale-parent banner on the fork's own page (D36), which is the moment
-      -- ADR-0010 asks for a diff.
-      it("appears under the banner on the fork's page, and only once the parent has moved on",
+      -- It hangs off the stale-parent banner in the fork's own detail area (D36), which is the
+      -- moment ADR-0010 asks for a diff.
+      it("appears under the banner in the fork's detail area, and only once the parent has moved on",
         function()
           forkOf(nil)
           realUserBuilds.find(PACK, forkKey).entries[1].when = nil
           installWizard{ { build = "TEMPLATE", playstyle = "Template", checks = {}, fits = true } }
-          local stale = Rotation.group().args.TEMPLATE.args[forkKey].args.stale
+          local stale = detailOf(forkKey).stale
           assert.is_table(stale, "no stale-parent banner at all")
           local lines = table.concat({ stale.args.banner.name, stale.args.d1.name }, " | ")
           assert.is_truthy(lines:find("has been updated since you forked it", 1, true))
@@ -3188,7 +3124,7 @@ describe("Options/Rotation (the Rotation section)", function()
 
           -- Same fork, taken from the CURRENT template: no banner, and so no diff either.
           ns.db.global.userBuilds[forkKey].derivedAt = "2026-08-01"
-          assert.is_nil(Rotation.group().args.TEMPLATE.args[forkKey].args.stale)
+          assert.is_nil(detailOf(forkKey).stale)
         end)
 
       it("says nothing for a template, or a fork of nothing, or a parent that is gone", function()
@@ -3313,7 +3249,7 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal(1, repaints)
     end)
 
-    it("is what the Copy and edit button on a template page does, once named", function()
+    it("is what the Copy and edit button in a playstyle's detail area does, once named", function()
       install()
       local forked
       installUserBuilds{ fork = function(_, k, o) forked = { k, o.name }; return "USER_MINE" end }
@@ -4691,8 +4627,7 @@ describe("Options/Rotation (the Rotation section)", function()
 
     -- PD1-D2 (2026-09-08): clicking Open used to navigate to the template's own page (D32) --
     -- it now SELECTS the rotation for the shared detail area instead, and never navigates at all.
-    -- The tree page itself still exists this pass (PD2 deletes it later); the card body just no
-    -- longer opens it.
+    -- PD2 then deleted the page it used to open, so selecting is the only thing left to do.
     it("selects the rotation for the shared detail area, and never calls SelectGroup", function()
       installPack()
       installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
@@ -5151,43 +5086,42 @@ describe("Options/Rotation (the Rotation section)", function()
                          summary = "Highest ceiling.", fits = true } }
       end
 
-      it("still gives it a page in the tree, with its name muted", function()
+      it("mutes its name on its own detail header, and leaves a runnable one gold", function()
         installTwist()
-        local page = Rotation.group().args.PALADIN_TWIST
-        assert.is_table(page, "an unavailable playstyle is missing from the tree entirely")
-        assert.is_nil(page.disabled, "`disabled` hides the page, and the page is the explanation")
-        assert.equal(ns.Colors.wrap(ns.Colors.MUTED, "Seal twisting"), page.name)
+        local header = detailOf("PALADIN_TWIST").header.args
+        assert.equal(ns.Colors.wrap(ns.Colors.MUTED, "Seal twisting"), header.name.name)
         -- and the one that IS runnable is not muted
-        assert.equal("Exodin", Rotation.group().args.PALADIN_EXODIN.name)
+        assert.is_truthy(detailOf("PALADIN_EXODIN").header.args.name.name
+          :find(ns.Colors.wrap(ns.Colors.HIGHLIGHT, "Exodin"), 1, true))
       end)
 
-      it("mutes its card's TITLE on the root page too, so the tree and the list agree", function()
+      it("mutes its card's TITLE on the root page too, so card and detail agree", function()
         installTwist()
         local args = cards()
         assert.equal(ns.Colors.wrap(ns.Colors.MUTED, "Seal twisting"), args.card2.arg.title)
         assert.equal("Exodin", args.card1.arg.title)
       end)
 
-      it("says why on its own page, in words, above the summary", function()
+      it("says why in its own detail area, in words, above the summary", function()
         installTwist()
-        local about = Rotation.group().args.PALADIN_TWIST.args.about.args
-        assert.is_table(about.blocked, "the page never explains why the name is muted")
+        local about = detailOf("PALADIN_TWIST").about.args
+        assert.is_table(about.blocked, "nothing ever explains why the name is muted")
         assert.is_truthy(about.blocked.name:find("no rotation has shipped", 1, true))
         assert.is_true(about.blocked.order < about.summary.order)
-        assert.is_nil(Rotation.group().args.PALADIN_EXODIN.args.about.args.blocked)
+        assert.is_nil(detailOf("PALADIN_EXODIN").about.args.blocked)
       end)
 
       -- PB3: the label is plain "Use" on both rows -- the confirmed one carries the caveat only in
       -- `confirm`/`confirmText`, which is what distinguishes it from Exodin's un-confirmed button.
       it("keeps a Use button, worded and confirmed with that same reason", function()
         installTwist()
-        local use = Rotation.group().args.PALADIN_TWIST.args.header.args.use
+        local use = detailOf("PALADIN_TWIST").header.args.use
         assert.equal("Use", use.name)
         assert.is_nil(use.disabled)
         assert.is_true(use.confirm)
         assert.is_truthy(use.confirmText:find("no rotation has shipped", 1, true))
         assert.equal(use.confirmText, use.desc)
-        local exodinUse = Rotation.group().args.PALADIN_EXODIN.args.header.args.use
+        local exodinUse = detailOf("PALADIN_EXODIN").header.args.use
         assert.equal("Use", exodinUse.name)
         assert.is_nil(exodinUse.confirm)
       end)
@@ -5208,10 +5142,10 @@ describe("Options/Rotation (the Rotation section)", function()
 
       it("does not claim the character is ready for a rotation that does not exist", function()
         installTwist()
-        local needs = Rotation.group().args.PALADIN_TWIST.args.needs.args
+        local needs = detailOf("PALADIN_TWIST").needs.args
         assert.equal("Nothing extra needed from you.", needs.none.name)
         assert.equal("Nothing extra needed -- this rotation is ready to go.",
-                     Rotation.group().args.PALADIN_EXODIN.args.needs.args.none.name)
+                     detailOf("PALADIN_EXODIN").needs.args.none.name)
       end)
     end)
 
@@ -5306,7 +5240,7 @@ describe("Options/Rotation (the Rotation section)", function()
     -- reads, at their own call sites, so a future lowercase label fails the suite rather than
     -- waiting for a screenshot. Section headers and prose are deliberately NOT included -- "What
     -- this rotation needs" and "Rotation, top to bottom" stay sentence case.
-    it("labels every button on the Rotations pages in Title Case", function()
+    it("labels every button on the Rotations page in Title Case", function()
       installPack()
       ns.Display.activeBuild = function() return nil, nil end
       installUserBuilds{ list = function() return { "USER_MINE" } end,
@@ -5328,10 +5262,10 @@ describe("Options/Rotation (the Rotation section)", function()
       -- Edit, Edit), red throws work away once and globally (Delete); Rename neither commits nor
       -- destroys and keeps the default gold. The LABELS are unchanged, which is what these
       -- assertions still check underneath the escape.
-      local header = args.PALADIN_EXODIN.args.header.args
+      local header = detailOf("PALADIN_EXODIN").header.args
       assert.equal(ns.Colors.wrap(ns.Colors.BRAND, "Copy and Edit"), header.copy.name)
       assert.equal("Use", header.use.name)
-      local fork = args.USER_MINE.args.header.args
+      local fork = detailOf("USER_MINE").header.args
       assert.equal("Rename", fork.rename.name)
       assert.equal(ns.Colors.wrap(ns.Colors.BAD, "Delete"), fork.delete.name)
       assert.equal(ns.Colors.wrap(ns.Colors.BRAND, "Edit"), fork.edit.name)
@@ -5382,15 +5316,14 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal(3, args.noPack.order)
     end)
 
-    -- D33: the template's OWN page, a tree node -- header, explanation and the needs/lines blocks.
-    describe("the template's own page", function()
+    -- D33/PD2-D2: the selected playstyle's own content -- header, explanation and the needs/lines
+    -- blocks -- rendered in the shared detail area, which since PD2 is the only place it appears.
+    describe("the selected playstyle's detail area", function()
       it("has a header naming it, badged when it is the one running, with a Copy and Edit button",
         function()
           installPack()
           installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
-          local page = Rotation.group().args.PALADIN_EXODIN
-          assert.equal("Exodin", page.name)
-          local header = page.args.header.args
+          local header = detailOf("PALADIN_EXODIN").header.args
           assert.is_truthy(header.name.name:find("Exodin", 1, true))
           assert.is_truthy(header.name.name:find("in use", 1, true))
           assert.is_nil(header.use)
@@ -5413,7 +5346,7 @@ describe("Options/Rotation (the Rotation section)", function()
         installPack()
         ns.Display.activeBuild = function() return nil, nil end
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
-        local header = Rotation.group().args.PALADIN_EXODIN.args.header.args
+        local header = detailOf("PALADIN_EXODIN").header.args
         assert.equal("execute", header.use.type)
         assert.equal(1, header.name.order)
         assert.equal(2, header.use.order)
@@ -5430,7 +5363,7 @@ describe("Options/Rotation (the Rotation section)", function()
                      { key = "RUNE_X", ok = true, text = "Art of War engraved" },
                      { key = "RUNE_Y", ok = nil, text = "Rune Y: could not read your runes" } },
           runesToEngrave = { "Art of War (feet)" } } }
-        local needs = Rotation.group().args.PALADIN_EXODIN.args.needs
+        local needs = detailOf("PALADIN_EXODIN").needs
         assert.equal("What this rotation needs", needs.name)
         assert.is_truthy(needs.args.n1.name:find("Weapon: 2H", 1, true))
         -- D43: the three marks are the same indicator textures as the rotation lines below, one per
@@ -5469,7 +5402,7 @@ describe("Options/Rotation (the Rotation section)", function()
             { key = "PALADIN_T2_JUDGEMENT", ok = false, text = "Radiant Judgement: 2/4 pieces" },
             { key = "weapon", ok = false, text = "Weapon: 2H (you have 1H)" },
           } } }
-          local needs = Rotation.group().args.PALADIN_EXODIN.args.needs.args
+          local needs = detailOf("PALADIN_EXODIN").needs.args
           local green = "|TInterface\\COMMON\\Indicator-Green:12|t "
           local amber = "|TInterface\\COMMON\\Indicator-Yellow:12|t "
           assert.equal(green .. "|TInterface\\Icons\\Spell_Holy_SearingLight:0|t Holy Shock known",
@@ -5480,8 +5413,6 @@ describe("Options/Rotation (the Rotation section)", function()
           assert.equal(amber .. "Radiant Judgement: 2/4 pieces", needs.n3.name)
           assert.equal(amber .. "Weapon: 2H (you have 1H)", needs.n4.name)
           -- Resolved through the check's own key, which is what carries the spell/rune identity.
-          -- (`Rotation.group()` renders this row set twice -- the template's page and the shared
-          -- detail area both call `needsArgs` -- so the keys repeat; the first pass is the claim.)
           assert.equal("HOLY_SHOCK", asked[1])
           assert.equal("RUNE_ART_OF_WAR", asked[2])
           assert.equal("PALADIN_T2_JUDGEMENT", asked[3])
@@ -5495,26 +5426,26 @@ describe("Options/Rotation (the Rotation section)", function()
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = false,
           checks = { { key = "HOLY_SHOCK", ok = true, text = "Holy Shock known" } } } }
         assert.equal("|TInterface\\COMMON\\Indicator-Green:12|t Holy Shock known",
-          Rotation.group().args.PALADIN_EXODIN.args.needs.args.n1.name)
+          detailOf("PALADIN_EXODIN").needs.args.n1.name)
       end)
 
       it("says nothing extra is needed when every check passes", function()
         installPack()
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true, checks = {} } }
-        local needs = Rotation.group().args.PALADIN_EXODIN.args.needs
+        local needs = detailOf("PALADIN_EXODIN").needs
         assert.is_truthy(needs.args.none.name:find("ready to go", 1, true))
       end)
 
-      -- D71 (2026-09-07, follow-up): the template's own page is where the card's Open
-      -- button lands, so it must get the same split the card did -- date/difficulty together, the
-      -- source unambiguous and on its own line with a link button, never concatenated.
+      -- D71 (2026-09-07, follow-up): the detail area is where a card click lands, so
+      -- it must get the same split the card did -- date/difficulty together, the source
+      -- unambiguous and on its own line with a link button, never concatenated.
       it("explains itself with the catalog's summary and notes, a meta line, then a separate source line",
         function()
           installPack()
           installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true,
             summary = "Fast 2H.", notes = "Never holds Exorcism.", difficulty = "medium",
             updated = "2026-08-01", source = "https://www.wowhead.com/classic/guide/paladin" } }
-          local about = Rotation.group().args.PALADIN_EXODIN.args.about.args
+          local about = detailOf("PALADIN_EXODIN").about.args
           assert.equal("Fast 2H.", about.summary.name)
           assert.equal("Never holds Exorcism.", about.notes.name)
           -- D70: difficulty joins the meta line here too.
@@ -5539,21 +5470,21 @@ describe("Options/Rotation (the Rotation section)", function()
           assert.equal(5, about.link.order)
         end)
 
-      it("opens the source popup, in full, from the template page's own link button too", function()
+      it("opens the source popup, in full, from the detail area's own link button too", function()
         installPack()
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true,
           source = "https://www.wowhead.com/classic/guide/paladin" } }
-        local link = Rotation.group().args.PALADIN_EXODIN.args.about.args.link
+        local link = detailOf("PALADIN_EXODIN").about.args.link
         assert.equal("Shows the full web address in a box you can select and copy.", link.desc)
         link.func()
         assert.equal("ELMIRA_SHOW_SOURCE", _G.__lastStaticPopup.which)
         assert.equal("https://www.wowhead.com/classic/guide/paladin", _G.__lastStaticPopup.data.prefill)
       end)
 
-      it("has no source line or link button on the template page when there is no source", function()
+      it("has no source line or link button when the playstyle has no source", function()
         installPack()
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
-        local about = Rotation.group().args.PALADIN_EXODIN.args.about.args
+        local about = detailOf("PALADIN_EXODIN").about.args
         assert.is_nil(about.source)
         assert.is_nil(about.link)
       end)
@@ -5561,7 +5492,7 @@ describe("Options/Rotation (the Rotation section)", function()
       it("skips summary and notes entirely when the catalog entry has neither", function()
         installPack()
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true } }
-        local about = Rotation.group().args.PALADIN_EXODIN.args.about.args
+        local about = detailOf("PALADIN_EXODIN").about.args
         assert.is_nil(about.summary)
         assert.is_nil(about.notes)
         assert.equal(1, about.meta.order)
@@ -5574,7 +5505,7 @@ describe("Options/Rotation (the Rotation section)", function()
           assert.equal("PALADIN_EXODIN", key)
           return { { index = 1, mark = "firing", label = "Exorcism", summary = "always" } }
         end
-        local lines = Rotation.group().args.PALADIN_EXODIN.args.lines
+        local lines = detailOf("PALADIN_EXODIN").lines
         assert.equal("Rotation, top to bottom", lines.name)
         assert.is_truthy(lines.args.l1.name:find("Exorcism", 1, true))
         -- D43: the firing mark is the green texture dot, not the ASCII ">>".
@@ -5594,7 +5525,7 @@ describe("Options/Rotation (the Rotation section)", function()
           return { { index = 1, mark = "firing", label = "Exorcism", summary = "always",
                      spell = "EXORCISM" } }
         end
-        local lines = Rotation.group().args.PALADIN_EXODIN.args.lines
+        local lines = detailOf("PALADIN_EXODIN").lines
         assert.is_truthy(lines.args.l1.name:find("|Ttex:ex:0|t", 1, true))
       end)
 
@@ -5608,7 +5539,7 @@ describe("Options/Rotation (the Rotation section)", function()
           return { { index = 1, mark = "firing", label = "Mystery", summary = "always",
                      spell = "UNKNOWN" } }
         end
-        local lines = Rotation.group().args.PALADIN_EXODIN.args.lines
+        local lines = detailOf("PALADIN_EXODIN").lines
         -- Exactly one texture escape survives: the status mark itself (always present). A second
         -- one would be a broken/blank icon texture left behind by a bad resolution.
         local _, textureCount = lines.args.l1.name:gsub("|T", "")
@@ -5643,10 +5574,10 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal(1, #rows)
       assert.equal("My Exodin", rows[1].name)
       assert.equal("PALADIN_EXODIN", rows[1].derivedFrom)
-      local fork = Rotation.group().args.PALADIN_EXODIN.args.USER_MINE
-      assert.equal("My Exodin", fork.name)
-      assert.is_truthy(fork.args.header.args.from.name:find("Exodin", 1, true))
-      assert.equal("medium", fork.args.header.args.from.fontSize,
+      local header = detailOf("USER_MINE").header.args
+      assert.is_truthy(header.name.name:find("My Exodin", 1, true))
+      assert.is_truthy(header.from.name:find("Exodin", 1, true))
+      assert.equal("medium", header.from.fontSize,
         "the row is drawn two points smaller than the name beside it")
     end)
 
@@ -5664,16 +5595,15 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_false(rows[2].active)
     end)
 
-    it("badges the running fork's page and offers Use on the others", function()
+    it("badges the running fork in its detail header and offers Use on the others", function()
       installPack()
       ns.Display.activeBuild = function() return {}, "USER_MINE", nil end
       installUserBuilds{
         list = function() return { "USER_MINE", "USER_OTHER" } end,
         find = function(_, key) return {}, "fork", { name = key } end,
       }
-      local root = Rotation.group().args
-      local mine = root.USER_MINE.args.header.args
-      local other = root.USER_OTHER.args.header.args
+      local mine = detailOf("USER_MINE").header.args
+      local other = detailOf("USER_OTHER").header.args
       assert.is_truthy(mine.name.name:find("in use", 1, true))
       assert.is_nil(mine.use)
       assert.is_falsy(other.name.name:find("in use", 1, true))
@@ -5731,14 +5661,13 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.equal("PALADIN", gotClass)
     end)
 
-    it("gives a fork with no template its own page directly under Rotations, with Rename and Delete",
+    it("gives a fork with no template a detail area of its own, with Rename and Delete",
       function()
         installPack()
         installUserBuilds{ list = function() return { "USER_SCRATCH" } end,
                           find = function() return {}, "fork", { name = "Scratch" } end }
-        local page = Rotation.group().args.USER_SCRATCH
-        assert.equal("Scratch", page.name)
-        local header = page.args.header.args
+        local header = detailOf("USER_SCRATCH").header.args
+        assert.is_truthy(header.name.name:find("Scratch", 1, true))
         assert.is_truthy(header.from.name:find("yours", 1, true))
         assert.equal("execute", header.rename.type)
         assert.equal("Rename", header.rename.name)
@@ -5756,11 +5685,11 @@ describe("Options/Rotation (the Rotation section)", function()
       end)
 
     -- F1b (2026-09-07 bug round): the owner's per-fork override, over plain class-wide visibility.
-    it("gives a fork's page a private toggle, default off", function()
+    it("gives a fork's detail area a private toggle, default off", function()
       installPack()
       installUserBuilds{ list = function() return { "USER_SCRATCH" } end,
                         find = function() return {}, "fork", { name = "Scratch", private = false } end }
-      local toggle = Rotation.group().args.USER_SCRATCH.args.private
+      local toggle = detailOf("USER_SCRATCH").private
       assert.equal("toggle", toggle.type)
       assert.is_false(toggle.get())
       assert.is_truthy(toggle.desc:find("only this one can", 1, true))
@@ -5774,7 +5703,7 @@ describe("Options/Rotation (the Rotation section)", function()
         find = function() return {}, "fork", { name = "Scratch", private = true } end,
         setPrivate = function(key, v) calls[#calls + 1] = { key, v }; return true end,
       }
-      local toggle = Rotation.group().args.USER_SCRATCH.args.private
+      local toggle = detailOf("USER_SCRATCH").private
       assert.is_true(toggle.get())
       toggle.set(nil, false)
       assert.same({ { "USER_SCRATCH", false } }, calls)
@@ -5782,7 +5711,8 @@ describe("Options/Rotation (the Rotation section)", function()
 
     -- PE5-D2: in the HEADER row now, beside Rename and Delete -- it used to be the last thing on the
     -- page, below the whole rotation listing. The behaviour below is unchanged by the move.
-    it("gives a fork's page an Edit button that activates it and jumps to the Builder", function()
+    it("gives a fork's detail area an Edit button that activates it and jumps to the Builder",
+      function()
       installPack()
       ns.db = { profile = { activeBuild = false }, char = { setupDone = 0 } }
       installUserBuilds{
@@ -5791,10 +5721,10 @@ describe("Options/Rotation (the Rotation section)", function()
       }
       local selected
       ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
-      local edit = Rotation.group().args.USER_SCRATCH.args.header.args.edit
+      local edit = detailOf("USER_SCRATCH").header.args.edit
       assert.equal("Opens this rotation in the Builder.", edit.desc)
-      assert.is_nil(Rotation.group().args.USER_SCRATCH.args.edit,
-        "Edit is still stranded at the bottom of the page")
+      assert.is_nil(detailOf("USER_SCRATCH").edit,
+        "Edit is still stranded at the bottom of the panel")
       edit.func()
       assert.equal("USER_SCRATCH", ns.db.profile.activeBuild)
       assert.same({ "Elmira", "rotation", "builder" }, selected)
@@ -5812,7 +5742,7 @@ describe("Options/Rotation (the Rotation section)", function()
       ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
       local realUse = Rotation.use
       Rotation.use = function(...) used = used + 1; return realUse(...) end
-      Rotation.group().args.USER_SCRATCH.args.header.args.edit.func()
+      detailOf("USER_SCRATCH").header.args.edit.func()
       Rotation.use = realUse
       assert.equal(0, used, "Use ran again on the rotation already active")
       assert.same({ "Elmira", "rotation", "builder" }, selected)
@@ -5832,7 +5762,7 @@ describe("Options/Rotation (the Rotation section)", function()
       ns.Options = { dialog = { SelectGroup = function(_, ...) selected = { ... } end } }
       local said = {}
       ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
-      Rotation.group().args.USER_SCRATCH.args.header.args.edit.func()
+      detailOf("USER_SCRATCH").header.args.edit.func()
       assert.is_nil(selected, "Edit navigated to the Builder despite a failed activation")
       assert.equal(1, #said)
       assert.equal("warning", said[1][1])
@@ -5921,8 +5851,8 @@ describe("Options/Rotation (the Rotation section)", function()
     end)
   end)
 
-  -- PD1-D3: one shared detail area, below the card grid(s), reusing the SAME arg builders the tree's
-  -- own sub-pages call (`templateBodyArgs`/`forkBodyArgs`), never a second copy of them.
+  -- PD1-D3: one shared detail area, below the card grid(s). PD2-D2: `templateBodyArgs`/
+  -- `forkBodyArgs` are reached from here and nowhere else -- this is the only rendering there is.
   describe("the shared detail area (PD1-D3)", function()
     it("shows the selected template's own header/about/needs/lines", function()
       installPack()
@@ -5972,7 +5902,7 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal("toggle", detail.args.private.type)
         -- PE5-D2: the Edit button rides in the header row now, not at the foot of the panel.
         assert.equal("execute", detail.args.header.args.edit.type)
-        assert.is_nil(detail.args.about, "a fork's detail must not show the template page's own about block")
+        assert.is_nil(detail.args.about, "a fork's detail must not show a playstyle's about block")
       end)
 
     it("is absent entirely when nothing is selectable at all", function()
@@ -5992,9 +5922,9 @@ describe("Options/Rotation (the Rotation section)", function()
 
     -- PE1-D3 depends on this being an INVARIANT, not a coincidence: the scroll lookup finds the
     -- detail panel as the LAST child of the page's scroll content, so anything ordered below it
-    -- that is not a tree sub-page (a non-inline group, which AceConfigDialog renders as its own
-    -- page and never as content here) would silently break that lookup. This fails the suite
-    -- instead.
+    -- that is not a node of its own (a non-inline group, which AceConfigDialog renders as its own
+    -- page and never as content here -- Builder and Share, PD2-D1) would silently break that
+    -- lookup. This fails the suite instead.
     it("is the last element on the root page, which is what the scroll lookup depends on", function()
       installPack()
       installUserBuilds{ list = function() return { "USER_MINE" } end,

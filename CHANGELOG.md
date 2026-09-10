@@ -5,6 +5,9 @@
   how much of its buff is — the buff one drains the other way, so what is lit is what is left.
   Nothing is drawn when there is no cooldown or buff running, and `/elm debug textures` says so
   rather than leaving you looking at a texture with no sweep on it.
+- **Changed: the Rotations page no longer lists playstyles in the left menu.** Every playstyle and
+  every rotation of your own is a card on the Rotations page, and clicking one shows it in the panel
+  below the cards; the left menu keeps only Builder and Share under Rotations.
 - **Changed: the Glow, Peripheral cues and Cue sounds pages are gone.** Every cue an ability can
   make — its glow, its texture, its screen edge, its sounds, its announcement — is set on that
   ability, under Abilities. "Play ability sounds", the one switch that silences all of them at once,

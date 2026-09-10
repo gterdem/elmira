@@ -213,26 +213,6 @@ function Rotation.selected()
   return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
 end
 
--- The template a fork ultimately traces back to (D30's depth cap): a copy of a copy nests directly
--- under the ORIGINAL template rather than under the fork it happened to be copied from, so the tree
--- never grows more than two levels deep. Returns nil for a fork that traces to nothing (D35's "New
--- rotation") or to a cycle (a hand-edited SavedVariables file, never something the addon writes).
-function Rotation.rootParent(key)
-  local p = pack()
-  local seen, current = {}, key
-  for _ = 1, 32 do -- a bound, not a limit anyone should reach: only a cycle needs it
-    if not current or seen[current] then return nil end
-    seen[current] = true -- mutants: equivalent the 32-hop bound below (line 132) already answers
-    -- nil for a short cycle even without this table -- bouncing the same two keys 32 times still
-    -- exhausts the loop; this is only what makes THAT nil arrive after 2 hops instead of 32.
-    local _, origin, fork = findBuild(p, current)
-    if origin == "pack" then return current end
-    if not (fork and fork.derivedFrom) then return nil end
-    current = fork.derivedFrom
-  end
-  return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
-end
-
 -- D34. The one function that WRITES a selection: pins the build, records the catalog version this
 -- character has now seen (so the once-per-version re-offer, Wizard.shouldOffer, does not immediately
 -- fire again), refreshes the display, and -- unlike the old wizard's plain print -- announces the
@@ -2553,15 +2533,13 @@ local function shareArgs()
   }
 end
 
--- ---------------------------------------------------------------- the tree pages (D30-D36)
+-- ---------------------------------------------------------------- the root page (D30-D36, PD1/PD2)
 --
--- The whole left-hand nav is ONE AceConfig tree (AceConfigDialog-3.0.lua:1721-1751: a group whose
--- `childGroups` is "tree" and whose parent is ALSO a tree, which the addon's own root already is,
--- gets no widget of its own -- it becomes a NODE, and `BuildGroups`/`BuildSubGroups`
--- (AceConfigDialog-3.0.lua:1005-1071) recurse into any child group that does not say
--- `childGroups = "tab"`, which is the default). So the fork groups below live INSIDE their parent
--- template's own `.args`, one Lua table nested inside another, and that nesting IS the tree the
--- player sees -- no separate widget-building code of our own is needed for it.
+-- PD2 (2026-09-10): a playstyle's or a rotation's content is rendered exactly ONCE, in the shared
+-- detail area under the cards (`detailArgs`). The per-template tree pages, and the fork pages that
+-- used to nest inside them, are deleted -- so the only nodes the left-hand menu shows under
+-- Rotations are Builder and Share, and everything from here to `rotationTreeArgs` builds a piece of
+-- that one root page.
 
 -- "wowhead.com" from a full guide URL, for the source line -- the reader does not need the whole
 -- path, only which site to trust.
@@ -2589,9 +2567,9 @@ local function nameWithBadge(text, active)
 end
 
 -- D30/D48. A playstyle the catalog lists but the pack cannot run -- no build has shipped under that
--- key yet -- is SHOWN, muted, wherever its name appears, and its page says why in words.
--- `disabled = true` on the group would have been the obvious flag and is exactly the wrong one: it
--- hides the page, and the page is the answer to the question the muted name asks.
+-- key yet -- is SHOWN, muted, wherever its name appears, and its detail area says why in words.
+-- `disabled = true` on the card would have been the obvious flag and is exactly the wrong one: it
+-- takes away the click, and the detail is the answer to the question the muted name asks.
 local function mutedIfUnavailable(row, text)
   if row.available then return text end
   return ns.Colors.wrap(ns.Colors.MUTED, text)
@@ -3003,14 +2981,14 @@ end
 
 -- D33's explanation: the catalog's own summary/notes, a muted difficulty/updated line, then the
 -- source on its own line with a Copy link button -- the SAME split `templateCard` got (D71,
--- 2026-09-07): this page is the one the card's own body click (PA4) lands on, so leaving it
+-- 2026-09-07): the detail area is where the card's own body click (PA4) lands, so leaving it
 -- concatenated ("updated 2026-08-30 · wowhead", read as if the WOWHEAD PAGE were updated that day)
 -- would mean the fix only half-landed and the owner hits the other half on the very next click.
 -- D70's `difficulty: <word>` phrasing stays here as PLAIN TEXT deliberately -- PA6 (2026-09-08)
--- turns the CARD's own difficulty into pips instead, but this page has room for the word, and
--- rewriting it to match the card's pips is a separate, not-yet-decided owner call for the sub-pages
--- this pass leaves alone. Recommended/experimental are catalog-sort hints already reflected by this
--- playstyle's position in the tree, not new information a detail page needs to restate.
+-- turns the CARD's own difficulty into pips instead, but the detail area has room for the word, and
+-- rewriting it to match the card's pips is a separate, not-yet-decided owner call.
+-- Recommended/experimental are catalog-sort hints already reflected by this playstyle's position
+-- among the cards, not new information the detail area needs to restate.
 local function templateExplainArgs(row, order)
   local a, args = 0, {}
   local blocked = unavailableReason(row)
@@ -3209,17 +3187,17 @@ local function forkHeaderArgs(row)
   return { type = "group", inline = true, order = 1, name = "", args = args }
 end
 
--- PD1-D3: a fork's own content -- header, private toggle, the stale-parent diff, its lines and the
--- Edit button -- shared between its own tree page (`forkPageGroup`, below) and the shared detail area
--- on the root page (`detailArgs`), which reuses this rather than growing a second copy of it.
+-- PD1-D3/PD2-D2: a fork's own content -- header, private toggle, the stale-parent diff, its lines
+-- and the Edit button. `detailArgs` on the root page is its one caller: since PD2 the shared detail
+-- area is the only place a fork's content is drawn at all.
 local function forkBodyArgs(row)
   local args = {}
   args.header = forkHeaderArgs(row)
 
   -- F1b (2026-09-07 bug round, owner's decision over plain class-wide): default off, so every
-  -- character of the class sees this fork until someone here says otherwise -- and only reaching
-  -- this page at all already means the viewer is allowed to see it (a fork private to someone else
-  -- never appears in `forkRows`, so its page never exists for anyone but its owner).
+  -- character of the class sees this fork until someone here says otherwise -- and seeing this row
+  -- at all already means the viewer is allowed to (a fork private to someone else never appears in
+  -- `forkRows`, so it has neither a card nor a detail area for anyone but its owner).
   args.private = {
     type = "toggle", order = 1.5, width = "full",
     name = L["Only this character can see this rotation"],
@@ -3251,23 +3229,15 @@ local function forkBodyArgs(row)
 
   args.lines = { type = "group", inline = true, order = 3, name = L["Rotation, top to bottom"],
                  args = lineRowsArgs(row.build) }
-  -- PE5-D2: `Edit` is NOT here any more -- it is in `forkHeaderArgs` at the top of the page, where
+  -- PE5-D2: `Edit` is NOT here any more -- it is in `forkHeaderArgs` at the top of the block, where
   -- it does not need the whole rotation listing scrolled past first. Its behaviour (D44's
   -- activate-then-navigate, and stop with a reason when activation fails) moved with it unchanged.
   return args
 end
 
--- D36: the fork itself as a tree node/page. `order` is a caller-assigned position so a template's
--- own forks sort after that template's other content and a no-template fork sorts after every
--- template on the root page (D30's ordering rule).
-local function forkPageGroup(row, order)
-  return { type = "group", order = order, name = row.name, args = forkBodyArgs(row) }
-end
-
--- PD1-D3: a template's own content -- header, explanation, needs and lines -- shared between its own
--- tree page (`templatePageGroup`, its forks nested inside) and the shared detail area on the root
--- page (`detailArgs`, which nests no forks of its own -- the root page already has its own "Your
--- rotations" cards for those).
+-- PD1-D3/PD2-D2: a template's own content -- header, explanation, needs and lines. `detailArgs` on
+-- the root page is its one caller; the forks are not nested in here, because the root page already
+-- lists them as its own "Your rotations" cards.
 local function templateBodyArgs(row)
   local args = {}
   args.header = templateHeaderArgs(row)
@@ -3279,29 +3249,18 @@ local function templateBodyArgs(row)
   return args
 end
 
--- D33: the template itself as a tree node/page, with its own forks nested inside `args` -- which is
--- what makes them a nested tree node rather than a second thing on this page (see the header note
--- above this section).
-local function templatePageGroup(row, order, forksHere)
-  local args = templateBodyArgs(row)
-  for i, forkRow in ipairs(forksHere) do
-    args[forkRow.build] = forkPageGroup(forkRow, 1000 + i)
-  end
-  return { type = "group", order = order, name = templateLabel(row), args = args }
-end
-
 -- PD1-D3: the shared detail area -- whichever card was last clicked (`Rotation.select`), the active
--- rotation, or the first template (`Rotation.selected()`'s own fallback order). REUSES
--- `templateBodyArgs`/`forkBodyArgs`, the SAME builders the tree's own sub-pages call above, rather
--- than a second copy of them. Returns nil when `key` names neither a template nor a fork row -- in
--- particular when `key` is nil (`Rotation.selected()` itself answered nil, a class with no shipped
--- pack and no forks), since a row's own `build` is never nil, so neither loop below ever matches
--- one -- letting the caller omit `args.detail` entirely rather than render an empty box.
+-- rotation, or the first template (`Rotation.selected()`'s own fallback order). PD2-D2: it is the
+-- ONLY caller of `templateBodyArgs`/`forkBodyArgs`, and so the only rendering of either -- delete a
+-- row from one of those builders and it leaves the addon. Returns nil when `key` names neither a
+-- template nor a fork row -- in particular when `key` is nil (`Rotation.selected()` itself answered
+-- nil, a class with no shipped pack and no forks), since a row's own `build` is never nil, so
+-- neither loop below ever matches one -- letting the caller omit `args.detail` entirely rather than
+-- render an empty box.
 --
 -- PE1-D4: the BOX is titled `Details`, not the build's name. `templateBodyArgs`/`forkBodyArgs`
--- already open with a header carrying that name and its "· in use" badge (the header exists because
--- the same builders feed the tree's own sub-pages, where there is no box title at all), so titling
--- the box with it printed the identical string twice, one line under the other. A stable landmark
+-- already open with a header carrying that name and its "· in use" badge, so titling the box with
+-- it printed the identical string twice, one line under the other. A stable landmark
 -- is also the better target for D3's scroll: the thing that appears at the screen edge should be
 -- something a player learns to look for, not a name that changes with every card they click.
 local function detailArgs(key)
@@ -3318,9 +3277,9 @@ local function detailArgs(key)
   return nil -- mutants: equivalent Lua returns nil implicitly at the end of a function
 end
 
--- D30: the tree's own args -- intro/detection/New rotation, the root page's inline cards, then the
--- navigable pages (templates in catalog order, their forks nested inside them, then no-template
--- forks, then Builder and Share last).
+-- D30/PD2-D1: the section's own args -- intro/detection/New rotation, the cards, the shared detail
+-- area, and then the only two nodes the left-hand menu still shows under Rotations: Builder and
+-- Share. No playstyle and no rotation of your own is a menu entry any more.
 local function rotationTreeArgs()
   local args, a = {}, 0
   local detection = ns.Wizard and ns.Wizard.detection and ns.Wizard.detection()
@@ -3343,12 +3302,6 @@ local function rotationTreeArgs()
     func = function() Rotation.openNewRotationPopup() end }
 
   local forkRowsAll = Rotation.forkRows()
-  local byParent = {}
-  for _, forkRow in ipairs(forkRowsAll) do
-    local parent = Rotation.rootParent(forkRow.build) or ""
-    byParent[parent] = byParent[parent] or {}
-    byParent[parent][#byParent[parent] + 1] = forkRow
-  end
   -- PD1-D1/D3/D4: the shared detail area and the "Your rotations" cards both need to know which
   -- card is currently selected -- computed once here, rather than once per card, though
   -- `Rotation.selected()` is a standalone public function any future caller may also reach for on
@@ -3409,14 +3362,6 @@ local function rotationTreeArgs()
     a = a + 1
     detail.order = a
     args.detail = detail
-  end
-
-  for i, row in ipairs(rows) do
-    args[row.build] = templatePageGroup(row, 1000 + i, byParent[row.build] or {})
-  end
-  local afterTemplates = 1000 + #rows
-  for i, row in ipairs(byParent[""] or {}) do
-    args[row.build] = forkPageGroup(row, afterTemplates + i)
   end
 
   args.builder = { type = "group", order = 9000, name = L["Builder"], args = builderArgs() }

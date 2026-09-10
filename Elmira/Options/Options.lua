@@ -1682,25 +1682,16 @@ local function installTreeHook(dialog)
       if path and path[1] == "spells" and path[2] == "list" then
         return installAbilityTree(tree)
       end
+      -- The outer tree gets ONE change and no more: its tooltip silenced. PD2 deleted the block
+      -- that used to force the clicked node open as well -- it was written for the template/fork
+      -- sub-pages, which are gone, and it never opened anything anyway: it wrote
+      -- `GetStatusTable(app, {}).groups[uniquevalue]`, one level above the map `BuildLevel` reads
+      -- (`tree.status.groups`, AceGUIContainer-TreeGroup.lua:370-385, where `tree.status` IS that
+      -- `.groups` table -- AceConfigDialog-3.0.lua:1733-1738). Expansion is AceConfigDialog's to
+      -- own: `SelectGroup` opens the nodes on the path it drives (:471-474), and the "+" arrow
+      -- opens the rest. This widget is POOLED across every Ace3 addon on the client, so a key we
+      -- invent in its status table travels to the next addon that borrows it.
       if tree.SetCallback then tree:SetCallback("OnButtonEnter", noTooltip) end
-      -- Clicking a row only SELECTS it (AceGUIContainer-TreeGroup.lua's `Button_OnClick`, ~181-191);
-      -- only the tiny "+" or a double-click flips `status.groups[value]` open (`Expand_OnClick` /
-      -- `Button_OnDoubleClick`, ~173-198) -- so a template with forks nested under it looked
-      -- unclicked ("menu click never activates") until that arrow was found and clicked separately.
-      -- Marking the just-selected node's OWN uniquevalue open is the same write `SelectGroup` already
-      -- makes for a path it drives itself (AceConfigDialog-3.0.lua:471-474 `treestatus.groups
-      -- [treevalue] = true`); this is the other path there is -- an ordinary click.
-      if path and #path > 0 and tree.RefreshTree then
-        local status = self.GetStatusTable and self:GetStatusTable(appName, {})
-        -- `tree:SetStatusTable` (AceConfigDialog-3.0.lua:1738) always runs before any node can be
-        -- clicked in the real client, which is what leaves `.groups` already there; initialised
-        -- here too rather than assumed, so this hook cannot depend on running after that one.
-        if status then
-          status.groups = status.groups or {}
-          status.groups[table.concat(path, "\001")] = true
-        end
-        tree:RefreshTree()
-      end
     end)
   end
 end
