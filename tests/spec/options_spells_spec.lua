@@ -183,13 +183,14 @@ describe("Options/Spells (the Abilities page, AB1)", function()
 
     local function addArgs() return listArgs().add.args end
 
-    -- The three inline groups this replaces could not share a row: an AceConfig panel is always the
-    -- full width of the page. Controls CAN, through relWidths summing to exactly 1.0 -- which is
-    -- the only shape AceGUI's Flow scales (AceGUI-3.0.lua:709-711).
-    it("puts all four controls on one row, with relWidths summing to 1", function()
+    -- The inline groups this replaces could not share a row: an AceConfig panel is always the full
+    -- width of the page. Controls CAN, through relWidths summing to exactly 1.0 -- which is the
+    -- only shape AceGUI's Flow scales (AceGUI-3.0.lua:709-711). AT5-D3 adds the icon slot as a
+    -- fifth control rather than growing the group into a second row.
+    it("puts all five controls on one row, with relWidths summing to 1", function()
       local args = addArgs()
       local total = 0
-      for _, key in ipairs({ "pick", "addPick", "typed", "addTyped" }) do
+      for _, key in ipairs({ "pick", "addPick", "icon", "typed", "addTyped" }) do
         assert.equal("relative", args[key].width, key .. " does not share the row")
         total = total + args[key].relWidth
       end
@@ -198,8 +199,9 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("Spell ID or name", args.typed.name)
       assert.equal("Add", args.addPick.name)
       assert.equal("Add", args.addTyped.name)
-      assert.same({ 1, 2, 3, 4, 5 }, { args.pick.order, args.addPick.order, args.typed.order,
-                                       args.addTyped.order, args.preview.order })
+      assert.equal("description", args.icon.type)
+      assert.same({ 1, 2, 3, 4, 5 }, { args.pick.order, args.addPick.order, args.icon.order,
+                                       args.typed.order, args.addTyped.order })
     end)
 
     it("offers every spellbook entry as a choice, with its icon", function()
@@ -272,28 +274,49 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.same({}, { SpellsPage.resolveTyped("Exorcism") })
     end)
 
-    it("previews what the box resolves to, before storing anything", function()
+    -- AT5-D3: WeakAuras' own trigger-field shape. The first Enter only resolves -- the box is
+    -- rewritten to "<id> (<name>)" and the icon slot to its left shows the spell's icon -- nothing
+    -- is stored yet.
+    it("resolves what is typed on Enter, shows its icon, and stores nothing yet", function()
+      ns.Display.spellIconByID = function(id)
+        return id == 415073 and "Interface\\Icons\\Exo" or nil
+      end
       local args = addArgs()
-      assert.equal("", args.preview.name())
+      assert.equal("", args.icon.image(), "empty until something resolves")
       args.typed.set(nil, "415073")
-      assert.equal("Resolves to: Exorcism", args.preview.name())
-      args.typed.set(nil, "Exorcism")
-      assert.equal("Resolves to: Exorcism", args.preview.name())
-      args.typed.set(nil, "1")
-      assert.equal("", args.preview.name(), "a live 'not found' while typing is noise")
-      assert.same({}, ns.db.char.spells, "a preview must not store")
+      assert.equal("415073 (Exorcism)", args.typed.get())
+      assert.equal("Interface\\Icons\\Exo", args.icon.image())
+      assert.same({}, ns.db.char.spells, "a resolve must not store")
     end)
 
-    it("registers an id on Add, navigates, and clears the box", function()
+    it("resolves a name the same way, by the id it found", function()
+      local args = addArgs()
+      args.typed.set(nil, "Exorcism")
+      assert.equal("415073 (Exorcism)", args.typed.get())
+    end)
+
+    -- Junk clears the box AND the icon, in silence: no "Not found" message any more.
+    it("clears the box and the icon on junk, without a message", function()
+      ns.Display.spellIconByID = function() return "Interface\\Icons\\Exo" end
+      local args = addArgs()
+      args.typed.set(nil, "1")
+      assert.equal("", args.typed.get())
+      assert.equal("", args.icon.image())
+      assert.is_nil(args.preview, "the 'Resolves to'/'Not found' line is gone")
+    end)
+
+    it("registers a resolved id on Add, navigates, and clears the box and icon", function()
+      ns.Display.spellIconByID = function() return "Interface\\Icons\\Exo" end
       local args = addArgs()
       args.typed.set(nil, "415073")
       args.addTyped.func()
       assert.equal("id", ns.db.char.spells.EXORCISM.source)
       assert.same({ "Elmira", "spells", "list", "EXORCISM" }, ns.selected)
       assert.equal("", args.typed.get())
+      assert.equal("", args.icon.image())
     end)
 
-    it("registers a name on Add, and records that it came from a name", function()
+    it("registers a resolved name on Add, and records that it came from a name", function()
       local args = addArgs()
       args.typed.set(nil, "Exorcism")
       args.addTyped.func()
@@ -301,49 +324,25 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.same({ "Elmira", "spells", "list", "EXORCISM" }, ns.selected)
     end)
 
-    -- D95 (2026-09-07 in-game round): the box clears after EVERY attempt, and the refusal message
-    -- is what stays visible -- a "Not found" left sitting in the box read as if nothing happened.
-    it("refuses an unresolved id IN RED, clears the box, stores nothing", function()
+    -- The whole point of the WeakAuras shape: a second Enter over the SAME, already-resolved text
+    -- is the trigger field's own confirm, exactly what the Add button does.
+    it("registers on a second Enter over an unchanged, resolved box", function()
       local args = addArgs()
-      args.typed.set(nil, "1")
-      args.addTyped.func()
+      args.typed.set(nil, "415073")
+      args.typed.set(nil, args.typed.get())
+      assert.equal("id", ns.db.char.spells.EXORCISM.source)
+      assert.same({ "Elmira", "spells", "list", "EXORCISM" }, ns.selected)
+      assert.equal("", args.typed.get())
+    end)
+
+    it("does nothing when Add is pressed with nothing resolved", function()
+      addArgs().addTyped.func()
       assert.same({}, ns.db.char.spells)
       assert.is_nil(ns.selected)
-      assert.equal("", args.typed.get())
-      local shown = args.preview.name()
-      assert.is_truthy(shown:find("Not found.", 1, true))
-      assert.is_truthy(shown:find("|cffE5544B", 1, true), "the refusal must render in red (Colors.BAD)")
     end)
 
-    -- A name gets the longer refusal: it is the one that needs to point at the other half of the box.
-    it("refuses an unseen NAME with the sentence that names the alternative", function()
-      local args = addArgs()
-      args.typed.set(nil, "Something Unseen")
-      args.addTyped.func()
-      assert.same({}, ns.db.char.spells)
-      assert.is_truthy(args.preview.name():find(
-        "Not found: this character has not seen it. Try the ID.", 1, true))
+    it("still explains that only a name this character has learned or seen resolves", function()
       assert.is_truthy(addArgs().typed.desc:find("learned or seen", 1, true))
-    end)
-
-    it("clears a stale refusal as soon as the box is edited again", function()
-      local args = addArgs()
-      args.typed.set(nil, "Something Unseen")
-      args.addTyped.func()
-      assert.is_truthy(args.preview.name():find("Not found", 1, true))
-      args.typed.set(nil, "Exorcism")
-      assert.equal("Resolves to: Exorcism", args.preview.name())
-    end)
-
-    -- ...and a SUCCESSFUL add clears it too. The box is empty afterwards, so a refusal left behind
-    -- would sit under an empty field claiming the add had failed.
-    it("clears a stale refusal when the next attempt succeeds", function()
-      local args = addArgs()
-      args.typed.set(nil, "Something Unseen")
-      args.addTyped.func()
-      args.typed.set(nil, "415073")
-      args.addTyped.func()
-      assert.equal("", args.preview.name())
     end)
 
     it("selects an already-registered spell instead of duplicating it", function()
@@ -1320,12 +1319,13 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         assert.equal(9, tab("EXORCISM", "sound").expiringSeconds.get())
       end)
 
-    -- AB4-D1, the owner's "growing textures".
-    it("offers the three fills between the appearance controls and the moments", function()
+    -- AT5-D1/D2: "Fill with" (the radial swipe) becomes "Fade with" (an opacity), and moves BELOW
+    -- the five moments -- order 16 sits after `expiringSeconds` (14.5), the last of them.
+    it("offers the three fades below the five moments", function()
       local row = tab("EXORCISM", "texture").fill
       assert.equal("select", row.type)
-      assert.equal(9.5, row.order, "the fill is how it is drawn, not another moment to appear at")
-      assert.equal("Fill with", row.name)
+      assert.equal(16, row.order, "below the five moments, not between them and the appearance controls")
+      assert.equal("Fade with", row.name)
       assert.same({ "none", "cooldown", "buff" }, row.sorting)
       assert.equal("Nothing", row.values.none)
       assert.equal("How much cooldown is left", row.values.cooldown)
@@ -1336,14 +1336,13 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("cooldown", tab("EXORCISM", "texture").fill.get())
     end)
 
-    -- The threshold for "about to run out" is right below on THIS tab now (AT1-D1), not the General
-    -- tab, and the tooltip has to say so or the player goes looking for it in the wrong place.
-    it("sends the player to the threshold right below for the about-to-run-out moment", function()
+    -- AT5-D2's tooltip, verbatim: which pairing makes sense, and why an instant moment does not.
+    it("names the pairs that make sense in the tooltip", function()
       local row = tab("EXORCISM", "texture").fill
-      assert.is_truthy(row.desc:find("no cooldown or buff running", 1, true))
-      -- ...and which way round each of the two goes, because the buff one is the surprising one:
-      -- what is LIT is what is left, so the shape shrinks as the buff runs out.
-      assert.is_truthy(row.desc:find("drains the other way", 1, true))
+      assert.equal(
+        "Buff remaining pairs with \"when its buff appears\"; Cooldown recovering pairs with "
+          .. "\"when it is suggested\". An instant moment flashes for 1.5 s, too short to see a fade.",
+        row.desc)
     end)
 
     -- The page has to build before Display/Textures exists (the panel can be opened at any time,

@@ -105,8 +105,12 @@ end
 -- ---------------------------------------------------------------- AB1-D2: one add panel
 
 -- AceConfig `select` values are strings; the id round-trips through `tonumber`. One declaration:
--- the three are one idea -- what the add panel is currently holding.
-local pickSpellbookId, typedText, typedError = nil, "", nil -- mutants: equivalent globals; luacheck catches it
+-- what the add panel is currently holding -- `pickSpellbookId` for the left half, and the
+-- WeakAuras-style trigger box's own three (AT5-D3): what is TYPED and what it last RESOLVED to,
+-- kept apart so a second Enter on an unchanged, already-resolved box reads as "register it" rather
+-- than "resolve it again".
+local pickSpellbookId, typedText, resolvedID, resolvedName, resolvedSource =
+  nil, "", nil, nil, nil -- mutants: equivalent globals; luacheck catches it
 
 -- I1a: item rows are 17px (`AceGUIWidget-DropDown-Items.lua:161`); 14 is the ceiling that still
 -- sits inside the row against `GameFontNormalSmall`.
@@ -155,13 +159,27 @@ function SpellsPage.resolveTyped(text)
   return id, (A.spellNameByID and A.spellNameByID(id)) or typed, "name"
 end
 
+-- AT5-D3, and the one write path for both ways of confirming a resolved box (the Add button and a
+-- second Enter): stores the resolution the box is already showing, never re-parses the display
+-- text, so "20930 (Holy Shock)" itself is never asked to resolve as a name.
+local function clearTyped()
+  typedText, resolvedID, resolvedName, resolvedSource = "", nil, nil, nil
+end
+
+local function addResolvedTyped()
+  if not (resolvedID and resolvedName) then return end -- mutants: equivalent nothing to add yet
+  local key = ns.Spells.add(store(), { id = resolvedID, name = resolvedName, source = resolvedSource })
+  clearTyped()
+  if key then navigateToSpell(key) end
+end
+
 local function addArgs(order)
   local values, sorting = spellbookChoices()
   return {
     type = "group", inline = true, order = order, name = L["Add an ability"],
     args = {
-      -- The four controls share ONE row: `width = "relative"` with relWidths summing to exactly 1.0
-      -- is the only shape AceGUI's Flow scales (AceGUI-3.0.lua:709-711). Panels cannot share a row;
+      -- Five controls share ONE row: `width = "relative"` with relWidths summing to exactly 1.0 is
+      -- the only shape AceGUI's Flow scales (AceGUI-3.0.lua:709-711). Panels cannot share a row;
       -- controls can, which is why this is one inline group rather than the three it replaces.
       pick = {
         type = "select", order = 1, width = "relative", relWidth = 0.35,
@@ -183,41 +201,43 @@ local function addArgs(order)
           if key then pickSpellbookId = nil; navigateToSpell(key) end
         end,
       },
+      -- AT5-D3: WeakAuras' own trigger-field shape. An icon slot to the LEFT of the box, empty
+      -- until something resolves -- an AceConfig `description` takes `image` for exactly this.
+      icon = {
+        type = "description", order = 3, width = "relative", relWidth = 0.08, name = "",
+        image = function()
+          if not resolvedID then return "" end
+          return (ns.Display and ns.Display.spellIconByID and ns.Display.spellIconByID(resolvedID)) or ""
+        end,
+        imageWidth = 20, imageHeight = 20,
+      },
       typed = {
-        type = "input", order = 3, width = "relative", relWidth = 0.35, name = L["Spell ID or name"],
+        type = "input", order = 4, width = "relative", relWidth = 0.27, name = L["Spell ID or name"],
         desc = L["Only resolves a name this character has learned or seen; anything else is refused, not stored."],
         get = function() return typedText end,
-        set = function(_, v) typedText = v or ""; typedError = nil end,
+        -- An `input`'s `set` fires on Enter (AT5-D3). The FIRST Enter only resolves: the box is
+        -- rewritten to "<id> (<name>)" and the icon appears, nothing is added yet. Junk clears the
+        -- box and the icon in silence -- no "Not found" message any more. A SECOND Enter, on that
+        -- same resolved text unchanged, is the trigger field's own confirm and does what Add does.
+        set = function(_, v)
+          v = v or ""
+          if resolvedID and v == typedText then
+            addResolvedTyped()
+            return
+          end
+          local id, name, source = SpellsPage.resolveTyped(v)
+          if id and name then
+            resolvedID, resolvedName, resolvedSource = id, name, source
+            typedText = string.format("%d (%s)", id, name)
+          else
+            clearTyped()
+          end
+        end,
       },
       addTyped = {
-        type = "execute", order = 4, width = "relative", relWidth = 0.15, name = L["Add"],
-        func = function()
-          local typed = typedText
-          local id, name, source = SpellsPage.resolveTyped(typed)
-          -- D95 (2026-09-07 in-game round): the box clears after EVERY attempt, kept or refused --
-          -- a "Not found" left sitting in the box read as if nothing had happened. The refusal
-          -- message is what stays visible, not the typed text.
-          typedText = ""
-          if not (id and name) then
-            typedError = (source == "name") and L["Not found: this character has not seen it. Try the ID."]
-              or L["Not found."]
-            return -- mutants: equivalent falling through calls Spells.add with a nil id, which refuses on its own
-          end
-          -- No `typedError = nil` here: the only way to reach a resolvable value is to have typed
-          -- into the box, and the input's own `set` clears the refusal. A second clear would be a
-          -- line no path can reach, which the mutation gate is what caught.
-          local key = ns.Spells.add(store(), { id = id, name = name, source = source })
-          if key then navigateToSpell(key) end
-        end,
-      },
-      preview = {
-        type = "description", order = 5, width = "full", fontSize = "medium",
-        name = function()
-          if typedError then return ns.Colors.wrap(ns.Colors.BAD, typedError) end
-          local _, name = SpellsPage.resolveTyped(typedText)
-          if name then return string.format(L["Resolves to: %s"], name) end
-          return ""
-        end,
+        type = "execute", order = 5, width = "relative", relWidth = 0.15, name = L["Add"],
+        desc = L["Registers the resolved spell, or selects it if it is already registered."],
+        func = function() addResolvedTyped() end,
       },
     },
   }
@@ -546,7 +566,7 @@ end
 -- that is off, one file path with a Choose… button beside it.
 local PLACE_LABELS = { row = "With the other indicators", centre = "Centre of the screen",
                        custom = "Somewhere I choose" }
--- AB4-D1. Worded as what the swipe MEASURES, not as what it looks like: "radial progress" tells a
+-- AT5-D1. Worded as what the fade MEASURES, not as what it looks like: "radial progress" tells a
 -- player nothing about which of their two timers they are about to see.
 local FILL_LABELS = { none = "Nothing", cooldown = "How much cooldown is left",
                       buff = "How much of its buff is left" }
@@ -686,19 +706,6 @@ local function textureArgs(key)
     get = function() return effective(key, "texture").alpha or 1 end,
     set = function(_, v) put(key, "texture", "alpha", v) end,
   }
-  -- AB4-D1. Between the appearance controls and the moments, because that is what it is: how the
-  -- texture is drawn while it is up, not another moment for it to appear at.
-  args.fill = {
-    type = "select", order = 9.5, name = L["Fill with"],
-    values = labelled(textureList("FILLS"), FILL_LABELS),
-    sorting = textureList("FILLS"),
-    desc = L["Sweeps the texture round like a cooldown while it is on screen. \"How much of its "
-          .. "buff is left\" drains the other way, so what is lit is what is left. Nothing is "
-          .. "drawn when there is no cooldown or buff running -- and the moment this ability "
-          .. "counts as about to run out is the one right below."],
-    get = function() return (ns.Textures and ns.Textures.fillOf(effective(key, "texture"))) or "none" end,
-    set = function(_, v) put(key, "texture", "fill", v) end,
-  }
   -- All five of Core/Track's events, unlike the screen edge's two (AB3-D1). `suggested` and
   -- `active` SHOW the texture while the state holds; the other three flash it for a second and a
   -- half, which is why the three ADR-0009 keeps off a full-screen flash are fine here.
@@ -717,6 +724,20 @@ local function textureArgs(key)
   args.expiringSeconds = expiringArgs(key, 14.5, function()
     return effective(key, "texture").expiring ~= true
   end)
+  -- AT5-D1/D2 (owner, seeing the swipe draw a PowerAuras-style dark box: "not clockwise or
+  -- anything -- start being visible or getting invisible"). Below the five moments now, because
+  -- what it pairs with only makes sense once you have read them: an opacity that follows a STATE
+  -- (`suggested`/`active`) is visible long enough to fade, an INSTANT flash is not.
+  args.fill = {
+    type = "select", order = 16, name = L["Fade with"],
+    values = labelled(textureList("FILLS"), FILL_LABELS),
+    sorting = textureList("FILLS"),
+    desc = L["Buff remaining pairs with \"when its buff appears\"; Cooldown recovering pairs with "
+          .. "\"when it is suggested\". An instant moment flashes for 1.5 s, too short to see a "
+          .. "fade."],
+    get = function() return (ns.Textures and ns.Textures.fillOf(effective(key, "texture"))) or "none" end,
+    set = function(_, v) put(key, "texture", "fill", v) end,
+  }
   -- AB3-D2, and never inherited: dragging one ability's texture must move that one alone.
   args.place = {
     type = "select", order = 20, name = L["Position"],

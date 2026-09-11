@@ -38,20 +38,6 @@ describe("Display.Textures", function()
     end
     function f:ClearAllPoints() self.point = nil; self.points = {} end
     function f:GetCenter() return self.centre[1], self.centre[2] end
-    -- AB4-D1: the `Cooldown` region's own methods, RECORDED. tests/wow_mock.lua answers all six
-    -- with a no-op, which makes "the swipe was set to 6 seconds" and "nothing was drawn at all" the
-    -- same observation -- and a progress fill that quietly measures nothing is exactly the defect
-    -- this project keeps shipping. `cooldownCalls` counts, because SetCooldown RESTARTS the
-    -- client's animation: calling it every tick freezes the swipe at its first frame forever.
-    function f:SetCooldown(start, duration)
-      self.cooldown = { start, duration }
-      self.cooldownCalls = (self.cooldownCalls or 0) + 1
-    end
-    function f:SetReverse(v) self.reverse = v and true or false end
-    function f:SetDrawEdge(v) self.drawEdge = v and true or false end
-    function f:SetDrawBling(v) self.drawBling = v and true or false end
-    function f:SetSwipeColor(r, g, b, a) self.swipeColor = { r, g, b, a } end
-    function f:SetHideCountdownNumbers(v) self.hideNumbers = v and true or false end
     function f:SetTexture(t) self.texture = t end
     function f:SetColorTexture(...) self.colorTexture = { ... } end
     function f:SetVertexColor(r, g, b) self.vertexColor = { r, g, b } end
@@ -108,19 +94,14 @@ describe("Display.Textures", function()
   local function anchor() return Textures.Create() end
 
   -- Every frame that is currently drawing an indicator: the anchor is the one CreateFrame made
-  -- first, and a pooled frame that was given back is hidden. The `Cooldown` swipe each texture
-  -- carries (AB4-D1) is a frame too and is deliberately not one of these -- it is part of the
-  -- texture above it, not a second indicator.
+  -- first, and a pooled frame that was given back is hidden.
   local function showing()
     local out = {}
     for _, f in ipairs(frames) do
-      if f ~= Textures.Create() and f.shown and f.kind ~= "Cooldown" then out[#out + 1] = f end
+      if f ~= Textures.Create() and f.shown then out[#out + 1] = f end
     end
     return out
   end
-
-  -- The swipe belonging to one indicator frame.
-  local function swipeOf(f) return f.swipe end
 
   local function switchOn(key)
     A.set(key, "texture", "enabled", true)
@@ -802,11 +783,12 @@ describe("Display.Textures", function()
     end)
   end)
 
-  -- ------------------------------------------------------------------ AB4-D1: the progress fill
+  -- ------------------------------------------------------------------ AT5-D1: the progress fade
 
-  -- "Growing textures": a radial swipe over the indicator showing how much of a cooldown or a buff
-  -- is left, animated by the client's own `Cooldown` region rather than by our 10 Hz loop.
-  describe("fillOf and fillTiming (the pure half)", function()
+  -- The radial swipe AB4-D1 built drew a dark box over the texture (owner, seeing it over a
+  -- PowerAuras arc: "not clockwise or anything -- start being visible or getting invisible"). This
+  -- replaces it with a plain opacity multiplier -- no clock, no client animation to drive.
+  describe("fillOf and fillFraction (the pure half)", function()
     it("ships with no fill, and refuses one it cannot draw", function()
       assert.equal("none", Textures.fillOf(nil))
       assert.equal("none", Textures.fillOf({}))
@@ -816,249 +798,131 @@ describe("Display.Textures", function()
       assert.same({ "none", "cooldown", "buff" }, Textures.FILLS)
     end)
 
-    -- The client animates from a START and a LENGTH; Core/Track reports a REMAINING and a length.
-    -- Four seconds left of a six-second cooldown means it started two seconds ago.
-    it("back-dates the start of a cooldown by however much has already elapsed", function()
-      local start, duration, reverse =
-        Textures.fillTiming({ fill = "cooldown" }, { cooldown = 4, cooldownFull = 6 }, 100)
-      assert.equal(98, start)
-      assert.equal(6, duration)
-      assert.is_false(reverse, "a cooldown reads the way every cooldown in the game reads")
+    -- A cooldown is FAINT the instant it starts and brightens back up as it recovers: half its
+    -- length still to go is half the multiplier.
+    it("reads a cooldown as how far it has recovered", function()
+      assert.equal(0.5, Textures.fillFraction({ fill = "cooldown" }, { cooldown = 3, cooldownFull = 6 }))
+      -- Just cast: none of the cooldown has recovered yet, the faintest the multiplier gets.
+      assert.equal(0, Textures.fillFraction({ fill = "cooldown" }, { cooldown = 6, cooldownFull = 6 }))
     end)
 
-    -- The other way round on purpose: what is LIT is what is left, so the shape shrinks as the
-    -- buff runs out instead of growing while it disappears.
-    it("runs a buff backwards, so the lit part is what is left of it", function()
-      local start, duration, reverse =
-        Textures.fillTiming({ fill = "buff" }, { remaining = 5, duration = 20 }, 100)
-      assert.equal(85, start)
-      assert.equal(20, duration)
-      assert.is_true(reverse)
+    -- The other way round on purpose: a buff is full the instant it appears and fades as it runs
+    -- out, so the multiplier IS the fraction remaining.
+    it("reads a buff as how much of it is left", function()
+      assert.equal(0.75, Textures.fillFraction({ fill = "buff" }, { remaining = 15, duration = 20 }))
+      assert.equal(0.25, Textures.fillFraction({ fill = "buff" }, { remaining = 5, duration = 20 }))
     end)
 
-    it("draws nothing when there is nothing running, and nothing when the fill is off", function()
-      assert.is_nil(Textures.fillTiming({ fill = "none" }, { cooldown = 4, cooldownFull = 6 }, 100))
-      assert.is_nil(Textures.fillTiming({ fill = "cooldown" }, nil, 100))
+    it("gives nothing when there is nothing running, and nothing when the fade is off", function()
+      assert.is_nil(Textures.fillFraction({ fill = "none" }, { cooldown = 4, cooldownFull = 6 }))
+      assert.is_nil(Textures.fillFraction({ fill = "cooldown" }, nil))
       -- off cooldown: Core/Track deliberately reports no LENGTH, because the cached one is not a
-      -- fact about now -- a full swipe over a ready ability is worse than no swipe.
-      assert.is_nil(Textures.fillTiming({ fill = "cooldown" }, { cooldown = 0 }, 100))
-      assert.is_nil(Textures.fillTiming({ fill = "cooldown" }, { cooldown = 4 }, 100))
-      assert.is_nil(Textures.fillTiming({ fill = "buff" }, { remaining = 0, duration = 20 }, 100))
-      assert.is_nil(Textures.fillTiming({ fill = "buff" }, { remaining = 5 }, 100))
+      -- fact about now -- a bright texture over a cooldown that has not been observed is worse
+      -- than one left at a static opacity.
+      assert.is_nil(Textures.fillFraction({ fill = "cooldown" }, { cooldown = 0 }))
+      assert.is_nil(Textures.fillFraction({ fill = "cooldown" }, { cooldown = 4 }))
+      assert.is_nil(Textures.fillFraction({ fill = "buff" }, { remaining = 0, duration = 20 }))
+      assert.is_nil(Textures.fillFraction({ fill = "buff" }, { remaining = 5 }))
     end)
 
     -- A reading taken after the length was observed can exceed it (a cooldown lengthened by a rune,
-    -- a buff refreshed to longer than the length last seen). A start in the future draws an empty
-    -- swipe that never moves.
+    -- a buff refreshed to longer than the length last seen). Clamped, so this never reads as MORE
+    -- than fully lit.
     it("clamps a remaining that is longer than the length it is measured against", function()
-      local start, duration = Textures.fillTiming({ fill = "buff" }, { remaining = 40, duration = 20 }, 100)
-      assert.equal(100, start)
-      assert.equal(20, duration)
-    end)
-
-    it("takes a missing clock as zero rather than erroring", function()
-      assert.equal(-2, Textures.fillTiming({ fill = "cooldown" }, { cooldown = 4, cooldownFull = 6 }))
+      assert.equal(1, Textures.fillFraction({ fill = "buff" }, { remaining = 40, duration = 20 }))
     end)
   end)
 
-  describe("the swipe on screen", function()
+  describe("the fade on screen", function()
     local function fill(kind)
       switchOn("EXORCISM")
       A.setInherit("EXORCISM", "texture", false)
       A.set("EXORCISM", "texture", "fill", kind)
     end
 
-    it("gives every texture a bare Cooldown region that starts hidden", function()
+    it("is a static opacity when no fade is picked, even with real numbers in memory", function()
       switchOn("EXORCISM")
+      Textures.Sync(nil, { EXORCISM = { cooldown = 4, cooldownFull = 6 } }, clock)
       Textures.Fire("EXORCISM", "suggested")
-      local cd = swipeOf(showing()[1])
-      assert.equal("Cooldown", cd.kind)
-      assert.equal("CooldownFrameTemplate", cd.template)
-      assert.equal(showing()[1], cd.parent)
-      assert.is_true(cd.allPoints)
-      assert.is_true(cd.hideNumbers, "the swipe is a shape, not a second timer to read")
-      assert.is_false(cd.drawBling)
-      assert.is_false(cd.drawEdge)
-      assert.same({ 0, 0, 0, 0.7 }, cd.swipeColor)
-      -- Nothing was picked, so nothing is drawn: the shipped answer is "no fill".
-      assert.is_false(cd.shown)
-      assert.is_nil(cd.cooldownCalls)
+      assert.equal(1, showing()[1].alpha)
     end)
 
-    -- AB4 review. `Cooldown` is a frame type this addon had never used before, and every one of the
-    -- calls it needs is unguarded client API. A client that has dropped one must lose the SWIPE,
-    -- not every indicator texture on every ability -- and "the texture stopped appearing at all"
-    -- would be reported as the texture feature being broken, not as one decoration missing.
-    describe("a client whose Cooldown region is missing a method", function()
-      -- Rebuilds the module with a Cooldown that answers everything EXCEPT the named methods.
-      local function withoutCooldownMethods(...)
-        local gone = {}
-        for _, name in ipairs({ ... }) do gone[name] = true end
-        local realCreate = _G.CreateFrame
-        _G.CreateFrame = function(kind, name, parent, template)
-          local f = realCreate(kind, name, parent, template)
-          if kind == "Cooldown" then
-            for stripped in pairs(gone) do rawset(f, stripped, false) end
-          end
-          return f
-        end
-        return function() _G.CreateFrame = realCreate end
-      end
-
-      it("still draws the texture when a decoration setter is missing", function()
-        local restore = withoutCooldownMethods("SetHideCountdownNumbers", "SetSwipeColor")
-        switchOn("EXORCISM")
-        assert.is_true(Textures.Fire("EXORCISM", "suggested"))
-        restore()
-        local f = showing()[1]
-        assert.equal(1, #showing(), "one missing setter took the whole indicator down")
-        assert.equal("icon:exorcism", f.textures[1].texture)
-        -- ...and the ones that ARE there were still applied.
-        assert.is_false(swipeOf(f).drawEdge)
-      end)
-
-      -- SetCooldown and SetReverse are the fill itself. With either gone the swipe is dropped whole
-      -- rather than left half-built, so nothing downstream calls into a frame it cannot drive.
-      it("drops the swipe entirely, and still fills nothing, when SetCooldown is missing", function()
-        local restore = withoutCooldownMethods("SetCooldown")
-        switchOn("EXORCISM")
-        A.setInherit("EXORCISM", "texture", false)
-        A.set("EXORCISM", "texture", "fill", "cooldown")
-        assert.is_true(Textures.Fire("EXORCISM", "suggested"))
-        -- A tick with real numbers to fill from: this is the call that would reach into the frame.
-        Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 4, cooldownFull = 6 } }, clock)
-        restore()
-        assert.equal(1, #showing())
-        assert.is_nil(swipeOf(showing()[1]), "a swipe that cannot be driven was kept anyway")
-        assert.is_nil(Textures.describe().textures[1].filling)
-      end)
-
-      it("drops the swipe when SetReverse is missing too", function()
-        local restore = withoutCooldownMethods("SetReverse")
-        switchOn("EXORCISM")
-        Textures.Fire("EXORCISM", "suggested")
-        restore()
-        assert.equal(1, #showing())
-        assert.is_nil(swipeOf(showing()[1]))
-      end)
-    end)
-
-    it("sweeps a cooldown from Core/Track's numbers", function()
+    it("fades a cooldown texture up from faint as it recovers", function()
       fill("cooldown")
       Textures.Fire("EXORCISM", "suggested")
-      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 4, cooldownFull = 6 } }, clock)
-      local cd = swipeOf(showing()[1])
-      assert.is_true(cd.shown)
-      assert.same({ clock - 2, 6 }, cd.cooldown)
-      assert.is_false(cd.reverse)
+      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 3, cooldownFull = 6 } }, clock)
+      assert.equal(0.5, showing()[1].alpha)
     end)
 
-    it("sweeps a buff the other way", function()
+    it("fades a buff texture down toward the floor as it runs out", function()
       fill("buff")
       Textures.Fire("EXORCISM", "suggested")
       Textures.Sync("EXORCISM", { EXORCISM = { active = true, remaining = 5, duration = 20 } }, clock)
-      local cd = swipeOf(showing()[1])
-      assert.is_true(cd.shown)
-      assert.same({ clock - 15, 20 }, cd.cooldown)
-      assert.is_true(cd.reverse)
+      assert.equal(0.25, showing()[1].alpha)
     end)
 
-    -- The one that decides whether this works at all. SetCooldown RESTARTS the client's animation,
-    -- and this runs on every tick -- a re-push ten times a second would leave the swipe frozen at
-    -- its opening frame, which looks exactly like a fill that works and measures nothing.
-    it("does not re-push a cooldown that is merely ticking down", function()
+    -- The floor every static Opacity has always had (AB2-D3): a fade that reaches a zero multiplier
+    -- must still read as "faint", not vanish outright.
+    it("never goes below the 0.05 floor, even at a zero multiplier", function()
       fill("cooldown")
       Textures.Fire("EXORCISM", "suggested")
-      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 4, cooldownFull = 6 } }, clock)
-      local cd = swipeOf(showing()[1])
-      assert.equal(1, cd.cooldownCalls)
-      -- The +0.02 is deliberate: two readings of the same running cooldown a tick apart do not
-      -- back-date to EXACTLY the same start, and a comparison with no tolerance would call this a
-      -- new cooldown every time.
-      for i = 1, 5 do
-        Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 4 - i * 0.1 + 0.02, cooldownFull = 6 } },
-                      clock + i * 0.1)
-      end
-      assert.equal(1, cd.cooldownCalls, "the swipe was restarted on every tick")
+      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 6, cooldownFull = 6 } }, clock)
+      assert.equal(0.05, showing()[1].alpha)
     end)
 
-    it("does push again when the cooldown is genuinely re-triggered", function()
+    -- The tab's own Opacity slider is the CEILING the fraction multiplies into, not something the
+    -- fade replaces.
+    it("multiplies the fraction into the tab's own Opacity, not just the fraction alone", function()
+      fill("buff")
+      A.set("EXORCISM", "texture", "alpha", 0.5)
+      Textures.Fire("EXORCISM", "suggested")
+      Textures.Sync("EXORCISM", { EXORCISM = { active = true, remaining = 10, duration = 20 } }, clock)
+      assert.equal(0.25, showing()[1].alpha)
+    end)
+
+    -- Nothing to fade with yet: a fade picked for an ability the client has no numbers for leaves
+    -- the opacity exactly where a static one would sit.
+    it("leaves the opacity alone while there is nothing to measure", function()
       fill("cooldown")
       Textures.Fire("EXORCISM", "suggested")
-      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 1, cooldownFull = 6 } }, clock)
-      local cd = swipeOf(showing()[1])
-      assert.equal(1, cd.cooldownCalls)
-      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 6, cooldownFull = 6 } }, clock + 5)
-      assert.equal(2, cd.cooldownCalls)
-      assert.same({ clock + 5, 6 }, cd.cooldown)
+      assert.equal(1, showing()[1].alpha)
     end)
 
-    -- The client's own "there is no cooldown here" is start 0, length 0. Leaving the last swipe
-    -- running would show a cooldown recovering on an ability that came off cooldown ages ago.
-    it("clears the swipe when there is no longer anything to measure", function()
+    -- A texture appears in the same frame its event fires (Fire, not Sync), so the fade has to come
+    -- from the numbers the loop last handed over. Without this the opacity would sit static until
+    -- something else changes the set of textures on screen -- which can be the whole fight.
+    it("fades a texture in the same frame the event that showed it fired", function()
+      fill("cooldown")
+      Textures.Sync(nil, { EXORCISM = { cooldown = 3, cooldownFull = 6 } }, clock)
+      Textures.Fire("EXORCISM", "suggested")
+      assert.equal(0.5, showing()[1].alpha)
+    end)
+
+    -- `SetAlpha` restarts no animation, so unlike the swipe it replaces there is nothing to guard
+    -- against re-pushing: the opacity has to move on every tick that the numbers move, not only on
+    -- the ticks the SET of textures on screen changed.
+    it("keeps updating on every Sync tick while the texture stays on screen", function()
       fill("cooldown")
       Textures.Fire("EXORCISM", "suggested")
-      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 4, cooldownFull = 6 } }, clock)
-      local cd = swipeOf(showing()[1])
-      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 0 } }, clock + 4)
-      assert.is_false(cd.shown)
-      assert.same({ 0, 0 }, cd.cooldown)
+      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 6, cooldownFull = 6 } }, clock)
+      assert.equal(0.05, showing()[1].alpha)
+      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 3, cooldownFull = 6 } }, clock + 1)
+      assert.equal(0.5, showing()[1].alpha)
+      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 0 } }, clock + 2)
+      assert.equal(1, showing()[1].alpha, "off cooldown is a static opacity again")
     end)
 
-    -- Nothing to clear yet: a fresh frame with no fill picked must not push a swipe at all, or
-    -- every texture in the addon starts by telling the client about a cooldown of zero.
-    it("says nothing to the client at all while the fill is off", function()
-      switchOn("EXORCISM")
-      Textures.Fire("EXORCISM", "suggested")
-      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 4, cooldownFull = 6 } }, clock)
-      assert.is_nil(swipeOf(showing()[1]).cooldownCalls)
-    end)
-
-    -- A texture appears in the same frame its event fires (Fire, not Sync), so the fill has to come
-    -- from the numbers the loop last handed over. Without this the swipe is missing until something
-    -- else changes the set of textures on screen -- which can be the whole fight.
-    it("fills a texture in the same frame the event that showed it fired", function()
-      fill("cooldown")
-      Textures.Sync(nil, { EXORCISM = { cooldown = 4, cooldownFull = 6 } }, clock)
-      Textures.Fire("EXORCISM", "suggested")
-      assert.same({ clock - 2, 6 }, swipeOf(showing()[1]).cooldown)
-    end)
-
-    -- A pooled frame still remembering the last ability's swipe would let the NEXT ability's
-    -- identical-looking numbers be skipped as "already pushed", and run somebody else's cooldown.
-    it("forgets the swipe when the frame goes back to the pool", function()
-      fill("cooldown")
-      A.set("JUDGEMENT", "texture", "enabled", true)
-      A.setInherit("JUDGEMENT", "texture", false)
-      A.set("JUDGEMENT", "texture", "fill", "cooldown")
-      Textures.Fire("EXORCISM", "suggested")
-      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 4, cooldownFull = 6 } }, clock)
-      local cd = swipeOf(showing()[1])
-      assert.equal(1, cd.cooldownCalls)
-
-      Textures.Sync("SOMETHING_ELSE", {}, clock)          -- EXORCISM comes down, frame is pooled
-      assert.is_false(cd.shown)
-      assert.same({ 0, 0 }, cd.cooldown)
-
-      -- The same frame comes back for a different ability with the same numbers, and is re-pushed.
-      Textures.Sync("JUDGEMENT", { JUDGEMENT = { cooldown = 4, cooldownFull = 6 } }, clock)
-      Textures.Fire("JUDGEMENT", "suggested")
-      assert.equal(cd, swipeOf(showing()[1]), "the pool did not serve the same frame")
-      assert.equal(3, cd.cooldownCalls)
-      assert.same({ clock - 2, 6 }, cd.cooldown)
-    end)
-
-    it("reports what the fill is set to and whether anything is running", function()
+    it("reports the fill and the current fade fraction, nil when nothing is running", function()
       fill("cooldown")
       Textures.Fire("EXORCISM", "suggested")
-      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 4, cooldownFull = 6 } }, clock)
+      Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 3, cooldownFull = 6 } }, clock)
       local row = Textures.describe().textures[1]
       assert.equal("cooldown", row.fill)
-      assert.equal(6, row.filling)
+      assert.equal(0.5, row.fade)
 
       Textures.Sync("EXORCISM", { EXORCISM = { cooldown = 0 } }, clock)
-      assert.is_nil(Textures.describe().textures[1].filling,
-        "a fill that is drawing nothing must not read as one that is working")
+      assert.is_nil(Textures.describe().textures[1].fade,
+        "a fade that is measuring nothing must not read as one that is working")
     end)
   end)
 

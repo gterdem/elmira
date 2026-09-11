@@ -571,10 +571,10 @@ Slash.register{
       for _, t in ipairs(d.textures) do
         lines[#lines + 1] = string.format("%s  source=%s size=%d position=%s fill=%s", t.key,
           tostring(t.source), t.size, tostring(t.place), tostring(t.fill))
-        -- AB4-D1. "Fill with: cooldown recovering" on an ability the client has never seen a
-        -- cooldown for draws nothing at all, and a texture with no swipe on it is indistinguishable
-        -- from one whose fill was never picked.
-        if t.fill ~= "none" and t.visible and not t.filling then
+        -- AT5-D1. "Fade with: cooldown recovering" on an ability the client has never seen a
+        -- cooldown for multiplies nothing at all, and a texture at a static opacity is
+        -- indistinguishable from one whose fade was never picked.
+        if t.fill ~= "none" and t.visible and not t.fade then
           lines[#lines + 1] = "   fill set, but nothing to measure right now — no cooldown or buff running"
         end
         if not t.enabled then

@@ -36,11 +36,16 @@
   reopen it. A failure to size or place the window no longer takes the header down with it either.
   `/elm debug state` now says `window chrome: dressed` or `stripped`, so a missing header can be
   reported without a screenshot.
-- **New: a texture can sweep its own cooldown or buff.** "Fill with" on an ability's Texture tab
-  draws a progress sweep over the indicator showing how much of that ability's cooldown is left, or
-  how much of its buff is — the buff one drains the other way, so what is lit is what is left.
-  Nothing is drawn when there is no cooldown or buff running, and `/elm debug textures` says so
-  rather than leaving you looking at a texture with no sweep on it.
+- **Changed: a texture fades with its own cooldown or buff instead of sweeping.** "Fade with", below
+  the five moments on an ability's Texture tab, sets the texture's opacity to how much of that
+  ability's cooldown is left recovering or how much of its buff remains — a buff starts fully lit
+  and fades out, a cooldown starts faint and brightens as it comes back. Static (the tab's own
+  Opacity) when neither is picked, and `/elm debug textures` reports the current fraction rather
+  than leaving you guessing whether it is working.
+- **Changed: adding an ability by ID or name now behaves like a WeakAuras trigger box.** Press Enter
+  to resolve it — an icon appears beside the box and it now reads "20930 (Holy Shock)" — and nothing
+  is stored yet. Add, or Enter again, registers it (selecting it instead if it is already on your
+  list) and clears the box; anything that does not resolve just clears in silence.
 - **Changed: the Rotations page no longer lists playstyles in the left menu.** Every playstyle and
   every rotation of your own is a card on the Rotations page, and clicking one shows it in the panel
   below the cards; the left menu keeps only Builder and Share under Rotations.
