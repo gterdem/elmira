@@ -319,12 +319,6 @@ end
 local function paint(f, key, e)
   local size = Textures.sizeOf(e)
   f:SetSize(size, size)
-  -- The options window and the texture picker are AceGUI Frames at FULLSCREEN_DIALOG; a texture
-  -- at its default centre sits UNDER them at HIGH, which made the AT6-D5 live preview invisible
-  -- exactly while the player was configuring it (owner, in game: "I can not make Textures work").
-  -- The one being previewed or dragged goes above every dialog; everything else stays at HIGH so
-  -- a live cue never covers a tooltip or a popup in a fight.
-  f:SetFrameStrata((key == previewKey or key == moving) and "TOOLTIP" or "HIGH")
   -- The ring stands in for a path that resolved to nothing, so the cue is never silently invisible;
   -- `describe` and the Texture tab still report the nil, so it is never silently WRONG either.
   -- Through TextureLibrary.drawable: a Blizzard library entry is a numeric file id stored as a
