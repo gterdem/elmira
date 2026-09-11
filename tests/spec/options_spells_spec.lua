@@ -209,8 +209,12 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         return id == 900 and "Interface\\Icons\\Ability_Rogue_SliceDice" or nil
       end
       local values = addArgs().pick.values
-      assert.equal("|TInterface\\Icons\\Ability_Rogue_SliceDice:14|t Slice and Dice", values["900"])
-      assert.equal("Kick", values["901"])
+      -- AT6-D7: the id after the name, in brackets. Two rows of a spellbook read exactly the same
+      -- often enough (six ranks of one spell, a rune's version beside the trainer's) that the id is
+      -- the only thing telling the player which one they are about to add.
+      assert.equal("|TInterface\\Icons\\Ability_Rogue_SliceDice:14|t Slice and Dice (900)",
+        values["900"])
+      assert.equal("Kick (901)", values["901"])
     end)
 
     -- I1b: with no explicit `sorting`, AceGUI's DropDown sorts by the KEYS -- `tostring(entry.id)`
@@ -1134,7 +1138,6 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal(3, row.order)
       assert.equal("full", row.width)
       assert.equal("Use this ability's own icon", row.name)
-      assert.is_falsy(row.disabled)
       assert.is_true(row.get())
       assert.is_nil(tab("EXORCISM", "texture").source, "the Source dropdown is gone")
       assert.is_nil(tab("EXORCISM", "texture").shape, "the Shape dropdown is gone")
@@ -1172,24 +1175,33 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal(4, row.order)
       assert.equal("Texture file", row.name)
       assert.equal("full", row.width)
-      assert.is_falsy(row.disabled)
       assert.equal("Interface\\AddOns\\Elmira\\media\\shape_ring", row.get())
       row.set(nil, "Interface\\Icons\\Ability_Rogue_Ambush")
       assert.equal("Interface\\Icons\\Ability_Rogue_Ambush", A.effective("EXORCISM", "texture").path)
       assert.equal("Interface\\Icons\\Ability_Rogue_Ambush", tab("EXORCISM", "texture").path.get())
     end)
 
-    -- The button opens the picker WINDOW (Options/TexturePanel.lua), which is the same window the
-    -- Move toolbar's Texture button opens -- a second picker could look right and write elsewhere.
-    it("opens the texture picker for THIS ability", function()
-      local opened = {}
-      ns.TexturePanel = { Toggle = function(key) opened[#opened + 1] = key end }
+    -- AT6-D3 (owner): Choose… opens the picker ON A CLEAR SCREEN. It does what "Move This Texture"
+    -- does -- `Textures.StartMove`, which is what hides the options window through
+    -- `Options.BeginMove` and raises the Move toolbar -- AND opens the picker WINDOW
+    -- (Options/TexturePanel.lua), the same window the toolbar's own Texture button opens. Judging a
+    -- texture over 960x680 of configuration panel is the one thing the picker cannot do.
+    it("hides the options window and opens the texture picker for THIS ability", function()
+      local opened, moved = {}, {}
+      ns.TexturePanel = { Open = function(key) opened[#opened + 1] = key end }
+      ns.Textures.StartMove = function(key) moved[#moved + 1] = key; return true end
       local row = tab("EXORCISM", "texture").choose
       assert.equal("execute", row.type)
       assert.equal(5, row.order)
       assert.equal("Choose…", row.name)
       row.func()
+      assert.same({ "EXORCISM" }, moved, "the options window was left sitting over the picker")
       assert.same({ "EXORCISM" }, opened)
+    end)
+
+    it("opens the picker without erroring when no renderer is loaded", function()
+      ns.Textures, ns.TexturePanel = nil, nil
+      assert.is_true(pcall(function() tab("EXORCISM", "texture").choose.func() end))
     end)
 
     -- AT4-D3. A file inside another addon's folder is a file on the character that has that addon
@@ -1252,7 +1264,6 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("Colour", args.color.name)
       assert.is_false(args.color.hasAlpha, "a colour picker with its own alpha beside an Opacity "
         .. "slider is two controls for one number")
-      assert.is_falsy(args.color.disabled)
       args.color.set(nil, 0.1, 0.2, 0.3)
       assert.same({ r = 0.1, g = 0.2, b = 0.3 }, A.effective("EXORCISM", "texture").color)
       assert.same({ 0.1, 0.2, 0.3 }, { args.color.get() })
@@ -1262,7 +1273,6 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("Opacity", args.alpha.name)
       assert.same({ 0.05, 1.0, 0.05 }, { args.alpha.min, args.alpha.max, args.alpha.step })
       assert.is_true(args.alpha.isPercent, "a raw 0.45 means nothing to anyone")
-      assert.is_falsy(args.alpha.disabled)
       assert.equal(1, args.alpha.get())
       args.alpha.set(nil, 0.4)
       assert.equal(0.4, tab("EXORCISM", "texture").alpha.get())
@@ -1307,8 +1317,13 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         assert.equal(15, row.max)
         assert.equal(1, row.step)
         assert.equal(3, row.get())
-        assert.is_true(row.disabled(), "the expiring checkbox is off by default")
-        args.expiring.set(nil, true)
+        assert.is_true(row.disabled(), "the texture is switched off by default")
+        -- AT6-D1: off means off, so the switch at the top of the tab is the first of the three
+        -- gates this control sits behind.
+        args.enabled.set(nil, true)
+        assert.is_true(tab("EXORCISM", "texture").expiringSeconds.disabled(),
+          "the expiring checkbox is off by default")
+        tab("EXORCISM", "texture").expiring.set(nil, true)
         assert.is_true(tab("EXORCISM", "texture").expiringSeconds.disabled(),
           "still linked to All abilities on General")
         tab("EXORCISM", "general").inherit.set(nil, false)
@@ -1352,15 +1367,29 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("none", tab("EXORCISM", "texture").fill.get())
     end)
 
-    -- AT1-D2: nothing on this tab is greyed by inheritance any more -- only the on switch was ever
-    -- exempt from that, and now every other control is too.
-    it("never greys the appearance -- only the missing/silent warnings still gate on state", function()
-      local args = tab("EXORCISM", "texture")
-      assert.is_falsy(args.size.disabled)
-      assert.is_falsy(args.ownIcon.disabled)
-      assert.is_falsy(args.suggested.disabled)
-      assert.is_falsy(args.enabled.disabled)
-    end)
+    -- AT6-D1 (owner): "off means off" -- with the switch at the top unticked the tab is one switch
+    -- and a page of settings that answer and change nothing, which is exactly how "I set it up and
+    -- it never appeared" happens. Nothing is greyed by INHERITANCE any more (AT1-D2); everything is
+    -- greyed by the switch.
+    it("greys every control on the tab while the texture is switched off, and only the switch is live",
+      function()
+        local args = tab("EXORCISM", "texture")
+        assert.is_falsy(args.enabled.disabled, "the one control that must stay live")
+        local greyed = { "ownIcon", "path", "choose", "size", "color", "alpha", "fill",
+                         "suggested", "ready", "used", "active", "expiring", "expiringSeconds",
+                         "move", "reset" }
+        for _, field in ipairs(greyed) do
+          assert.is_truthy(args[field], field .. " is not on the tab at all")
+          assert.is_true(args[field].disabled(), field .. " is live while the texture is off")
+        end
+        args.enabled.set(nil, true)
+        local on = tab("EXORCISM", "texture")
+        for _, field in ipairs(greyed) do
+          if field ~= "expiringSeconds" then   -- two more gates of its own, tested above
+            assert.is_false(on[field].disabled(), field .. " stayed greyed with the texture on")
+          end
+        end
+      end)
 
     it("says so when it is switched on and appears at no moment", function()
       local args = tab("EXORCISM", "texture")
@@ -1380,49 +1409,36 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(tab("EXORCISM", "texture").silent.hidden())
     end)
 
-    it("previews through the same path the diagnostic uses", function()
-      local fired = {}
-      ns.Textures.TestFire = function(key) fired[#fired + 1] = key; return true, key end
-      local row = tab("EXORCISM", "texture").preview
-      assert.equal("execute", row.type)
-      assert.equal(22, row.order)
-      assert.equal("Preview Texture", row.name)
-      assert.is_truthy(row.desc:find("whether or not it is switched on", 1, true))
-      row.func()
-      assert.same({ "EXORCISM" }, fired)
-    end)
-
-    it("previews nothing, without erroring, when no renderer is loaded", function()
-      ns.Textures = nil
-      assert.is_true(pcall(function() tab("EXORCISM", "texture").preview.func() end))
+    -- AT6-D5: the Preview button is gone. The texture is on screen for as long as its tab is the
+    -- one being read (Display/Textures.Preview, driven from Options.holdTexturePreview), so there
+    -- is nothing left to ask for -- and a button that flashes a texture for a second and a half is
+    -- no way to judge a size or a colour.
+    it("has no Preview button any more", function()
+      assert.is_nil(tab("EXORCISM", "texture").preview)
     end)
   end)
 
   describe("AB3-D2: where a texture sits", function()
     before_each(function()
       Spells.registerPack(ns.db.char.spells, "EXORCISM", 415073, "Exorcism")
+      tab("EXORCISM", "texture").enabled.set(nil, true)
     end)
 
-    it("offers the three placements per ability, and none on All abilities", function()
-      local row = tab("EXORCISM", "texture").place
-      assert.equal("select", row.type)
-      assert.equal(20, row.order)
-      assert.equal("Position", row.name)
-      assert.is_truthy(row.desc:find("never overlap", 1, true))
-      assert.same({ "row", "centre", "custom" }, row.sorting)
-      assert.equal("With the other indicators", row.values.row)
-      assert.equal("row", row.get())
-      row.set(nil, "centre")
-      assert.equal("centre", A.effective("EXORCISM", "texture").place)
-      -- AT1-D2: All abilities has no Texture tab at all any more.
+    -- AT6-D4: the Position dropdown and the indicator row it chose between are gone. A texture
+    -- starts at the centre of the screen and this button is the only thing that moves it, so there
+    -- is no longer a setting that can disagree with where it was dropped.
+    it("has no Position dropdown, and no Position the Indicators button anywhere", function()
+      assert.is_nil(tab("EXORCISM", "texture").place)
+      assert.is_nil(tab("*", "general").anchor)
       assert.is_nil(entry("*").args.texture)
     end)
 
-    it("offers Move This Texture only once the placement is custom, and drives the mode", function()
+    it("offers Move This Texture always, and drives the mode", function()
       local args = tab("EXORCISM", "texture")
-      assert.is_true(args.move.hidden())
-      args.place.set(nil, "custom")
-      assert.is_false(tab("EXORCISM", "texture").move.hidden())
+      assert.equal("execute", args.move.type)
+      assert.equal(20, args.move.order)
+      assert.is_nil(args.move.hidden, "the button used to appear only for a custom placement")
+      assert.is_truthy(args.move.desc:find("offset from the centre of the screen", 1, true))
 
       local calls, key = {}, nil
       ns.Textures.movingKey = function() return key end
@@ -1437,38 +1453,80 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     end)
 
     it("moves nothing, without erroring, when no renderer is loaded", function()
-      tab("EXORCISM", "texture").place.set(nil, "custom")
       ns.Textures = nil
       assert.is_true(pcall(function() tab("EXORCISM", "texture").move.func() end))
     end)
 
-    -- AT1-D2: with the Texture tab gone from All abilities, this one anchor for every texture
-    -- flowing with the others moved to All abilities > General.
-    it("puts Position the Indicators on All abilities' General tab, and relabels it while it runs", function()
-      local calls, on = {}, false
-      ns.Textures.isPositioning = function() return on end
-      ns.Textures.StartPositioning = function() calls[#calls + 1] = "start"; on = true; return true end
-      ns.Textures.StopMoveMode = function() calls[#calls + 1] = "stop"; on = false; return true end
-
-      local function row() return tab("*", "general").anchor end
-      assert.equal("execute", row().type)
-      assert.equal("Position the Indicators", row().name())
-      row().func()
-      assert.same({ "start" }, calls)
-      assert.equal("Done Positioning", row().name())
-      row().func()
-      assert.same({ "start", "stop" }, calls)
+    -- AT6-D6: right-aligned on the Move row. Only a Button fills its cell in AceGUI's Flow layout,
+    -- so a row that ends flush right has to END with the button and be padded in front of it --
+    -- and the three relative widths have to sum to exactly 1.0 or the row wraps.
+    it("puts Reset at the right-hand end of the Move row", function()
+      local args = tab("EXORCISM", "texture")
+      assert.equal("relative", args.move.width)
+      assert.equal("description", args.moveGap.type)
+      assert.equal("", args.moveGap.name)
+      assert.equal("execute", args.reset.type)
+      assert.equal("Reset", args.reset.name)
+      assert.same({ 20, 21, 22 }, { args.move.order, args.moveGap.order, args.reset.order })
+      assert.equal(1.0, args.move.relWidth + args.moveGap.relWidth + args.reset.relWidth)
+      assert.is_true(args.reset.relWidth < args.move.relWidth)
     end)
 
-    it("promises the row follows the strip until it is placed", function()
-      local desc = tab("*", "general").anchor.desc
-      assert.is_truthy(desc:find("follows it", 1, true))
-      assert.is_truthy(desc:find("Press it again when it is in place", 1, true))
+    -- AT6-D6, confirm-gated like All abilities > Glow's reset: this throws away everything the
+    -- player set on the tab, and there is no undo.
+    it("puts every texture setting back to its default, behind a confirm", function()
+      local args = tab("EXORCISM", "texture")
+      args.ownIcon.set(nil, false)
+      args.path.set(nil, "Interface\\Icons\\Ability_Rogue_Ambush")
+      args.size.set(nil, 128)
+      args.color.set(nil, 1, 0, 0)
+      args.alpha.set(nil, 0.3)
+      args.fill.set(nil, "buff")
+      args.active.set(nil, false)
+      args.used.set(nil, true)
+      A.set("EXORCISM", "texture", "x", 300)
+      A.set("EXORCISM", "texture", "y", -200)
+
+      assert.is_true(args.reset.confirm)
+      assert.is_truthy(args.reset.confirmText:find("back to its default", 1, true))
+      args.reset.func()
+
+      local e = A.effective("EXORCISM", "texture")
+      assert.equal("icon", e.source)
+      assert.equal("", e.path)
+      assert.equal(48, e.size)
+      assert.is_false(e.color)
+      assert.equal(1, e.alpha)
+      assert.equal("none", e.fill)
+      assert.is_true(e.suggested)
+      assert.is_true(e.active)
+      assert.is_false(e.used)
+      assert.equal(0, e.x)
+      assert.equal(0, e.y)
+      -- The switch at the top is not one of the settings it resets: a Reset that greyed out the
+      -- whole tab it sits on (AT6-D1) would read as the page breaking.
+      assert.is_true(e.enabled)
     end)
 
-    it("places nothing, without erroring, when no renderer is loaded", function()
-      ns.Textures = nil
-      assert.is_true(pcall(function() tab("*", "general").anchor.func() end))
+    it("changes nothing on an ability that has never stored a texture setting", function()
+      Spells.registerPack(ns.db.char.spells, "JUDGEMENT", 20271, "Judgement")
+      tab("JUDGEMENT", "texture").reset.func()
+      assert.is_false(A.effective("JUDGEMENT", "texture").enabled)
+      assert.equal(48, A.effective("JUDGEMENT", "texture").size)
+    end)
+
+    -- AT6-D5: the held preview is standing on screen while this tab is open, so it has to show the
+    -- defaults the same instant the page does.
+    it("repaints the held preview the moment it resets", function()
+      local refreshes = 0
+      ns.Textures.Refresh = function() refreshes = refreshes + 1; return true end
+      tab("EXORCISM", "texture").reset.func()
+      assert.is_true(refreshes > 0, "the texture on screen still showed the old settings")
+    end)
+
+    it("resets nothing, without erroring, with no settings store at all", function()
+      ns.AbilitySettings = nil
+      assert.is_true(pcall(function() tab("EXORCISM", "texture").reset.func() end))
     end)
   end)
 

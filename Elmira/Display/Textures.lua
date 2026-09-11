@@ -17,8 +17,14 @@
 -- the same frame the sound plays rather than up to a tick later. `Sync` only ever ENDS things.
 --
 -- PLAIN FRAMES, NEVER SECURE (hard rule 1) and nothing gated on combat: these are non-secure frames
--- carrying no attributes, so both Move modes work mid-fight -- which is exactly when you find out
+-- carrying no attributes, so the Move mode works mid-fight -- which is exactly when you find out
 -- your texture is sitting on top of your health bar.
+--
+-- AT6-D4: THE CENTRE OF THE SCREEN IS WHERE A TEXTURE STARTS, and an offset from it is the only
+-- thing a drag stores. The indicator row -- a shared anchor several textures flowed along so that
+-- they never overlapped -- is gone with its dropdown and its own Move mode: two untouched textures
+-- now sit on top of each other, which is what WeakAuras does and what the player can see and fix in
+-- one drag, unlike a row that quietly moved the one they had just placed.
 --
 -- POOLED. One frame per texture ON SCREEN, not one per registered ability: a paladin has forty
 -- keys and at most three of them are showing at once, and forty always-allocated frames is forty
@@ -43,7 +49,6 @@ Textures.SOURCES = { "icon", "path" }
 -- one file tints to any colour the player picks). Exported because the Texture tab shows it as the
 -- starting value the moment the icon tick box comes off.
 Textures.DEFAULT_PATH = MEDIA .. "shape_ring"
-Textures.PLACEMENTS = { "row", "centre", "custom" }
 -- All five of Core/Track's events, unlike the screen edge's two: a shape the size of a coin on a
 -- fixed spot is not the strobe a full-screen flash is, so the three moments ADR-0009 keeps off the
 -- edge are exactly the ones this is for.
@@ -56,20 +61,18 @@ Textures.FLASH_SECONDS = 1.5
 -- screen. Ordered for the dropdown, "none" first because it is the shipped answer.
 Textures.FILLS = { "none", "cooldown", "buff" }
 
--- The gap between textures in the row, and how far the row floats above the queue strip.
-local GAP = 8
-local ANCHOR_GAP = 40
--- What the anchor becomes while it is being placed: a 1x1 point cannot be grabbed with a mouse.
-local GRIP_WIDTH, GRIP_HEIGHT = 160, 40
-
-local anchor                    -- the Indicators anchor: the point the row is centred on
 local frames = {}               -- ability key -> the frame currently showing it
 local pool = {}                 -- frames nothing is using
 local held = {}                 -- ability key -> true while a held event holds for it
 local flashUntil = {}           -- ability key -> when its flash ends
 local shownAt = {}              -- ability key -> when it was last put on screen, for the diagnostic
-local positioning = false       -- the anchor's Move mode
 local moving = nil              -- the one ability whose own texture is being dragged
+-- AT6-D5. The ability whose Texture tab is open in the options window. The same mechanism as the
+-- Move mode's sample -- a key held on screen by the panel rather than by the fight -- and for the
+-- same reason: you cannot judge a size, a colour or a picture from a settings page, only from the
+-- thing itself standing where it will stand. Released by every way out of that tab, or it sits
+-- there for the rest of the session.
+local previewKey = nil
 -- AT5-D1. Core/Track's own memory table (`[key] = { cooldown =, cooldownFull =, remaining =,
 -- duration = ... }`) as of the last Sync. Held rather than passed to `Fire`, because a texture that
 -- appears the instant its event fires has to fade in that same frame and only the render loop is
@@ -78,31 +81,6 @@ local moving = nil              -- the one ability whose own texture is being dr
 local fillMemory = nil
 
 -- ---------------------------------------------------------------- the pure part (AB3-D2)
-
--- Textures.rowFlow(items, gap) -> [{ key =, x =, y =, size = }]
---
--- The row-flow layout, and the reason several textures never overlap: each one is placed to the
--- right of the last with `gap` between them, and the whole run is centred on the anchor so adding a
--- second texture pushes the first left rather than stacking on it.
---
--- Pure on purpose (its own spec): "they overlap" is invisible in a headless test unless the
--- arithmetic that separates them is something a test can hold. `items` is already ordered -- the
--- caller sorts by key, so two ticks with the same textures showing produce the same row.
-function Textures.rowFlow(items, gap)
-  gap = gap or GAP
-  local total = 0
-  for i, item in ipairs(items) do
-    total = total + (item.size or 0)
-    if i > 1 then total = total + gap end
-  end
-  local out, left = {}, -total / 2
-  for _, item in ipairs(items) do
-    local size = item.size or 0
-    out[#out + 1] = { key = item.key, x = left + size / 2, y = 0, size = size }
-    left = left + size + gap
-  end
-  return out
-end
 
 -- A size the client can actually draw, from a number that may have arrived in an import or a class
 -- pack's defaults rather than from the slider (AB2-D3 opened both doors). The slider's own range,
@@ -154,14 +132,6 @@ function Textures.fillFraction(e, row)
   local left = remaining / duration
   if fill == "buff" then return left end
   return 1 - left
-end
-
--- Where this texture sits. An unknown answer is "with the others", never nothing: a placement the
--- code does not understand would otherwise leave the frame unanchored, which draws it at the
--- bottom-left corner of the screen with no hint why.
-function Textures.placementOf(e)
-  local place = e and e.place
-  return oneOf(Textures.PLACEMENTS, place) and place or "row"
 end
 
 -- Textures.addonLoaded(name) -> is that addon running on this character (AT4-D2)
@@ -264,69 +234,6 @@ local function settings(key)
   return ns.AbilitySettings.effective(key, "texture")
 end
 
-local function store()
-  local db = ns.db
-  return db and db.char and db.char.textures
-end
-
--- Where the row sits when nothing has ever dragged it: above the queue strip, following it (AB3-D2).
--- Anchored to the strip's own frame rather than copied from its coordinates, so moving the strip
--- takes the indicators with it and the default keeps meaning what it says.
-local function placeAnchor()
-  local a = store()
-  local saved = a and a.anchor
-  anchor:ClearAllPoints()
-  if type(saved) == "table" and saved.point then
-    anchor:SetPoint(saved.point, UIParent, saved.relPoint or "CENTER", saved.x or 0, saved.y or 0)
-    return
-  end
-  local strip = ns.Queue and ns.Queue.frame and ns.Queue.frame()
-  if strip then
-    anchor:SetPoint("BOTTOM", strip, "TOP", 0, ANCHOR_GAP)
-    return
-  end
-  anchor:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-end
-
-local function saveAnchor()
-  local a = store()
-  if not (a and anchor) then return end
-  local point, _, relPoint, x, y = anchor:GetPoint()
-  a.anchor = { point = point or "CENTER", relPoint = relPoint or "CENTER", x = x or 0, y = y or 0 }
-end
-
-local function onAnchorDragStart(self)
-  -- Only in the Move mode, and that is the point: the row must not be draggable by accident while
-  -- someone is clicking through it at a boss.
-  if positioning then self:StartMoving() end
-end
-
-local function onAnchorDragStop(self)
-  if not positioning then return end
-  self:StopMovingOrSizing()
-  saveAnchor()
-end
-
-function Textures.Create()
-  if anchor then return anchor end
-  anchor = CreateFrame("Frame", "ElmiraIndicators", UIParent)  -- plain frame, never secure (rule 1)
-  anchor:SetSize(1, 1)
-  anchor:SetMovable(true)
-  anchor:SetClampedToScreen(true)
-  anchor:EnableMouse(false)     -- a point in the middle of the screen must never eat a click
-  anchor:RegisterForDrag("LeftButton")
-  anchor:SetScript("OnDragStart", onAnchorDragStart)
-  anchor:SetScript("OnDragStop", onAnchorDragStop)
-  -- Visible only while the row is being placed: an always-on box around an invisible point is
-  -- clutter the rest of the time.
-  anchor.grip = anchor:CreateTexture(nil, "BACKGROUND")
-  anchor.grip:SetAllPoints()
-  anchor.grip:SetColorTexture(ns.Colors.BRAND.r, ns.Colors.BRAND.g, ns.Colors.BRAND.b, 0.35)
-  anchor.grip:Hide()
-  placeAnchor()
-  return anchor
-end
-
 local function onTextureDragStart(self)
   if moving and frames[moving] == self then self:StartMoving() end
 end
@@ -341,10 +248,9 @@ local function saveOffset(key)
   local cx, cy = f:GetCenter()
   local px, py = UIParent:GetCenter()
   if not (cx and cy and px and py) then return end
-  -- The placement goes with the offset. Dragging a texture that was flowing with the others and
-  -- leaving it set to "with the others" would store coordinates the layout then ignores -- a drag
-  -- that appears to work and is undone by the next tick.
-  A.set(key, "texture", "place", "custom")
+  -- AT6-D4: an offset from the centre is the WHOLE of where a texture sits now. The row and its
+  -- "with the others / centre / somewhere I choose" dropdown are gone, so there is no second field
+  -- that could disagree with these two and quietly put the texture back where it was.
   A.set(key, "texture", "x", cx - px)
   A.set(key, "texture", "y", cy - py)
 end
@@ -401,6 +307,15 @@ function Textures.alphaOf(e, row)
   return math.max(FADE_FLOOR, math.min(1, raw))
 end
 
+-- The row of Core/Track's memory a fade is computed from -- and deliberately NOT for the held
+-- preview (AT6-D5): the tab's Opacity slider is what the player is looking at while they drag it,
+-- and a preview that faded to 5% because the ability happens to be on cooldown would read as a
+-- slider that does nothing.
+local function fadeRow(key)
+  if key == previewKey then return nil end
+  return fillMemory and fillMemory[key]
+end
+
 local function paint(f, key, e)
   local size = Textures.sizeOf(e)
   f:SetSize(size, size)
@@ -417,29 +332,37 @@ local function paint(f, key, e)
   else
     f.icon:SetVertexColor(1, 1, 1)
   end
-  f:SetAlpha(Textures.alphaOf(e, fillMemory and fillMemory[key]))
+  f:SetAlpha(Textures.alphaOf(e, fadeRow(key)))
 end
 
-local function placeOne(f, e, rowX)
-  local place = Textures.placementOf(e)
+-- AT6-D4: the centre of the screen, plus whatever the player dragged this one to. Two untouched
+-- textures therefore sit on top of each other, which is deliberate -- it is what WeakAuras does,
+-- and it is visible the instant it happens, unlike a row that silently shuffles the texture you
+-- just placed sideways because a second one appeared.
+local function placeOne(f, e)
   f:ClearAllPoints()
-  if place == "centre" then
-    f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-  elseif place == "custom" then
-    f:SetPoint("CENTER", UIParent, "CENTER", tonumber(e.x) or 0, tonumber(e.y) or 0)
-  else
-    f:SetPoint("CENTER", anchor, "CENTER", rowX or 0, 0)
-  end
+  f:SetPoint("CENTER", UIParent, "CENTER", tonumber(e.x) or 0, tonumber(e.y) or 0)
 end
 
 -- Everything on screen this instant, in a stable order: `pairs` has none, and two ticks showing the
 -- same two textures must not swap them round in the row.
+-- AT6-D5. The held preview, but only while the ability's texture is actually switched on: the
+-- answer is re-asked on every layout rather than remembered, so unticking "Show a texture for this
+-- ability" takes the preview off screen on the same click (`put` -> `restyle` -> `Refresh`) without
+-- the Texture tab having to remember to say so.
+local function previewShown()
+  local A = ns.AbilitySettings
+  if not (previewKey and A and A.channelOn(previewKey, "texture")) then return nil end
+  return previewKey
+end
+
 local function shownKeys()
-  local out = {}
+  local out, preview = {}, previewShown()
   for key in pairs(held) do out[#out + 1] = key end
   for key in pairs(flashUntil) do
     if not held[key] then out[#out + 1] = key end
   end
+  if preview and not (held[preview] or flashUntil[preview]) then out[#out + 1] = preview end
   table.sort(out)
   return out
 end
@@ -448,18 +371,9 @@ end
 -- changes when an event fires or a state ends, which is a handful of times per fight, and a layout
 -- pass on every one of those is cheaper than a check on every frame.
 local function layout()
-  Textures.Create()
   local keys = shownKeys()
-  local resolved, row = {}, {}
-  for _, key in ipairs(keys) do
-    local e = settings(key)
-    resolved[key] = e
-    if Textures.placementOf(e) == "row" then
-      row[#row + 1] = { key = key, size = Textures.sizeOf(e) }
-    end
-  end
-  local at = {}
-  for _, placed in ipairs(Textures.rowFlow(row, GAP)) do at[placed.key] = placed.x end
+  local resolved = {}
+  for _, key in ipairs(keys) do resolved[key] = settings(key) end
   -- Give back the frames of everything that stopped showing BEFORE acquiring: a texture that ends
   -- as another begins then reuses the same frame instead of growing the pool by one per fight.
   for key, f in pairs(frames) do
@@ -468,7 +382,7 @@ local function layout()
   for _, key in ipairs(keys) do
     local f, e = acquire(key), resolved[key]
     paint(f, key, e)
-    placeOne(f, e, at[key])
+    placeOne(f, e)
     f:Show()
   end
 end
@@ -478,14 +392,6 @@ end
 -- it, and always while a Move mode is running) would otherwise not show until the cue next fired --
 -- a panel that appears to do nothing.
 function Textures.Refresh()
-  -- Create FIRST: this is called from the options panel, which a player can open before the display
-  -- has ever started, and placing an anchor that does not exist yet is an error thrown out of a
-  -- settings getter -- which takes the whole page with it.
-  Textures.Create()
-  -- Re-places the row too: the anchor follows the queue strip until it is dragged, and a strip that
-  -- moved (or a settings string that arrived with an anchor in it) has to reach the row somehow.
-  -- Never while it is being placed, or a size change mid-drag would snap the row back.
-  if not positioning then placeAnchor() end
   layout()
   return true
 end
@@ -524,7 +430,7 @@ function Textures.Sync(nowKey, memory, now)
   local A = ns.AbilitySettings
   -- A Move mode the render loop can undo is not a mode: the sample texture it puts on screen is
   -- held by neither a suggestion nor a buff, so the first Sync would take it away mid-drag.
-  if not A or positioning or moving then return false end
+  if not A or moving then return false end
   now = now or (ns.now and ns.now()) or 0
   -- AT5-D1: the numbers a fade is drawn from, kept for `Fire` -- which shows a texture in the same
   -- frame its event happened and has no memory of its own to fade it from.
@@ -546,35 +452,28 @@ function Textures.Sync(nowKey, memory, now)
   -- set once when it appeared and never again would sit at full while the buff ran out. Cheap by
   -- construction -- at most a few textures are ever on screen, and `SetAlpha` restarts nothing, so
   -- there is no idempotency to guard the way the swipe it replaced needed.
-  for key, f in pairs(frames) do f:SetAlpha(Textures.alphaOf(A.effective(key, "texture"), memory and memory[key])) end
+  for key, f in pairs(frames) do f:SetAlpha(Textures.alphaOf(A.effective(key, "texture"), fadeRow(key))) end
   return changed
 end
 
--- ---------------------------------------------------------------- the two Move modes (AB3-D2)
+-- ---------------------------------------------------------------- the Move mode (AB3-D2)
 
-function Textures.isPositioning() return positioning end
 function Textures.movingKey() return moving end
 
--- The Indicators anchor's own Move mode, the Position the Strip pattern (Display/Queue.lua): a
--- TEMPORARY OVERRIDE that writes nothing but the position. It starts false on every load, so no
--- reload or disconnect can strand the addon in it.
-function Textures.StartPositioning()
-  Textures.Create()
-  if positioning then return false end
-  Textures.StopMoveMode()
-  positioning = true
-  anchor:SetSize(GRIP_WIDTH, GRIP_HEIGHT)
-  anchor:EnableMouse(true)
-  anchor.grip:Show()
-  -- Something to place. The All abilities texture, drawn with its own settings: placing a row with
-  -- nothing in it is placing an invisible point, which is what made the strip's own positioning
-  -- mode necessary in the first place.
-  held[ALL] = true
+-- Textures.Preview(key) -> did the held preview change
+--
+-- AT6-D5. The Texture tab's own texture, standing where it will stand, following every control on
+-- the tab live -- there is no Preview button any more because a cue you have to ask for once is a
+-- cue you cannot adjust. `nil` releases it, and EVERY way out of that tab must pass through here:
+-- another tab, another ability, the window closing, the texture switched off, a Move mode starting.
+-- A preview that is never released is a texture sitting on screen for the rest of the session, and
+-- nothing in the fight will ever take it away -- which is exactly the silent failure this channel
+-- has produced before.
+function Textures.Preview(key)
+  if type(key) ~= "string" or key == "" then key = nil end
+  if previewKey == key then return false end
+  previewKey = key
   layout()
-  -- FX1-D5: the options window gets out of the way -- it is very often sitting exactly where the
-  -- row is being dragged to. From HERE rather than from the button, so that every way out of the
-  -- mode brings the window back (Textures.StopMoveMode below is the only one).
-  if ns.Options and ns.Options.BeginMove then ns.Options.BeginMove("indicators") end
   return true
 end
 
@@ -584,6 +483,10 @@ end
 function Textures.StartMove(key)
   if type(key) ~= "string" or key == "" then return false end
   Textures.StopMoveMode()
+  -- AT6-D5: the tab's preview and the drag's sample are two claims on the same texture, and the
+  -- drag is the one with a frame that eats the mouse. Released here so that whichever way the mode
+  -- ends, there is only ever one thing to take off screen.
+  previewKey = nil
   moving = key
   held[key] = true
   layout()
@@ -594,30 +497,26 @@ function Textures.StartMove(key)
   return true
 end
 
--- Ends whichever mode is running. ONE function rather than two, because the options panel's close
--- path has to end both and a guard written twice is a guard that will be forgotten once (the strip's
+-- Ends the Move mode. Still one function with its own guard, because the options panel's close path
+-- has to end it too and a guard written twice is a guard that will be forgotten once (the strip's
 -- positioning mode is stranded by exactly that).
 function Textures.StopMoveMode()
-  local wasPositioning, wasMoving = positioning, moving
-  if not (wasPositioning or wasMoving) then return false end
-  positioning, moving = false, nil
-  if wasPositioning then
-    held[ALL] = nil
-    anchor:SetSize(1, 1)
-    anchor:EnableMouse(false)
-    anchor.grip:Hide()
-  end
-  if wasMoving then
-    held[wasMoving] = nil
-    local f = frames[wasMoving]
-    -- Before layout(), which is what hands the frame back to the pool: a pooled frame that kept
-    -- mouse input would swallow clicks from the middle of the screen the next time it was used.
-    if f then f:EnableMouse(false) end
-  end
+  local wasMoving = moving
+  if not wasMoving then return false end
+  moving = nil
+  -- AT6-D5: the window comes back on the tab, but the tab is not re-fed, so nothing would tell the
+  -- preview to start again. Cleared rather than restored, so the one thing that is certain -- that
+  -- the drag's sample goes -- happens, and the player gets the preview back on their next click.
+  previewKey = nil
+  held[wasMoving] = nil
+  local f = frames[wasMoving]
+  -- Before layout(), which is what hands the frame back to the pool: a pooled frame that kept
+  -- mouse input would swallow clicks from the middle of the screen the next time it was used.
+  if f then f:EnableMouse(false) end
   -- Whatever was genuinely holding a texture puts it back on the next Sync; what this clears is the
   -- sample the mode itself put there.
   layout()
-  -- FX1-D5: both modes end here, so the options window comes back here.
+  -- FX1-D5: the mode ends here, so the options window comes back here.
   if ns.Options and ns.Options.EndMove then ns.Options.EndMove() end
   return true
 end
@@ -652,9 +551,10 @@ end
 -- (`Overlay.describe`), plus one this channel adds: a source that resolves to no file at all.
 function Textures.describe()
   local A = ns.AbilitySettings
-  local out = { textures = {}, positioning = positioning, movingKey = moving }
-  local a = store()
-  out.anchor = (a and type(a.anchor) == "table") and a.anchor or nil
+  -- AT6-D5: `previewKey` is the ability whose Texture tab is holding a texture on screen. It is
+  -- reported because it is the ONE thing on screen that no cue put there -- "why is that sitting in
+  -- the middle of my screen" has to be answerable without guessing.
+  local out = { textures = {}, movingKey = moving, previewKey = previewKey }
   if not A then return out end
   for _, key in ipairs(abilityKeys()) do
     local on = A.channelOn(key, "texture")
@@ -670,7 +570,8 @@ function Textures.describe()
         -- have. "You typed it wrong" and "WeakAuras is not installed here" are different problems
         -- with the same symptom, and the ring is drawn for both.
         needsAddon = Textures.missingAddon(e),
-        size = Textures.sizeOf(e), place = Textures.placementOf(e), events = events,
+        -- AT6-D4: where it sits is an offset from the centre of the screen and nothing else.
+        size = Textures.sizeOf(e), x = tonumber(e.x) or 0, y = tonumber(e.y) or 0, events = events,
         shownAt = shownAt[key], visible = (held[key] or flashUntil[key]) ~= nil,
         -- AT5-D1: what the fade is SET to, and its current fraction. The two differ in exactly the
         -- case worth reporting -- a fade picked for an ability whose cooldown or buff this client
@@ -682,7 +583,7 @@ function Textures.describe()
   return out
 end
 
--- Manual test-fire: the Texture tab's Preview button and `/elm debug textures <KEY>`. Ignores
+-- Manual test-fire: `/elm debug textures <KEY>` and the picker window's live preview. Ignores
 -- whether the channel is on -- what it answers is "can this draw at all", which is the one question
 -- worth asking of an ability that is showing nothing.
 function Textures.TestFire(key)

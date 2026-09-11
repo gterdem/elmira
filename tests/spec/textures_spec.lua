@@ -82,7 +82,7 @@ describe("Display.Textures", function()
     helper.load("Elmira/Core/Spells.lua")
     A = helper.load("Elmira/Core/AbilitySettings.lua")
     Textures = helper.load("Elmira/Display/Textures.lua")
-    ns.db = { char = { spells = {}, abilities = {}, textures = { anchor = false } } }
+    ns.db = { char = { spells = {}, abilities = {} } }
     ns.now = function() return clock end
     stubPack({ EXORCISM = { id = 1, icon = "icon:exorcism" } })
   end)
@@ -91,14 +91,12 @@ describe("Display.Textures", function()
     _G.CreateFrame, _G.UIParent = nil, nil
   end)
 
-  local function anchor() return Textures.Create() end
-
-  -- Every frame that is currently drawing an indicator: the anchor is the one CreateFrame made
-  -- first, and a pooled frame that was given back is hidden.
+  -- Every frame that is currently drawing an indicator. AT6-D4 removed the Indicators anchor, so
+  -- every frame this module makes is a texture and a pooled frame that was given back is hidden.
   local function showing()
     local out = {}
     for _, f in ipairs(frames) do
-      if f ~= Textures.Create() and f.shown then out[#out + 1] = f end
+      if f.shown then out[#out + 1] = f end
     end
     return out
   end
@@ -107,61 +105,14 @@ describe("Display.Textures", function()
     A.set(key, "texture", "enabled", true)
   end
 
-  -- ------------------------------------------------------------------ AB3-D2: the pure row flow
-
-  describe("rowFlow", function()
-    it("centres a single texture on the anchor", function()
-      assert.same({ { key = "A", x = 0, y = 0, size = 48 } },
-        Textures.rowFlow({ { key = "A", size = 48 } }, 8))
-    end)
-
-    -- The whole reason the row exists: two textures that would sit on the same pixel are pushed
-    -- apart by exactly their two half-widths plus the gap.
-    it("separates two textures by their sizes and the gap, still centred", function()
-      local out = Textures.rowFlow({ { key = "A", size = 40 }, { key = "B", size = 40 } }, 8)
-      assert.equal(-24, out[1].x)
-      assert.equal(24, out[2].x)
-      assert.equal(48, out[2].x - out[1].x)
-      assert.equal(0, out[1].x + out[2].x)
-    end)
-
-    it("keeps different sizes from overlapping", function()
-      local out = Textures.rowFlow({ { key = "A", size = 16 }, { key = "B", size = 64 } }, 10)
-      assert.equal(-37, out[1].x)
-      assert.equal(13, out[2].x)
-      -- the space between their EDGES is the gap, not a guess: half of each size is what decides
-      -- whether a 16px dot beside a 64px ring touches it.
-      assert.equal(10, (out[2].x - 32) - (out[1].x + 8))
-    end)
-
-    it("defaults the gap rather than treating a missing one as zero", function()
-      local out = Textures.rowFlow({ { key = "A", size = 20 }, { key = "B", size = 20 } })
-      assert.equal(28, out[2].x - out[1].x)
-    end)
-
-    it("returns nothing for nothing", function()
-      assert.same({}, Textures.rowFlow({}, 8))
-    end)
-  end)
-
   -- ------------------------------------------------------------------ values that arrive from data
 
-  describe("sizeOf / placementOf / texturePath", function()
+  describe("sizeOf / texturePath", function()
     it("clamps a size to the slider's own range", function()
       assert.equal(48, Textures.sizeOf({}))
       assert.equal(16, Textures.sizeOf({ size = 4 }))
       assert.equal(256, Textures.sizeOf({ size = 4000 }))
       assert.equal(96, Textures.sizeOf({ size = 96 }))
-    end)
-
-    -- An unknown placement leaves the frame unanchored in the real client, which draws it in the
-    -- bottom-left corner with no hint why. A class pack's defaults and an imported settings string
-    -- can both produce one.
-    it("falls back to the row for a placement it cannot draw", function()
-      assert.equal("row", Textures.placementOf(nil))
-      assert.equal("row", Textures.placementOf({ place = "somewhere" }))
-      assert.equal("centre", Textures.placementOf({ place = "centre" }))
-      assert.equal("custom", Textures.placementOf({ place = "custom" }))
     end)
 
     -- AT4-D2: there is no `shape` source any more -- the shipped shapes are eight files in the
@@ -186,73 +137,6 @@ describe("Display.Textures", function()
       -- Blizzard's own art is addressable only by file id on this client, stored as the string it
       -- was picked as; TextureLibrary.drawable is what turns it back into a number for SetTexture.
       assert.equal("165558", Textures.texturePath({ source = "path", path = "165558" }))
-    end)
-  end)
-
-  -- ------------------------------------------------------------------ AB3-D2: the anchor
-
-  describe("Create", function()
-    it("builds one named, movable, click-through anchor and reuses it", function()
-      local a = Textures.Create()
-      assert.equal("ElmiraIndicators", a.name)
-      assert.same({ 1, 1 }, a.size)
-      assert.is_true(a.movable)
-      assert.is_true(a.clamped, "a row dragged off the edge cannot be dragged back")
-      assert.is_false(a.mouse, "an invisible point in the middle of the screen must not eat clicks")
-      assert.same({ "LeftButton" }, a.dragButtons)
-      assert.equal(a, Textures.Create())
-      assert.equal(1, #frames)
-    end)
-
-    it("gives it a grip that covers it, in the brand colour, hidden until it is being placed",
-      function()
-        local grip = Textures.Create().textures[1]
-        assert.is_true(grip.allPoints)
-        assert.same({ ns.Colors.BRAND.r, ns.Colors.BRAND.g, ns.Colors.BRAND.b, 0.35 },
-          grip.colorTexture)
-        assert.is_false(grip:IsShown(), "the grip is only for the Move mode")
-      end)
-
-    -- AB3-D2's default: above the queue strip, ANCHORED to it rather than copied from it, so
-    -- moving the strip takes the indicators with it.
-    it("hangs above the queue strip while nothing has dragged it", function()
-      local strip = fakeFrame("Frame", "ElmiraQueue")
-      ns.Queue = { frame = function() return strip end }
-      local a = Textures.Create()
-      assert.same({ "BOTTOM", strip, "TOP", 0, 40 }, a.point)
-    end)
-
-    it("uses the stored anchor once the row has been placed, and forgets the strip", function()
-      local strip = fakeFrame("Frame", "ElmiraQueue")
-      ns.Queue = { frame = function() return strip end }
-      ns.db.char.textures.anchor = { point = "TOP", relPoint = "TOP", x = 12, y = -300 }
-      local a = Textures.Create()
-      assert.same({ "TOP", _G.UIParent, "TOP", 12, -300 }, a.point)
-    end)
-
-    it("falls back to the middle of the screen with no strip at all", function()
-      local a = Textures.Create()
-      assert.same({ "CENTER", _G.UIParent, "CENTER", 0, 0 }, a.point)
-    end)
-
-    -- The row follows the strip until it is dragged, so a strip that moved -- or an anchor that
-    -- arrived in a settings string -- has to be able to reach it. SetPoint ADDS an anchor point in
-    -- the real client, so re-placing without clearing first leaves two fighting each other.
-    it("re-places the row on a refresh, with one anchor point and not two", function()
-      local a = Textures.Create()
-      ns.db.char.textures.anchor = { point = "TOP", relPoint = "TOP", x = 5, y = -50 }
-      assert.is_true(Textures.Refresh())
-      assert.same({ "TOP", _G.UIParent, "TOP", 5, -50 }, a.point)
-      assert.equal(1, #a.points, "the old anchor point was left fighting the new one")
-    end)
-
-    it("leaves the row exactly where it is being dragged to", function()
-      local a = Textures.Create()
-      Textures.StartPositioning()
-      a.point = { "TOPLEFT", _G.UIParent, "TOPLEFT", 300, -300 }
-      Textures.Refresh()
-      assert.same({ "TOPLEFT", _G.UIParent, "TOPLEFT", 300, -300 }, a.point,
-        "a slider moved mid-drag snapped the row back")
     end)
   end)
 
@@ -292,7 +176,8 @@ describe("Display.Textures", function()
       assert.equal("icon:exorcism", f.textures[1].texture)
       assert.same({ 1, 1, 1 }, f.textures[1].vertexColor)
       assert.equal(1, f.alpha)
-      assert.same({ "CENTER", anchor(), "CENTER", 0, 0 }, f.point)
+      -- AT6-D4: the centre of the SCREEN, with no anchor of ours in between.
+      assert.same({ "CENTER", _G.UIParent, "CENTER", 0, 0 }, f.point)
     end)
 
     it("draws the chosen file in the chosen colour at the chosen size", function()
@@ -339,44 +224,23 @@ describe("Display.Textures", function()
       assert.is_false(Textures.Fire("EXORCISM", "expiring"))
     end)
 
-    it("places two textures in a row so they never overlap", function()
+    -- AT6-D4, and deliberately the opposite of what the row used to guarantee: two textures nobody
+    -- has dragged sit on top of each other, WeakAuras-style. The row that kept them apart moved the
+    -- one you had already placed every time a second appeared, which is worse -- and an overlap is
+    -- visible and fixable in one drag.
+    it("leaves two untouched textures on top of each other at the centre", function()
       switchOn("EXORCISM")
       switchOn("JUDGEMENT")
       Textures.Fire("EXORCISM", "suggested")
       Textures.Fire("JUDGEMENT", "suggested")
       local out = showing()
       assert.equal(2, #out)
-      assert.equal(56, math.abs(out[1].point[4] - out[2].point[4]))
+      assert.same({ "CENTER", _G.UIParent, "CENTER", 0, 0 }, out[1].point)
+      assert.same({ "CENTER", _G.UIParent, "CENTER", 0, 0 }, out[2].point)
     end)
 
-    -- The row has to read the same way twice: `pairs` has no order, so two ticks showing the same
-    -- textures would otherwise swap them round under the player's eyes.
-    it("orders the row by key, whatever order the events arrived in", function()
-      -- A distinct size per key is what makes the ORDER readable from the coordinates alone: five
-      -- identical textures would land on the same five spots in any order.
-      local sizes = { A_KEY = 16, B_KEY = 24, C_KEY = 32, D_KEY = 40, E_KEY = 48 }
-      for _, key in ipairs({ "E_KEY", "D_KEY", "C_KEY", "B_KEY", "A_KEY" }) do
-        switchOn(key)
-        A.setInherit(key, "texture", false)
-        A.set(key, "texture", "size", sizes[key])
-        Textures.Fire(key, "suggested")
-      end
-      local at = {}
-      for _, f in ipairs(showing()) do at[f.size[1]] = f.point[4] end
-      -- 16+24+32+40+48 with four 8px gaps is 192 wide, centred, smallest first
-      assert.same({ [16] = -88, [24] = -60, [32] = -24, [40] = 20, [48] = 72 }, at)
-    end)
-
-    it("anchors a centred texture to the screen, not to the row", function()
+    it("anchors a dragged texture at its stored offset from screen centre", function()
       switchOn("EXORCISM")
-      A.set("EXORCISM", "texture", "place", "centre")
-      Textures.Fire("EXORCISM", "suggested")
-      assert.same({ "CENTER", _G.UIParent, "CENTER", 0, 0 }, showing()[1].point)
-    end)
-
-    it("anchors a custom texture at its stored offset from screen centre", function()
-      switchOn("EXORCISM")
-      A.set("EXORCISM", "texture", "place", "custom")
       A.set("EXORCISM", "texture", "x", -120)
       A.set("EXORCISM", "texture", "y", 260)
       Textures.Fire("EXORCISM", "suggested")
@@ -471,85 +335,7 @@ describe("Display.Textures", function()
     end)
   end)
 
-  -- ------------------------------------------------------------------ AB3-D2: the two Move modes
-
-  describe("the Indicators Move mode", function()
-    it("puts a sample on screen, makes the anchor grabbable, and puts it all back", function()
-      assert.is_false(Textures.isPositioning())
-      assert.is_true(Textures.StartPositioning())
-      assert.is_true(Textures.isPositioning())
-      local a = anchor()
-      assert.same({ 160, 40 }, a.size)
-      assert.is_true(a.mouse)
-      assert.is_true(a.textures[1]:IsShown())
-      assert.equal(1, #showing(), "nothing to drag is nothing to place")
-
-      assert.is_true(Textures.StopMoveMode())
-      assert.is_false(Textures.isPositioning())
-      assert.same({ 1, 1 }, a.size)
-      assert.is_false(a.mouse)
-      assert.is_false(a.textures[1]:IsShown())
-      assert.equal(0, #showing())
-    end)
-
-    it("refuses to start twice and reports nothing to stop when no mode is running", function()
-      assert.is_false(Textures.StopMoveMode())
-      assert.is_true(Textures.StartPositioning())
-      assert.is_false(Textures.StartPositioning())
-    end)
-
-    it("only drags while the mode is on", function()
-      local a = anchor()
-      a.scripts.OnDragStart(a)
-      assert.is_false(a.moving, "the row must not be draggable by accident at a boss")
-      Textures.StartPositioning()
-      a.scripts.OnDragStart(a)
-      assert.is_true(a.moving)
-    end)
-
-    it("stores where it was dropped, and places itself there next time", function()
-      local a = anchor()
-      Textures.StartPositioning()
-      a.scripts.OnDragStart(a)
-      a.point = { "TOPLEFT", _G.UIParent, "TOPLEFT", 44, -180 }
-      a.scripts.OnDragStop(a)
-      assert.is_false(a.moving)
-      assert.same({ point = "TOPLEFT", relPoint = "TOPLEFT", x = 44, y = -180 },
-        ns.db.char.textures.anchor)
-    end)
-
-    it("stores nothing from a drag that never started", function()
-      local a = anchor()
-      a.point = { "TOPLEFT", _G.UIParent, "TOPLEFT", 44, -180 }
-      a.scripts.OnDragStop(a)
-      assert.is_false(ns.db.char.textures.anchor)
-    end)
-
-    -- Before OnInitialize there is no SavedVariables table to write into, and a drag is still
-    -- possible in principle -- storing into nothing must not take the drag down with it.
-    it("survives a drag with no settings store at all", function()
-      local a = anchor()
-      Textures.StartPositioning()
-      a.scripts.OnDragStart(a)
-      ns.db = nil
-      assert.is_true(pcall(function() a.scripts.OnDragStop(a) end))
-      assert.is_false(a.moving)
-    end)
-
-    it("builds the anchor itself when nothing has yet", function()
-      assert.equal(0, #frames)
-      assert.is_true(Textures.StartPositioning())
-      assert.is_true(#frames >= 1, "the mode had no anchor to place")
-    end)
-
-    -- A Move mode the render loop can undo is not a mode: the sample is held by neither a
-    -- suggestion nor a buff, so the very next Sync would take it away mid-drag.
-    it("is immune to the render loop while it runs", function()
-      Textures.StartPositioning()
-      assert.is_false(Textures.Sync("NOTHING", {}, clock + 99))
-      assert.equal(1, #showing())
-    end)
-  end)
+  -- ------------------------------------------------------------------ AB3-D2: the Move mode
 
   describe("moving one texture", function()
     it("shows it whether or not it is switched on, and lets that one frame be dragged", function()
@@ -570,7 +356,7 @@ describe("Display.Textures", function()
 
     -- AB3-D2: "stores an offset from screen centre". Not from the parent, not from the anchor --
     -- the one reference point that survives a resolution change and a strip that moved.
-    it("stores where it was dropped as an offset from screen centre, and switches to custom", function()
+    it("stores where it was dropped as an offset from screen centre", function()
       Textures.StartMove("EXORCISM")
       local f = showing()[1]
       f.scripts.OnDragStart(f)
@@ -578,7 +364,6 @@ describe("Display.Textures", function()
       f.scripts.OnDragStop(f)
       assert.is_false(f.moving, "the drag was never ended, so the frame follows the cursor for ever")
       local e = A.effective("EXORCISM", "texture")
-      assert.equal("custom", e.place)
       assert.equal(120, e.x)
       assert.equal(-70, e.y)
     end)
@@ -587,7 +372,6 @@ describe("Display.Textures", function()
     -- dragging a linked ability's texture has to move that one and no other.
     it("moves that texture alone, and never through what All abilities holds", function()
       -- The All abilities row has an offset of its own; it must not reach EXORCISM at all.
-      A.set(A.ALL, "texture", "place", "custom")
       A.set(A.ALL, "texture", "x", 999)
       Textures.StartMove("EXORCISM")
       local f = showing()[1]
@@ -596,9 +380,7 @@ describe("Display.Textures", function()
       f.scripts.OnDragStop(f)
       assert.is_false(A.inherits("EXORCISM", "texture"))
       assert.equal(-100, A.effective("EXORCISM", "texture").x)
-      assert.equal("custom", A.effective("EXORCISM", "texture").place)
       assert.equal(0, A.effective("JUDGEMENT", "texture").x)
-      assert.equal("row", A.effective("JUDGEMENT", "texture").place)
     end)
 
     -- Without the guard, ANY texture's drag-stop stores ITS position against whichever key the
@@ -615,7 +397,6 @@ describe("Display.Textures", function()
       other.centre = { 900, 900 }
       other.scripts.OnDragStop(other)
       assert.equal(0, A.effective("EXORCISM", "texture").x)
-      assert.equal("row", A.effective("EXORCISM", "texture").place)
       -- ...and the right frame still works
       mine.centre = { 700, 400 }
       mine.scripts.OnDragStop(mine)
@@ -658,19 +439,121 @@ describe("Display.Textures", function()
       assert.is_false(f:IsShown())
     end)
 
-    it("ends one mode when the other starts", function()
-      Textures.StartPositioning()
+    it("moves the new texture instead of two at once when a second drag starts", function()
       Textures.StartMove("EXORCISM")
-      assert.is_false(Textures.isPositioning())
-      Textures.StartPositioning()
-      assert.is_nil(Textures.movingKey())
+      Textures.StartMove("JUDGEMENT")
+      assert.equal("JUDGEMENT", Textures.movingKey())
+      -- One sample on screen, not two: the first mode's own texture was taken down by the second
+      -- mode starting, or the player is dragging one shape while another sits there for ever.
+      assert.equal(1, #showing())
+      Textures.StopMoveMode()
+      assert.equal(0, #showing())
+    end)
+  end)
+
+  -- ------------------------------------------------------------------ AT6-D5: the held preview
+
+  -- "While an ability's Texture tab is the selected tab in the options window (and the texture is
+  -- switched on), the texture is held on screen exactly as configured and follows every change
+  -- live." Nothing in the fight is holding it, so nothing in the fight will ever take it away --
+  -- every test below is about the RELEASE, because a preview that is never released is a texture
+  -- standing in the middle of the screen for the rest of the session with no control left anywhere
+  -- to remove it.
+  describe("the Texture tab's held preview", function()
+    -- The key is remembered whether or not the channel is on, and whether it DRAWS is re-asked on
+    -- every layout: ticking "Show a texture for this ability" while the tab is open has to bring
+    -- the preview up on that click, and the tab is not re-fed by its own toggle.
+    it("draws nothing for a switched-off texture, and everything the moment it is switched on",
+      function()
+        assert.is_true(Textures.Preview("EXORCISM"))
+        assert.equal(0, #showing(), "a switched-off texture was previewed anyway")
+        switchOn("EXORCISM")
+        Textures.Refresh()
+        assert.equal("EXORCISM", Textures.describe().previewKey)
+        local f = showing()[1]
+        assert.is_not_nil(f, "ticking the switch did not bring the preview up")
+        assert.equal("icon:exorcism", f.textures[1].texture)
+        assert.same({ 48, 48 }, f.size)
+      end)
+
+    it("follows every change on the tab without waiting for a cue to fire", function()
+      switchOn("EXORCISM")
+      Textures.Preview("EXORCISM")
+      A.set("EXORCISM", "texture", "size", 128)
+      A.set("EXORCISM", "texture", "color", { r = 1, g = 0, b = 0 })
+      Textures.Refresh()
+      assert.same({ 128, 128 }, showing()[1].size)
+      assert.same({ 1, 0, 0 }, showing()[1].textures[1].vertexColor)
+    end)
+
+    -- The tab's Opacity is what the player is dragging while they look at it; a preview that faded
+    -- to the floor because the ability happens to be on cooldown reads as a slider doing nothing.
+    it("draws at the tab's Opacity, with no fade applied to it", function()
+      switchOn("EXORCISM")
+      A.set("EXORCISM", "texture", "alpha", 0.6)
+      A.set("EXORCISM", "texture", "fill", "cooldown")
+      Textures.Preview("EXORCISM")
+      assert.equal(0.6, showing()[1].alpha)
+      Textures.Sync(nil, { EXORCISM = { cooldown = 10, cooldownFull = 10 } }, clock)
+      assert.equal(0.6, showing()[1].alpha, "the fade was applied to the tab's own preview")
+    end)
+
+    it("is not taken away by the render loop the way a cue would be", function()
+      switchOn("EXORCISM")
+      Textures.Preview("EXORCISM")
+      Textures.Sync("SOMETHING_ELSE", {}, clock + 99)
+      assert.equal(1, #showing())
+    end)
+
+    it("is released when the tab is left", function()
+      switchOn("EXORCISM")
+      Textures.Preview("EXORCISM")
+      assert.is_true(Textures.Preview(nil))
+      assert.is_nil(Textures.describe().previewKey)
+      assert.equal(0, #showing())
+    end)
+
+    it("is released when another ability is previewed instead", function()
+      switchOn("EXORCISM")
+      switchOn("JUDGEMENT")
+      Textures.Preview("EXORCISM")
+      Textures.Preview("JUDGEMENT")
+      assert.equal(1, #showing(), "the previous ability's preview stayed on screen")
+      assert.equal("JUDGEMENT", Textures.describe().previewKey)
+    end)
+
+    -- The switch at the top of the tab, unticked: the preview has to go on that click, which is
+    -- `put` -> `restyle` -> `Refresh` and nothing else.
+    it("is released the moment the texture is switched off", function()
+      switchOn("EXORCISM")
+      Textures.Preview("EXORCISM")
+      A.set("EXORCISM", "texture", "enabled", false)
+      Textures.Refresh()
+      assert.equal(0, #showing())
+    end)
+
+    it("is released when a Move mode starts and when it ends", function()
+      switchOn("EXORCISM")
+      Textures.Preview("EXORCISM")
+      Textures.StartMove("EXORCISM")
+      assert.is_nil(Textures.describe().previewKey, "the tab's preview and the drag's sample both claimed it")
+      assert.equal(1, #showing())
+      Textures.StopMoveMode()
+      assert.is_nil(Textures.describe().previewKey)
+      assert.equal(0, #showing(), "the texture was left standing after Done")
+    end)
+
+    it("reports which ability it is holding, for /elm debug textures", function()
+      switchOn("EXORCISM")
+      Textures.Preview("EXORCISM")
+      assert.equal("EXORCISM", Textures.describe().previewKey)
     end)
   end)
 
   -- FX1-D5, and this is the mode the owner was using when he found the problem: "I can not move it
   -- around since the Configuration page is too big and I can not move the configuration page out of
-  -- the screen." Both modes ask the options window to step aside, and both give it back.
-  describe("the Move modes and the options window (FX1-D5)", function()
+  -- the screen." The mode asks the options window to step aside, and gives it back.
+  describe("the Move mode and the options window (FX1-D5)", function()
     local moves
 
     before_each(function()
@@ -679,14 +562,6 @@ describe("Display.Textures", function()
         BeginMove = function(what, key) moves[#moves + 1] = { "begin", what, key } end,
         EndMove = function() moves[#moves + 1] = { "end" } end,
       }
-    end)
-
-    it("asks the window to step aside for the Indicators row, and gives it back", function()
-      Textures.StartPositioning()
-      assert.same({ "begin", "indicators" }, moves[1])
-      Textures.StopMoveMode()
-      assert.same({ "end" }, moves[2])
-      assert.equal(2, #moves)
     end)
 
     -- Named, because the bar that replaces the window has to say WHICH texture is being placed.
@@ -705,8 +580,6 @@ describe("Display.Textures", function()
 
     it("does not need an options window to move anything", function()
       ns.Options = nil
-      assert.is_true(Textures.StartPositioning())
-      assert.is_true(Textures.StopMoveMode())
       assert.is_true(Textures.StartMove("EXORCISM"))
       assert.is_true(Textures.StopMoveMode())
     end)
@@ -764,13 +637,11 @@ describe("Display.Textures", function()
   -- ------------------------------------------------------------------ the Options panel's hooks
 
   describe("Refresh", function()
-    -- Called from the options panel, which a player can open before the display has ever started.
-    -- Placing an anchor that does not exist yet throws out of a settings getter, which takes the
-    -- whole page down with it.
-    it("builds the anchor itself when the panel is opened before the display starts", function()
-      assert.equal(0, #frames)
+    -- Called from the options panel, which a player can open before the display has ever started:
+    -- it must build nothing and throw nothing when there is not one texture on screen.
+    it("does nothing and survives with no texture showing at all", function()
       assert.is_true(Textures.Refresh())
-      assert.equal(1, #frames)
+      assert.equal(0, #frames)
     end)
 
     it("repaints what is already on screen, so a slider is not a slider that does nothing", function()
@@ -932,12 +803,6 @@ describe("Display.Textures", function()
     it("says nothing about the thirty-eight abilities that are off", function()
       local d = Textures.describe()
       assert.same({}, d.textures)
-      assert.is_nil(d.anchor)
-    end)
-
-    it("reports the anchor once it has been placed", function()
-      ns.db.char.textures.anchor = { point = "CENTER", relPoint = "CENTER", x = 1, y = 2 }
-      assert.same({ point = "CENTER", relPoint = "CENTER", x = 1, y = 2 }, Textures.describe().anchor)
     end)
 
     it("separates 'switched off' from 'on with no moment ticked' from 'never appeared'", function()
@@ -963,7 +828,10 @@ describe("Display.Textures", function()
       assert.is_true(row.visible)
       assert.is_nil(row.path, "an icon this client cannot resolve must not read as a working file")
       assert.equal(48, row.size)
-      assert.equal("row", row.place)
+      -- AT6-D4: the offset from the centre of the screen is the whole of "where", and 0,0 IS the
+      -- centre -- there is no placement mode left for the diagnostic to report.
+      assert.equal(0, row.x)
+      assert.equal(0, row.y)
       assert.equal("icon", row.source)
     end)
 

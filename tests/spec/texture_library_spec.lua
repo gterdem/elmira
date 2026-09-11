@@ -97,6 +97,13 @@ describe("Display.TextureLibrary", function()
       assert.is_truthy(ids["186185"], "a beam it does")
     end)
 
+    -- AT6-D2: the category is "Shapes", not "Elmira Shapes" -- this is Elmira's own picker, so
+    -- saying so twice in one dropdown says nothing. WeakAuras keeps its name, where it earns it.
+    it("names the shipped shapes group after the shapes, not after the addon", function()
+      assert.equal("Shapes", group("elmira").name)
+      assert.equal("WeakAuras Shapes", group("weakauras").name)
+    end)
+
     it("names the shipped shapes after the shape, not after the file", function()
       local names = {}
       for _, entry in ipairs(group("elmira").textures) do names[#names + 1] = entry.name end

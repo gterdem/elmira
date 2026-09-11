@@ -802,22 +802,18 @@ describe("Core.Init", function()
       assert.equal(1, called)
     end)
 
-    -- AB3-D1/D2: the indicator frames are built up front like the overlay's, and AFTER the queue --
-    -- the Indicators anchor hangs above the strip's frame by default, so a row built first would
-    -- silently fall back to the middle of the screen.
-    it("builds the indicator textures after the queue, without registering them as a renderer",
-      function()
-        NA:OnInitialize()
-        NA:StartDisplay()
-        local queueAt, texturesAt
-        for i, e in ipairs(order) do
-          if e == "Queue.Create" then queueAt = i end
-          if e == "Textures.Create" then texturesAt = i end
-          assert.are_not.equal("register:textures", e)
-        end
-        assert.is_not_nil(texturesAt, "the indicator frames were never built")
-        assert.is_true(texturesAt > queueAt, "the anchor had no strip to hang from")
-      end)
+    -- AB3-D1/D2: the indicator textures fire on an ability EVENT (Display.abilityEvent), not on a
+    -- diff of the queue, so there is nothing here for the render loop to call. AT6-D4 removed the
+    -- Indicators anchor that used to be built up front alongside the overlay's frames -- a texture
+    -- now sits at the centre of the screen and has nothing to hang from.
+    it("never registers the indicator textures as a renderer", function()
+      NA:OnInitialize()
+      NA:StartDisplay()
+      for _, e in ipairs(order) do
+        assert.are_not.equal("register:textures", e)
+        assert.are_not.equal("Textures.Create", e)
+      end
+    end)
 
     it("starts the display with no Textures module present", function()
       ns.Textures = nil

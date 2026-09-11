@@ -167,7 +167,9 @@ end
 -- window that draws it -- this file holds no localisation of its own (it has no `L`), and the keys
 -- live in the locale table with every other user-facing string.
 TextureLibrary.GROUPS = {
-  { key = "elmira",     name = "Elmira Shapes",    textures = ELMIRA },
+  -- AT6-D2: "Shapes", not "Elmira Shapes" -- this is Elmira's own picker, so saying so twice in one
+  -- dropdown says nothing. The WeakAuras group below keeps its addon's name, where it earns it.
+  { key = "elmira",     name = "Shapes",           textures = ELMIRA },
   { key = "beams",      name = "Beams",            textures = BEAMS },
   { key = "icons",      name = "Icons",            textures = ICONS },
   { key = "pvp",        name = "PvP Emblems",      textures = PVP },

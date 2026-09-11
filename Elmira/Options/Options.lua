@@ -1326,9 +1326,10 @@ local closingBar = false  -- mutants: equivalent local-only; are WE hiding the b
 -- What is being moved, in the player's words. Tokens rather than sentences cross the Display
 -- boundary: Display decides what a mode DOES, Options decides what it is called, and only this side
 -- goes through AceLocale.
+-- AT6-D4 removed `indicators`: the row those textures flowed along, and the Move mode that placed
+-- it, are gone -- each texture is dragged on its own now.
 local MOVE_SUBJECTS = {
   strip      = "the queue strip",
-  indicators = "the indicator row",
   messages   = "your screen messages",
   texture    = "%s's texture",
 }
@@ -1392,6 +1393,10 @@ local function hidePanel()
   local widget = openWidget()
   local frame = widget and widget.frame
   if not frame then return end
+  -- AT6-D5: a window that is not on screen is not showing a Texture tab, so the texture it was
+  -- holding up for that tab has to go. Every Move mode comes through here, which is also how the
+  -- tab's preview and a drag's sample can never both claim the same texture.
+  if ns.Textures and ns.Textures.Preview then ns.Textures.Preview(nil) end
   movePath = selectedPath()
   moveWidget, hiddenForMove = widget, true
   frame:Hide()
@@ -1769,6 +1774,11 @@ local function chainClose(dialog)
     -- `prior` -- AceConfigDialog's FrameOnClose -- would release the widget to the pool while we
     -- still intend to show it again.
     if hiddenForMove then return end
+    -- AT6-D5, first and unconditionally: the Texture tab holds its ability's texture on screen, and
+    -- nothing in the fight is holding it -- so a window closed on that tab would leave it standing
+    -- in the middle of the screen for the rest of the session with no control anywhere to take it
+    -- off. This is the one line that ends that, on the one path every close goes through.
+    if ns.Textures and ns.Textures.Preview then ns.Textures.Preview(nil) end
     -- Every Move mode, through the one function the Done button uses, so the two can never disagree
     -- about what "leave move mode" means.
     stopMoveModes()
@@ -1941,12 +1951,61 @@ local function installAbilityTree(tree)
   Options.markAbilityIcons(tree)
 end
 
+-- ------------------------------------------------------------ AT6-D5: the Texture tab's live texture
+--
+-- "The texture is held on screen exactly as configured and follows every change live" -- which means
+-- something has to notice when the tab STOPS being the one you are reading, and there is no event
+-- for that. What there is, is FeedGroup: AceConfigDialog re-feeds a group every time a tree row or a
+-- tab is clicked, with the full path of what it is about to draw, so the path IS the answer to
+-- "which tab is open".
+--
+-- The ORDER is the whole difficulty. FeedGroup recurses INTO itself -- the tab group built for one
+-- ability calls FeedGroup again for that ability's selected tab (`GroupSelected` ->
+-- AceConfigDialog-3.0.lua:1571) -- and a post-hook on a nested call runs BEFORE the post-hook of the
+-- call that made it. So a rebuild of the whole window fires our hook deepest-first and shallowest
+-- LAST, and "release the preview on any path that is not a Texture tab" would release it a moment
+-- after setting it, every single time. Only two depths are ever acted on, and they agree:
+--   * a FOUR-part path (`spells > list > KEY > texture`) is a tab click, and says it outright;
+--   * a THREE-part path is a different ability, whose remembered tab is in the status table by the
+--     time the hook runs (`Options.keepAbilityTab` put it there);
+--   * a ONE- or TWO-part path under `spells` is the page or the list being rebuilt, and its own
+--     children have already answered -- so it must say nothing at all;
+--   * anything else with a path at all is another page entirely, and releases;
+--   * the ROOT rebuild (an empty path) is the last hook of all and says nothing, for the same
+--     reason the shallow `spells` ones do not.
+local function previewKeyForPath(dialog, path)
+  local n = path and #path or 0
+  if n == 0 then return nil, false end
+  if path[1] ~= "spells" then return nil, true end
+  if n == 1 then return nil, false end
+  if path[2] ~= "list" then return nil, true end
+  if n == 2 then return nil, false end
+  if n >= 4 then return (path[4] == "texture") and path[3] or nil, true end
+  local status = dialog and dialog.GetStatusTable and dialog:GetStatusTable("Elmira", path)
+  local tab = status and status.groups and status.groups.selected
+  return (tab == "texture") and path[3] or nil, true
+end
+
+-- Returns the key it is now holding (nil for "nothing"), plus whether this path had an opinion at
+-- all -- a spec cannot otherwise tell "released it" from "left it alone", which is the difference
+-- the ordering above turns on.
+function Options.holdTexturePreview(path)
+  local key, handled = previewKeyForPath(Options.dialog, path)
+  if not handled then return nil, false end
+  if ns.Textures and ns.Textures.Preview then ns.Textures.Preview(key) end
+  return key, true
+end
+
 local function installTreeHook(dialog)
   if not (dialog and hooksecurefunc) then return end
   if not dialog.elmiraTreeHooked then
     dialog.elmiraTreeHooked = true
     hooksecurefunc(dialog, "FeedGroup", function(self, appName, _options, container, _rootframe, path)
       if appName ~= "Elmira" then return end
+      -- AT6-D5, before the tree work and outside it: this fires for every path, including the ones
+      -- that carry no tree at all (another page, another tab), which is exactly when the texture
+      -- being previewed has to come off screen.
+      Options.holdTexturePreview(path)
       local tree = findTreeWidget(container)
       if not tree then return end
       -- The inner Abilities tree: its own hook, and emphatically NOT the outer one's -- silencing

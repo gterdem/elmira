@@ -128,7 +128,12 @@ local function spellbookChoices()
       -- I1c: resolved through the adapter (`Display.spellIconByID`), never a WoW API call from this
       -- file. No resolvable icon renders as the plain name, with no gap and no broken-texture box.
       local icon = ns.Display and ns.Display.spellIconByID and ns.Display.spellIconByID(entry.id)
-      out[key] = icon and string.format("|T%s:%d|t %s", icon, SPELLBOOK_ICON_SIZE, entry.name) or entry.name
+      -- AT6-D7: the id after the name, in brackets. Two entries in a spellbook can read exactly the
+      -- same ("Holy Light" at six ranks, a rune's version of a spell beside the trainer's), and the
+      -- id is the only thing on the row that tells the player which one they are about to add.
+      -- The SORT still goes by name alone (below), so adding it does not reshuffle the list.
+      local label = string.format("%s (%d)", entry.name, entry.id)
+      out[key] = icon and string.format("|T%s:%d|t %s", icon, SPELLBOOK_ICON_SIZE, label) or label
       rows[#rows + 1] = { key = key, name = entry.name }
     end
   end
@@ -564,8 +569,6 @@ end
 -- draw them -- so adding one there cannot leave an unnamed entry here. AT4-D2 took the Source and
 -- Shape dropdowns off this tab entirely: the question is now a tick box ("its own icon?") and, when
 -- that is off, one file path with a Choose… button beside it.
-local PLACE_LABELS = { row = "With the other indicators", centre = "Centre of the screen",
-                       custom = "Somewhere I choose" }
 -- AT5-D1. Worded as what the fade MEASURES, not as what it looks like: "radial progress" tells a
 -- player nothing about which of their two timers they are about to see.
 local FILL_LABELS = { none = "Nothing", cooldown = "How much cooldown is left",
@@ -585,22 +588,34 @@ local function sourceOf(key)
   return effective(key, "texture").source or "icon"
 end
 
--- Is one of the two Move modes running, and is it THIS one. Read through Textures rather than kept
--- here, exactly as the strip's own button reads `Queue.isPositioning`: the mode lives with the
--- frames it moves, and the options window is not the only thing that can end it (the panel closing
--- does, through the chained OnClose).
-local function positioningIndicators()
-  return (ns.Textures and ns.Textures.isPositioning and ns.Textures.isPositioning()) == true
-end
-
+-- Is the Move mode running, and is it THIS texture. Read through Textures rather than kept here,
+-- exactly as the strip's own button reads `Queue.isPositioning`: the mode lives with the frames it
+-- moves, and the options window is not the only thing that can end it (the panel closing does,
+-- through the chained OnClose).
 local function movingTexture(key)
   return (ns.Textures and ns.Textures.movingKey and ns.Textures.movingKey()) == key
 end
 
-local function textureArgs(key)
-  -- AT1-D2: per ability only -- never built for `*`, and nothing left here to inherit. "Position
-  -- the Indicators" moved to All abilities > General, since this tab no longer exists there.
+-- AT6-D1, owner: the tab is one switch and its settings. With "Show a texture for this ability"
+-- unticked, everything below it is greyed -- a page whose controls all answer and change nothing is
+-- how "I set it up and it never appeared" happens, and this channel ships OFF.
+--
+-- `disabled` rather than `hidden` on purpose: a tab that empties itself when you untick the switch
+-- loses the settings the player can see they still have, and the tick box would jump up the page.
+local function textureOff(key)
   local A = AS()
+  return function() return not (A and A.channelOn(key, "texture")) end
+end
+
+-- How wide the Reset button at the right end of the Move row is (AT6-D6), and the gap that pushes
+-- it there. `width = "relative"` with relWidths summing to 1.0 is the only shape AceGUI's Flow
+-- layout scales to the row; only a Button fills its cell, which is why the filler is a description.
+local TEXTURE_MOVE_WIDTH, TEXTURE_GAP_WIDTH, TEXTURE_RESET_WIDTH = 0.35, 0.4, 0.25
+
+local function textureArgs(key)
+  -- AT1-D2: per ability only -- never built for `*`, and nothing left here to inherit.
+  local A = AS()
+  local off = textureOff(key)
   local args = {}
   args.enabled = {
     type = "toggle", order = 2, width = "full", name = L["Show a texture for this ability"],
@@ -614,6 +629,7 @@ local function textureArgs(key)
   -- everybody wants -- the file field below only appears for the people who do not.
   args.ownIcon = {
     type = "toggle", order = 3, width = "full", name = L["Use this ability's own icon"],
+    disabled = off,
     desc = L["Untick to draw a picture of your choosing instead -- one of Elmira's shapes, "
           .. "Blizzard's own art, or any texture file you have."],
     get = function() return sourceOf(key) == "icon" end,
@@ -632,7 +648,7 @@ local function textureArgs(key)
     end,
   }
   args.path = {
-    type = "input", order = 4, width = "full", name = L["Texture file"],
+    type = "input", order = 4, width = "full", name = L["Texture file"], disabled = off,
     desc = L["The picture this ability draws. Pick one with Choose…, or type any path the client "
           .. "can load, e.g. Interface\\Icons\\Spell_Holy_Excorcism. Elmira cannot check a path you "
           .. "type -- if nothing appears, the ring is drawn instead."],
@@ -647,12 +663,22 @@ local function textureArgs(key)
     set = function(_, v) put(key, "texture", "path", v or "") end,
   }
   args.choose = {
-    type = "execute", order = 5, name = L["Choose…"],
-    desc = L["Opens the texture picker: Elmira's shapes, Blizzard's own art and your media packs, "
-          .. "as pictures. Click one to see it on screen straight away."],
+    type = "execute", order = 5, name = L["Choose…"], disabled = off,
+    desc = L["Opens the texture picker on a clear screen: this window gets out of the way and the "
+          .. "texture itself is left on screen, so you judge a picture at its real size where it "
+          .. "will actually appear. Drag it while you are there; press Done when it is right."],
     hidden = function() return sourceOf(key) == "icon" end,
+    -- AT6-D3 (owner): Choose… does what "Move This Texture" does AND opens the picker. The picker
+    -- used to open OVER the configuration window, which is the one place it cannot judge a texture
+    -- from -- 960x680 of panel is exactly what you are trying to see past. `StartMove` is what hides
+    -- the window (through Options.BeginMove) and puts the toolbar up, so the two buttons cannot
+    -- drift apart; the picker is opened AFTER it, on the clear screen it just made.
     func = function()
-      if ns.TexturePanel then ns.TexturePanel.Toggle(key) end
+      if ns.Textures then ns.Textures.StartMove(key) end
+      -- Open, never Toggle: the tab this button is on is not on screen once the window is hidden,
+      -- so "press it again to close" has nothing to press. The toolbar's own Texture button keeps
+      -- the toggle.
+      if ns.TexturePanel then ns.TexturePanel.Open(key) end
     end,
   }
   -- AT4-D3: the one failure the picker adds. A path inside another addon's folder is only a file
@@ -685,13 +711,13 @@ local function textureArgs(key)
       L["Nothing to draw -- Elmira falls back to the ring. Check the file, or pick another."]),
   }
   args.size = {
-    type = "range", order = 7, name = L["Size"], min = 16, max = 256, step = 8,
+    type = "range", order = 7, name = L["Size"], min = 16, max = 256, step = 8, disabled = off,
     desc = L["How big the texture is, in pixels."],
     get = function() return (ns.Textures and ns.Textures.sizeOf(effective(key, "texture"))) or 48 end,
     set = function(_, v) put(key, "texture", "size", v) end,
   }
   args.color = {
-    type = "color", order = 8, name = L["Colour"], hasAlpha = false,
+    type = "color", order = 8, name = L["Colour"], hasAlpha = false, disabled = off,
     desc = L["The shipped shapes are white, so this tints them. A spell icon keeps its own art "
           .. "unless you tint it."],
     get = function()
@@ -702,7 +728,7 @@ local function textureArgs(key)
   }
   args.alpha = {
     type = "range", order = 9, name = L["Opacity"], min = 0.05, max = 1.0, step = 0.05,
-    isPercent = true,
+    isPercent = true, disabled = off,
     get = function() return effective(key, "texture").alpha or 1 end,
     set = function(_, v) put(key, "texture", "alpha", v) end,
   }
@@ -712,6 +738,7 @@ local function textureArgs(key)
   for i, event in ipairs(textureList("EVENTS")) do
     args[event] = {
       type = "toggle", order = 9 + i, width = "full", name = L[EVENT_LABELS[event] or event],
+      disabled = off,
       desc = (ns.Textures and ns.Textures.HELD[event])
         and L["Stays on screen for as long as this is true."]
         or L["Appears for a second and a half."],
@@ -722,14 +749,14 @@ local function textureArgs(key)
   -- AT1-D1, right after "When its buff is about to run out": greyed until that checkbox is
   -- actually ticked -- a threshold nothing uses is not a live control.
   args.expiringSeconds = expiringArgs(key, 14.5, function()
-    return effective(key, "texture").expiring ~= true
+    return off() or effective(key, "texture").expiring ~= true
   end)
   -- AT5-D1/D2 (owner, seeing the swipe draw a PowerAuras-style dark box: "not clockwise or
   -- anything -- start being visible or getting invisible"). Below the five moments now, because
   -- what it pairs with only makes sense once you have read them: an opacity that follows a STATE
   -- (`suggested`/`active`) is visible long enough to fade, an INSTANT flash is not.
   args.fill = {
-    type = "select", order = 16, name = L["Fade with"],
+    type = "select", order = 16, name = L["Fade with"], disabled = off,
     values = labelled(textureList("FILLS"), FILL_LABELS),
     sorting = textureList("FILLS"),
     desc = L["Buff remaining pairs with \"when its buff appears\"; Cooldown recovering pairs with "
@@ -738,33 +765,52 @@ local function textureArgs(key)
     get = function() return (ns.Textures and ns.Textures.fillOf(effective(key, "texture"))) or "none" end,
     set = function(_, v) put(key, "texture", "fill", v) end,
   }
-  -- AB3-D2, and never inherited: dragging one ability's texture must move that one alone.
-  args.place = {
-    type = "select", order = 20, name = L["Position"],
-    values = labelled(textureList("PLACEMENTS"), PLACE_LABELS),
-    sorting = textureList("PLACEMENTS"),
-    desc = L["\"With the other indicators\" flows it into the row, so several never overlap."],
-    get = function() return effective(key, "texture").place or "row" end,
-    set = function(_, v) put(key, "texture", "place", v) end,
-  }
+  -- AT6-D4 took the Position dropdown with the indicator row: a texture starts at the centre of
+  -- the screen and this button is the only thing that moves it, so there is no longer a setting
+  -- that can disagree with where it was dropped. AT6-D5 took the Preview button: the texture is on
+  -- screen for as long as this tab is, so there is nothing left to ask for.
   args.move = {
-    type = "execute", order = 21, name = function()
+    type = "execute", order = 20, width = "relative", relWidth = TEXTURE_MOVE_WIDTH,
+    disabled = off,
+    name = function()
       return movingTexture(key) and L["Done Moving"] or L["Move This Texture"]
     end,
     desc = L["Puts this texture on screen on its own and lets you drag it. Where you drop it is "
           .. "remembered as an offset from the centre of the screen."],
-    hidden = function() return (effective(key, "texture").place or "row") ~= "custom" end,
     func = function()
       if not ns.Textures then return end
       if movingTexture(key) then ns.Textures.StopMoveMode() else ns.Textures.StartMove(key) end
     end,
   }
-  args.preview = {
-    type = "execute", order = 22, name = L["Preview Texture"],
-    desc = L["Shows it for a second and a half with these settings, whether or not it is switched on."],
-    -- The SAME path `/elm debug textures <KEY>` uses: a preview drawn by a second code path can
-    -- look right while the one that fires in play is broken.
-    func = function() if ns.Textures then ns.Textures.TestFire(key) end end,
+  -- Nothing but the room that pushes Reset to the right-hand end of the Move row: a toggle or a
+  -- label hugs the left of its cell, and only a Button fills one, so a row that ends flush right
+  -- has to end with the button and be padded in front of it.
+  args.moveGap = {
+    type = "description", order = 21, width = "relative", relWidth = TEXTURE_GAP_WIDTH, name = "",
+  }
+  -- AT6-D6, confirm-gated like All abilities > Glow's own reset and implemented the same way:
+  -- DELETING the stored channel rather than writing the defaults into it, so "never chosen" is the
+  -- state it lands in -- which is what a class pack's own defaults for this ability fall back
+  -- through (AbilitySettings.effective), and what a fresh install looks like.
+  args.reset = {
+    type = "execute", order = 22, width = "relative", relWidth = TEXTURE_RESET_WIDTH,
+    name = L["Reset"], confirm = true, disabled = off,
+    desc = L["Puts the picture, size, colour, opacity, moments, fade and position back the way "
+          .. "they shipped. The texture stays switched on."],
+    confirmText = L["Put every texture setting for this ability back to its default?"],
+    func = function()
+      local S = AS()
+      if not S then return end
+      -- The switch at the top of the tab is not one of the settings this button resets: it is what
+      -- makes them visible at all, and a Reset that greyed out the whole tab it sits on would read
+      -- as the page breaking. Everything the decision enumerates is an appearance or a moment.
+      local on = effective(key, "texture").enabled == true
+      S.resetChannel(key, "texture")
+      if on then S.set(key, "texture", "enabled", true) end
+      -- AT6-D5: the held preview is standing on screen right now, so it has to show the defaults
+      -- the same instant the page does.
+      restyle()
+    end,
   }
   args.silent = {
     type = "description", order = 23, width = "full", fontSize = "medium",
@@ -1019,22 +1065,11 @@ local function generalArgs(key, entry, rotations, p)
   }
   -- AT1-D1: All abilities keeps ITS OWN copy of the warning threshold here, as the inherited
   -- default -- the per-ability copies live on the Sound and Texture tabs instead, right next to the
-  -- moment they gate. AT1-D2 also moves "Position the Indicators" here, since the Texture tab it
-  -- used to live on no longer exists for All abilities.
+  -- moment they gate. "Position the Indicators" used to sit beside it; AT6-D4 removed the indicator
+  -- row it positioned, so each texture is now dragged from its own tab and there is nothing shared
+  -- left to place.
   if key == ALL then
     args.expiring = expiringArgs(key, 6)
-    args.anchor = {
-      type = "execute", order = 7, name = function()
-        return positioningIndicators() and L["Done Positioning"] or L["Position the Indicators"]
-      end,
-      desc = L["Puts a sample texture on screen and lets you drag the row wherever you want it. "
-            .. "Press it again when it is in place. Until you do this the row floats above the "
-            .. "queue strip and follows it."],
-      func = function()
-        if not ns.Textures then return end
-        if positioningIndicators() then ns.Textures.StopMoveMode() else ns.Textures.StartPositioning() end
-      end,
-    }
   end
   return args
 end

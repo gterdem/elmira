@@ -1229,6 +1229,113 @@ describe("Options window", function()
     end)
   end)
 
+  -- AT6-D5. The Texture tab's texture stands on screen for as long as that tab is the one being
+  -- read. Nothing in the fight is holding it, so nothing in the fight will take it away either --
+  -- every test here is about the RELEASE, because a preview that outlives its tab is a texture in
+  -- the middle of the screen for the rest of the session with no control left to remove it.
+  --
+  -- The ORDER is the whole difficulty: FeedGroup recurses into itself (a tab group feeds its own
+  -- selected tab, AceConfigDialog-3.0.lua:1571), and a post-hook on a nested call runs BEFORE the
+  -- hook of the call that made it -- so a rebuild fires deepest-first and "release on anything that
+  -- is not a Texture tab" would release it a moment after setting it, every single time.
+  describe("the Texture tab's live texture (AT6-D5)", function()
+    local held
+
+    local function feed(path)
+      Options.dialog.FeedGroup(Options.dialog, "Elmira", {}, { type = "SimpleGroup" }, {}, path)
+    end
+
+    before_each(function()
+      held = {}
+      ns.Textures = { Preview = function(key) held[#held + 1] = key or false end,
+                      StopMoveMode = function() end }
+    end)
+
+    it("holds the ability's texture when its Texture tab is fed", function()
+      open()
+      feed({ "spells", "list", "EXORCISM", "texture" })
+      assert.same({ "EXORCISM" }, held)
+    end)
+
+    it("releases it when another tab of the same ability is fed", function()
+      open()
+      feed({ "spells", "list", "EXORCISM", "glow" })
+      assert.same({ false }, held)
+    end)
+
+    it("releases it when another page of the window is fed", function()
+      open()
+      feed({ "spells", "list", "EXORCISM", "texture" })
+      feed({ "queue" })
+      assert.same({ "EXORCISM", false }, held)
+    end)
+
+    it("releases it on the Share tab, which is not the ability list at all", function()
+      open()
+      feed({ "spells", "share" })
+      assert.same({ false }, held)
+    end)
+
+    -- Selecting another ability feeds {spells,list,KEY} and, nested inside it, that ability's
+    -- remembered tab. The remembered tab is in the status table by the time our hook runs, so the
+    -- shallower call reaches the SAME answer as the deeper one instead of undoing it.
+    it("reads the remembered tab when a whole ability is fed", function()
+      open()
+      Options.dialog:GetStatusTable("Elmira", { "spells", "list", "EXORCISM" }).groups =
+        { selected = "texture" }
+      feed({ "spells", "list", "EXORCISM" })
+      assert.same({ "EXORCISM" }, held)
+
+      Options.dialog:GetStatusTable("Elmira", { "spells", "list", "JUDGEMENT" }).groups =
+        { selected = "sound" }
+      feed({ "spells", "list", "JUDGEMENT" })
+      assert.same({ "EXORCISM", false }, held)
+    end)
+
+    -- The shallow rebuild paths fire LAST and must say nothing at all, or the whole window being
+    -- re-fed (which AceConfigDialog does on every single option change) would take the preview off
+    -- screen a moment after putting it there.
+    it("says nothing on the paths that are only rebuilding the page around it", function()
+      open()
+      feed({ "spells", "list", "EXORCISM", "texture" })
+      feed({ "spells", "list" })
+      feed({ "spells" })
+      feed({})
+      assert.same({ "EXORCISM" }, held, "a rebuild of the page took the preview off screen")
+    end)
+
+    it("is a no-op for another addon's FeedGroup call", function()
+      open()
+      Options.dialog.FeedGroup(Options.dialog, "ElvUI", {}, { type = "SimpleGroup" }, {},
+                               { "spells", "list", "EXORCISM", "texture" })
+      assert.same({}, held)
+    end)
+
+    -- The one path every close goes through. Without this the window shuts on a Texture tab and
+    -- leaves the texture standing there with nothing left anywhere to remove it.
+    it("releases the texture when the options window is closed", function()
+      local w = open()
+      feed({ "spells", "list", "EXORCISM", "texture" })
+      w.events.OnClose(w, "OnClose")
+      assert.same({ "EXORCISM", false }, held)
+    end)
+
+    -- And every Move mode, which hides the window rather than closing it -- the close chain stands
+    -- down on that path, so the release has to happen where the window is hidden.
+    it("releases the texture when the window is hidden for a Move mode", function()
+      open()
+      feed({ "spells", "list", "EXORCISM", "texture" })
+      Options.BeginMove("strip")
+      assert.same({ "EXORCISM", false }, held)
+    end)
+
+    it("survives with no Textures module at all", function()
+      ns.Textures = nil
+      open()
+      assert.has_no.errors(function() feed({ "spells", "list", "EXORCISM", "texture" }) end)
+    end)
+  end)
+
   -- AB1-D9. `spells` is a TAB group whose "Abilities" child is a tree, so FeedGroup builds a SECOND
   -- TreeGroup (`(parenttype ~= "tree")`, AceConfigDialog-3.0.lua:1721) and hands it over on the path
   -- {"spells","list"}. Everything here is about that widget alone.
@@ -1609,14 +1716,14 @@ describe("Options window", function()
         assert.same({ { "close", false } }, panelCalls)
       end)
 
-      -- Every other Move mode keeps the bar it always had: there is nothing on a row of indicators
-      -- or a queue strip for these controls to write to, and a control that writes to nothing is
-      -- this project's characteristic defect.
+      -- Every other Move mode keeps the bar it always had: there is nothing on a queue strip or a
+      -- run of screen messages for these controls to write to, and a control that writes to nothing
+      -- is this project's characteristic defect.
       it("is not on the bar for any other mode, and leaves none of itself behind", function()
         open()
         Options.BeginMove("texture", "EXORCISM")
         Options.EndMove()
-        Options.BeginMove("indicators")
+        Options.BeginMove("strip")
         local b = bar()
         for _, region in ipairs(b.elmiraTools) do
           assert.is_true(region.hidden, "a texture control stayed on the bar for another mode")
@@ -1648,7 +1755,7 @@ describe("Options window", function()
     -- widget back to AceGUI's pool for another addon to acquire while we still intend to show it.
     it("does not run the close chain, and does not let go of the frame", function()
       local w = open()
-      Options.BeginMove("indicators")
+      Options.BeginMove("strip")
       assert.equal(0, stopped.strip, "the close chain stopped the mode that had just started")
       assert.equal(0, stopped.textures)
       assert.equal(0, stopped.messages)
@@ -1732,7 +1839,6 @@ describe("Options window", function()
         return Options.moveSubject()
       end
       assert.is_truthy(subjectOf("strip"):find("the queue strip", 1, true))
-      assert.is_truthy(subjectOf("indicators"):find("the indicator row", 1, true))
       assert.is_truthy(subjectOf("messages"):find("your screen messages", 1, true))
       -- The ability as the player knows it, through the merged lookup -- not EXORCISM.
       ns.Display = { spellName = function(key) return key == "EXORCISM" and "Exorcism" or nil end }
@@ -1761,7 +1867,7 @@ describe("Options window", function()
       local w = open()
       Options.BeginMove("strip")
       bar().elmiraDone.scripts.OnClick()
-      Options.BeginMove("indicators")
+      Options.BeginMove("messages")
       assert.is_true(w.frame.hidden)
       bar().scripts.OnHide()
       assert.is_nil(Options.moveSubject(), "Escape no longer ends the mode")

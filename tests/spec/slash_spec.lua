@@ -1287,7 +1287,7 @@ describe("Core.Slash", function()
       helper.load("Elmira/Display/Textures.lua")
       -- AT4-D2: the path library Textures reads to answer "does this file need another addon".
       helper.load("Elmira/Display/TextureLibrary.lua")
-      ns.db = { char = { spells = {}, abilities = {}, textures = { anchor = false } } }
+      ns.db = { char = { spells = {}, abilities = {} } }
       ns.Display = { currentPack = function() return { class = "PALADIN",
                        spells = { EXORCISM = { id = 415073 }, JUDGEMENT = { id = 20271 } } } end,
                      spellName = function(key) return key end }
@@ -1297,24 +1297,26 @@ describe("Core.Slash", function()
       _G.CreateFrame, _G.UIParent = nil, nil
     end)
 
-    it("says the row has never been placed, and that nothing is switched on", function()
+    it("says that nothing is switched on", function()
       local lines = Slash.run("debug textures")
-      assert.is_true(hasLineMatching(lines, "never placed"))
       assert.is_true(hasLineMatching(lines, "no ability has a texture switched on"))
     end)
 
-    it("reports the anchor once the row has been placed", function()
-      ns.db.char.textures.anchor = { point = "TOP", relPoint = "TOP", x = 10, y = -220 }
-      local lines = Slash.run("debug textures")
-      assert.is_true(hasLineMatching(lines, "indicators anchor: TOP TOP %+10,%-220"))
-    end)
-
-    it("names the ability, its source, size, placement and the moments it appears at", function()
+    -- AT6-D4: where a texture sits is an offset from the centre of the screen and nothing else, so
+    -- the diagnostic reports the two numbers a drag stored rather than a placement mode.
+    it("names the ability, its source, size, offset and the moments it appears at", function()
       A.set("EXORCISM", "texture", "enabled", true)
       local lines = Slash.run("debug textures")
-      assert.is_true(hasLineMatching(lines, "EXORCISM  source=icon size=48 position=row fill=none"))
+      assert.is_true(hasLineMatching(lines, "EXORCISM  source=icon size=48 offset=%+0,%+0 fill=none"))
       assert.is_true(hasLineMatching(lines, "shows on: suggested, active"))
       assert.is_true(hasLineMatching(lines, "last shown=never"))
+    end)
+
+    it("reports an offset a drag stored", function()
+      A.set("EXORCISM", "texture", "enabled", true)
+      A.set("EXORCISM", "texture", "x", -120)
+      A.set("EXORCISM", "texture", "y", 260)
+      assert.is_true(hasLineMatching(Slash.run("debug textures"), "offset=%-120,%+260"))
     end)
 
     it("says when an ability is on but appears at no moment", function()

@@ -1,5 +1,27 @@
 # Changelog
 ## Unreleased
+- **Changed: Choose… opens the texture picker on a clear screen.** Pressing Choose… on an ability's
+  Texture tab now does what "Move This Texture" does as well -- the configuration window steps
+  aside, the Move toolbar appears and the texture itself is left on screen -- and opens the picker
+  over that instead of over the window. Okay or Cancel closes the picker and leaves you on the clear
+  screen to keep dragging and resizing; Done on the toolbar (or Escape) brings the window back on
+  the tab you were reading.
+- **Changed: a texture sits in the centre of the screen until you drag it.** The "Position" dropdown
+  and the shared indicator row are gone, along with "Position the Indicators" on All abilities ›
+  General. Every texture starts in the middle of the screen and "Move This Texture" stores where you
+  drop it; two textures you have not moved will overlap, which is deliberate -- drag one.
+- **Changed: no Preview button; the texture is live while its tab is open.** Open an ability's
+  Texture tab and its texture stands on screen exactly as configured, following the size, colour,
+  opacity and picture as you change them. It goes when you leave the tab, pick another ability,
+  close the window or switch the texture off.
+- **New: a Reset button on the Texture tab**, at the right-hand end of the Move row and confirm-gated,
+  puts the picture, size, colour, opacity, moments, fade and position back the way they shipped. The
+  texture stays switched on.
+- **Changed: unticking "Show a texture for this ability" greys the whole tab**, so it reads as one
+  switch and its settings rather than a page of controls that change nothing.
+- **Changed: the picker's first category is called "Shapes"** rather than "Elmira Shapes".
+- **Changed: the "From your spellbook" list shows each spell's id after its name**, e.g.
+  `Exorcism (415073)`, so two rows that read the same can be told apart. It is still sorted by name.
 - **New: a visual texture picker.** An ability's Texture tab now asks one question -- "Use this
   ability's own icon" -- and, when you untick it, shows the file it draws with a **Choose…** button
   beside it. Choose… opens a window of pictures: Elmira's own shapes, Blizzard's icons, runes,
@@ -28,7 +50,7 @@
 - **Changed: All abilities now sets only General and Glow.** Texture, Screen-edge, Sound and
   Announcement are set per ability only; the "Warn me when its buff has N seconds left" slider moved
   onto the Sound and Texture tabs, right after the moment it guards, and All abilities' own copy
-  stays on General as the shared default. "Position the Indicators" moved to All abilities › General.
+  stays on General as the shared default.
 - **Fixed: the options window can no longer come back without its header.** Every time the window is
   put back on screen — after Position the Strip, Move This Texture or any other Move mode — its
   full-width drag bar and the version text on the left are re-applied, so a window that lost them

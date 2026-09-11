@@ -52,7 +52,10 @@ local DEFAULTS = {
   -- while the state holds, the other three FLASH it, which is why a texture can afford the three
   -- events a screen edge cannot.
   --
-  -- `place`/`x`/`y` are the per-texture placement (AB3-D2) and are OWN, not inherited (see below).
+  -- `x`/`y` are the per-texture placement (AB3-D2) and are OWN, not inherited (see below): an
+  -- offset from the centre of the screen, which AT6-D4 made the only placement there is -- the
+  -- `place` field that chose between the indicator row, the centre and a custom spot went with the
+  -- row itself, and nothing has ever been released, so nothing migrates.
   --
   -- AB4-D1: `fill` is the progress swipe over the texture -- "none", "cooldown" (how much of the
   -- ability's own cooldown is left) or "buff" (how much of its buff is left). It ships "none"
@@ -62,7 +65,7 @@ local DEFAULTS = {
   texture  = { enabled = false, source = "icon", path = "",
                size = 48, color = false, alpha = 1, fill = "none",
                suggested = true, active = true, ready = false, used = false, expiring = false,
-               place = "row", x = 0, y = 0 },
+               x = 0, y = 0 },
   -- AB2-D1: `suggested` and `ready` are the two moments a screen edge can flash. `suggested` ships
   -- ON so that switching the tab on does something the first time (a channel that is "on" and fires
   -- on nothing is the silent failure this project keeps shipping); `ready` ships OFF, because a
@@ -92,7 +95,7 @@ AbilitySettings.DEFAULTS = DEFAULTS
 -- AT1-D2 removes even the appearance inheritance for these four: nothing in `OWN` matters for them
 -- any more since `AbilitySettings.inherits` now refuses to inherit ANY field of a CUE_CHANNEL. The
 -- table stays as the record of what was per-ability even while the rest of a channel still inherited.
-local OWN = { texture = { enabled = true, place = true, x = true, y = true }, edge = { enabled = true },
+local OWN = { texture = { enabled = true, x = true, y = true }, edge = { enabled = true },
               sound = { enabled = true }, announce = { enabled = true } }
 
 AbilitySettings.CHANNELS = { "general", "glow", "texture", "edge", "sound", "announce" }

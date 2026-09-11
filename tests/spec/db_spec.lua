@@ -48,9 +48,9 @@ describe("Core.DB", function()
     -- it, plus the master mute for every ability sound (AB1-D8).
     assert.same({}, DB.defaults.char.abilities)
     assert.is_false(DB.defaults.char.sounds.enabled)
-    -- AB3-D2: `false`, not an empty table -- "never placed" is a different state from a stored
-    -- CENTER/0/0, and it is what makes the Indicators row hang off the queue strip and follow it.
-    assert.is_false(DB.defaults.char.textures.anchor)
+    -- AT6-D4 removed `textures.anchor` with the indicator row it placed: every texture now sits at
+    -- the centre of the screen plus its own offset, stored in its own ability settings row.
+    assert.is_nil(DB.defaults.char.textures)
   end)
 
   -- AB1-D3: what a glow LOOKS like is per ability and per character now (Core/AbilitySettings), so

@@ -118,12 +118,11 @@ DB.defaults = {
   -- lets a data pack overwrite a registry entry on a key collision, and settings kept in that entry
   -- would go with it. `"*"` is the All abilities row. Core/AbilitySettings.lua owns the shape.
   -- `sounds` is the master mute for every ability sound (AB1-D8), per character like the rest.
-  -- AB3-D2: `textures.anchor` is where the Indicators row sits. `false` means "never positioned",
-  -- which is NOT the same as a stored CENTER/0/0 -- an unpositioned row hangs off the queue strip
-  -- and follows it, and once dragged it stops doing that. Per character with the rest of the
-  -- ability settings, so a profile switch cannot move the row out from under the textures on it.
+  -- AT6-D4 removed `textures.anchor` with the indicator row it positioned: a texture now sits at
+  -- the centre of the screen plus its own stored offset, and that offset lives in the ability's own
+  -- settings row (`abilities[key].texture.x/y`) where every other thing about it lives.
   char = { setupDone = 0, pinnedBuild = false, snoozed = {}, firstRunDismissed = false, spells = {},
-           abilities = {}, sounds = { enabled = false }, textures = { anchor = false } },
+           abilities = {}, sounds = { enabled = false } },
 }
 
 -- Ordered migration lists. Each entry: { version = N, apply = function(target) end }. Empty at M0;

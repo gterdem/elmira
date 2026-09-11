@@ -435,10 +435,6 @@ function NA:StartDisplay()
   -- Its frames are still built up front: the first flash of a fight must not pay for creating five
   -- textures, and a flash that arrives a frame late is a flash that arrives after the damage.
   if ns.Overlay then ns.Overlay.Create() end
-  -- AB3-D1: same story, and one extra reason to build it here -- the Indicators anchor hangs above
-  -- the queue strip's frame by default, so it has to be created AFTER ns.Queue.Create() above or
-  -- there is no strip to hang from and the row silently falls back to the middle of the screen.
-  if ns.Textures then ns.Textures.Create() end
   -- The Builder's live status column (ADR-0015 amendment). A renderer rather than a timer: the one
   -- moment the column stops being true is the moment the queue changes, which is exactly when a
   -- renderer runs -- so the panel can say "as of the last time the queue changed" and mean it.

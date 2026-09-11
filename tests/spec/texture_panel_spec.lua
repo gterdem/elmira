@@ -95,7 +95,7 @@ describe("the texture picker window", function()
     -- A grid with no cells is a window that looks like it is working and offers nothing.
     it("fills the grid with the first category and lights up nothing yet", function()
       Panel.Open("EXORCISM")
-      assert.equal(8, #cells(), "the Elmira Shapes category did not reach the grid")
+      assert.equal(8, #cells(), "the Shapes category did not reach the grid")
       assert.equal("Interface\\AddOns\\Elmira\\media\\shape_ring", pathsShown()[1])
       assert.equal("Ring", cells()[1].elmiraName)
       -- The ability draws the ring by default, so the ring is the one cell already marked.

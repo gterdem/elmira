@@ -560,17 +560,14 @@ Slash.register{
 
       local d = ns.Textures.describe()
       local lines = {}
-      local a = d.anchor
-      lines[#lines + 1] = a
-        and string.format("indicators anchor: %s %s %+.0f,%+.0f", tostring(a.point),
-              tostring(a.relPoint), a.x or 0, a.y or 0)
-        or "indicators anchor: never placed — the row floats above the queue strip"
       if #d.textures == 0 then
         lines[#lines + 1] = "no ability has a texture switched on"
       end
       for _, t in ipairs(d.textures) do
-        lines[#lines + 1] = string.format("%s  source=%s size=%d position=%s fill=%s", t.key,
-          tostring(t.source), t.size, tostring(t.place), tostring(t.fill))
+        -- AT6-D4: where it sits is an offset from the centre of the screen, and 0,0 IS the centre
+        -- -- there is no "with the other indicators" any more, so no row to be flowed along.
+        lines[#lines + 1] = string.format("%s  source=%s size=%d offset=%+.0f,%+.0f fill=%s", t.key,
+          tostring(t.source), t.size, t.x, t.y, tostring(t.fill))
         -- AT5-D1. "Fade with: cooldown recovering" on an ability the client has never seen a
         -- cooldown for multiplies nothing at all, and a texture at a static opacity is
         -- indistinguishable from one whose fade was never picked.
