@@ -64,7 +64,29 @@ function Vanilla.capabilities()
     -- where GetSpellInfo still accepts a string; declared as its own flag because the retail
     -- replacement does not (see Adapters/Interface.lua's comment on this flag).
     spellNameLookup = GetSpellInfo ~= nil,
+    -- AT4-D2: can we ask whether another addon is loaded? The texture library offers WeakAuras'
+    -- and PowerAuras' files by PATH (never a copy of one) only on a character that has WeakAuras
+    -- running, and this is the one call that can tell. Both spellings, for the same reason
+    -- addonMemory above takes both: Classic Era still has the bare global and retail moved it.
+    addonLoaded = (IsAddOnLoaded or (C_AddOns and C_AddOns.IsAddOnLoaded)) ~= nil,
   }
+end
+
+-- Vanilla.addonLoaded(name) -> is that addon loaded right now (AT4-D2)
+--
+-- LOADED, not merely installed: an addon disabled for this character, or one still waiting on
+-- demand, cannot have handed its files to the client, and a picker offering them would draw a grid
+-- of empty cells. false on a client with neither call, which is what the capability flag above
+-- declares -- never nil, so a caller can use the answer as a plain condition.
+function Vanilla.addonLoaded(name)
+  if type(name) ~= "string" or name == "" then return false end
+  local loaded = IsAddOnLoaded or (C_AddOns and C_AddOns.IsAddOnLoaded)
+  if not loaded then return false end
+  -- `1` as well as `true`: this call is one of the ones that returned a number for most of the
+  -- client's life, and a boolean-only test would read every installed addon as absent on a build
+  -- that still answers the old way.
+  local answer = loaded(name)
+  return answer == true or answer == 1
 end
 
 function Vanilla.detect()

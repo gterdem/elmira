@@ -584,7 +584,12 @@ Slash.register{
         else
           lines[#lines + 1] = string.format("   on  shows on: %s", table.concat(t.events, ", "))
         end
-        if not t.path then
+        if t.needsAddon then
+          -- AT4-D3, and said before the generic line below: this one has a cause and a cure, and
+          -- "check the source and path" would send the player hunting for a typo that is not there.
+          lines[#lines + 1] = string.format(
+            "   this texture needs %s, which is not installed on this character", t.needsAddon)
+        elseif not t.path then
           lines[#lines + 1] = "   no file — the ring is drawn instead; check the source and path"
         end
         lines[#lines + 1] = string.format("   on screen=%s  last shown=%s", tostring(t.visible),

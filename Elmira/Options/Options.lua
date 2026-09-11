@@ -1448,9 +1448,108 @@ local function keepPanelThroughCloseAll()
   if frame and frame.closeAllOverride then frame.closeAllOverride.Elmira = true end
 end
 
--- The bar. One line saying what is being moved and a Done button, and that is deliberately all of
--- it: it is on screen precisely because the window it stands in for was in the way.
-local MOVE_BAR_W, MOVE_BAR_H = 380, 76
+-- ------------------------------------------------------------ the Move TOOLBAR (AT4-D1)
+--
+-- Owner, 2026-09-11: "When I am moving the texture, I also want to select the texture to try
+-- different stuff and also to be able to change the size, without seeing the Configuration popup;
+-- in a clear screen" -- plus colour and opacity. So the bar grows a row of live controls while ONE
+-- TEXTURE is being dragged: its icon and name, a Texture button (the picker window,
+-- Options/TexturePanel.lua), Size, Colour, Opacity, Done. Every other Move mode keeps the bar it
+-- always had, one sentence and Done -- there is nothing to adjust about a row of indicators or a
+-- strip that is not already on the page.
+--
+-- These are PLAIN CLIENT FRAMES, not AceGUI widgets: AceGUI's are pooled across every Ace3 addon in
+-- the client, and a control acquired for the length of a drag and parented into a frame of ours is
+-- exactly the shape of the bug that once put Elmira's buttons on ElvUI's window. A Blizzard slider
+-- is not pooled by anybody.
+--
+-- Every control writes the SAME `texture` channel the Texture tab writes (AbilitySettings.set) and
+-- repaints through Textures.Refresh, so what the player does here is what the tab shows when the
+-- window comes back -- one store, not a second copy that could drift.
+local MOVE_BAR_W, MOVE_BAR_H = 380, 76      -- the plain bar: a sentence and Done
+local TOOL_BAR_W, TOOL_BAR_H = 620, 130     -- and the same bar carrying a texture's controls
+local TOOL_SLIDER_W, TOOL_SLIDER_H = 120, 16
+local TOOL_ROW_Y = -60          -- the controls' own centre line, below the wrapped sentence
+local TOOL_SWATCH = 24
+
+local moveKey = nil          -- mutants: equivalent local-only; the ability the toolbar is bound to
+local settingTools = false   -- mutants: equivalent local-only; are WE moving a slider, or the mouse
+
+local function setTexture(field, value)
+  local A = ns.AbilitySettings
+  if not (A and moveKey) then return false end
+  A.set(moveKey, "texture", field, value)
+  -- Repaints what is already on screen -- which, during a Move mode, is the very texture being
+  -- dragged. A slider whose effect only shows up on the next pull is a slider that looks broken.
+  if ns.Textures then ns.Textures.Refresh() end
+  return true
+end
+
+-- The client's own colour picker, both contracts. 10.2.5 replaced the "set these fields, then show
+-- it" dance with `SetupColorPickerAndShow`, and Classic Era has been carrying both; AceGUI's own
+-- ColorPicker widget branches on exactly this test (AceGUIWidget-ColorPicker.lua:64), which is what
+-- makes it the client's behaviour rather than a guess. `cancelFunc` puts the previous colour back,
+-- so a player who opens the picker and changes their mind has changed nothing.
+local function openColourPicker(r, g, b, apply)
+  local picker = ColorPickerFrame
+  if not picker then return false end
+  local function chosen()
+    local nr, ng, nb
+    if picker.GetColorRGB then nr, ng, nb = picker:GetColorRGB() end
+    apply(nr or r, ng or g, nb or b)
+  end
+  local function cancelled()
+    apply(r, g, b)
+  end
+  if picker.SetupColorPickerAndShow then
+    picker:SetupColorPickerAndShow({ swatchFunc = chosen, cancelFunc = cancelled,
+                                     hasOpacity = false, r = r, g = g, b = b })
+    return true
+  end
+  picker.func, picker.opacityFunc, picker.cancelFunc = chosen, chosen, cancelled
+  picker.hasOpacity = false
+  if picker.SetColorRGB then picker:SetColorRGB(r, g, b) end
+  -- Hide first: the pre-10.2.5 frame reads the fields above in its OnShow, so a picker that is
+  -- already up would keep the previous swatch's callbacks.
+  picker:Hide()
+  picker:Show()
+  return true
+end
+
+-- One slider, built from the client's own options template so it looks like every other slider the
+-- player has ever dragged. The template's three font strings are global children of the slider's
+-- NAME -- which is why these are named frames -- and every touch of them is guarded: a client (or a
+-- headless test) without the template still gets a working slider, just an unlabelled one.
+local function toolSlider(bar, name, label, low, high, step, format, field)
+  local slider = CreateFrame("Slider", name, bar, "OptionsSliderTemplate")
+  slider:SetWidth(TOOL_SLIDER_W)
+  slider:SetHeight(TOOL_SLIDER_H)
+  slider:SetOrientation("HORIZONTAL")
+  slider:SetMinMaxValues(low, high)
+  slider:SetValueStep(step)
+  if slider.SetObeyStepOnDrag then slider:SetObeyStepOnDrag(true) end
+  local lowText, highText = _G[name .. "Low"], _G[name .. "High"]
+  if lowText then lowText:SetText("") end
+  if highText then highText:SetText("") end
+  slider.elmiraTitle = _G[name .. "Text"]
+  local function retitle(value)
+    if slider.elmiraTitle then slider.elmiraTitle:SetText(string.format(format, label, value)) end
+  end
+  slider.elmiraRetitle = retitle
+  slider:SetScript("OnValueChanged", function(_, value)
+    retitle(value)
+    -- `settingTools` stands this down while the toolbar is LOADING the ability's current values:
+    -- SetValue fires OnValueChanged exactly as a drag does, and without the guard opening the
+    -- toolbar would write its own starting numbers back over the settings it just read.
+    if settingTools then return end
+    setTexture(field, value)
+  end)
+  return slider
+end
+
+-- The bar. One line saying what is being moved and a Done button -- plus, for one texture, the
+-- toolbar above (AT4-D1). It is on screen precisely because the window it stands in for was in the
+-- way, so nothing goes on it that is not being adjusted right now.
 local function moveBarFrame()
   if moveBar then return moveBar end
   if not CreateFrame then return nil end
@@ -1479,6 +1578,69 @@ local function moveBarFrame()
   done:SetText(L["Done"])
   done:SetScript("OnClick", function() Options.EndMove() end)
   f.elmiraDone = done
+
+  -- AT4-D1's toolbar, built once with the bar and shown only while a texture is being dragged.
+  -- Laid out left to right off each other, so a missing width anywhere shifts the row rather than
+  -- stacking two controls on one spot.
+  local icon = f:CreateTexture(nil, "ARTWORK")
+  icon:SetWidth(32)
+  icon:SetHeight(32)
+  icon:SetPoint("TOPLEFT", f, "TOPLEFT", 12, TOOL_ROW_Y + 16)
+  f.elmiraIcon = icon
+
+  local name = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  name:SetPoint("LEFT", icon, "RIGHT", 8, 0)
+  name:SetWidth(120)
+  if name.SetJustifyH then name:SetJustifyH("LEFT") end
+  f.elmiraName = name
+
+  local choose = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  choose:SetWidth(90)
+  choose:SetHeight(22)
+  choose:SetPoint("LEFT", name, "RIGHT", 8, 0)
+  choose:SetText(L["Texture"])
+  -- The SAME window the Texture tab's Choose… button opens (Options/TexturePanel.lua): a second
+  -- picker built for the toolbar could look right and write somewhere else.
+  choose:SetScript("OnClick", function()
+    if ns.TexturePanel and moveKey then ns.TexturePanel.Toggle(moveKey) end
+  end)
+  f.elmiraChoose = choose
+
+  local size = toolSlider(f, "ElmiraMoveBarSize", L["Size"], 16, 256, 8, "%s: %d", "size")
+  size:SetPoint("LEFT", choose, "RIGHT", 20, 0)
+  f.elmiraSize = size
+
+  local swatchLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  swatchLabel:SetPoint("LEFT", size, "RIGHT", 24, 10)
+  swatchLabel:SetText(L["Colour"])
+  f.elmiraSwatchLabel = swatchLabel
+
+  local swatch = CreateFrame("Button", nil, f)
+  swatch:SetWidth(TOOL_SWATCH)
+  swatch:SetHeight(TOOL_SWATCH)
+  swatch:SetPoint("LEFT", size, "RIGHT", 24, -6)
+  local fill = swatch:CreateTexture(nil, "ARTWORK")
+  fill:SetAllPoints(swatch)
+  swatch.elmiraFill = fill
+  swatch:SetScript("OnClick", function()
+    local A = ns.AbilitySettings
+    if not (A and moveKey) then return end
+    local c = A.effective(moveKey, "texture").color or ns.Colors.HIGHLIGHT
+    openColourPicker(c.r, c.g, c.b, function(r, g, b)
+      setTexture("color", { r = r, g = g, b = b })
+      fill:SetColorTexture(r, g, b, 1)
+    end)
+  end)
+  f.elmiraSwatch = swatch
+
+  local alpha = toolSlider(f, "ElmiraMoveBarAlpha", L["Opacity"], 0.05, 1, 0.05, "%s: %.2f", "alpha")
+  alpha:SetPoint("LEFT", swatch, "RIGHT", 24, 0)
+  f.elmiraAlpha = alpha
+
+  -- One list, so "show the toolbar" and "hide the toolbar" can never cover different controls --
+  -- a control left visible after the mode that owns it ended is a control writing to nothing.
+  f.elmiraTools = { icon, name, choose, size, swatchLabel, swatch, alpha }
+
   f:SetScript("OnHide", function()
     if closingBar then return end
     keepPanelThroughCloseAll()
@@ -1489,6 +1651,44 @@ local function moveBarFrame()
   end
   moveBar = f
   return f
+end
+
+-- Dress the bar for the mode that is starting: the toolbar and this ability's current size, colour
+-- and opacity for a texture drag, nothing but the sentence and Done for everything else. Called on
+-- every BeginMove, so the bar can never keep the last mode's controls.
+local function applyToolbar(bar)
+  local tools = bar.elmiraTools
+  if not tools then return false end
+  if not moveKey then
+    for _, region in ipairs(tools) do region:Hide() end
+    bar:SetWidth(MOVE_BAR_W)
+    bar:SetHeight(MOVE_BAR_H)
+    return false
+  end
+  local A = ns.AbilitySettings
+  local e = (A and A.effective(moveKey, "texture")) or {}
+  local display = ns.Display
+  bar.elmiraIcon:SetTexture((display and display.spellIcon and display.spellIcon(moveKey)) or "")
+  bar.elmiraName:SetText((display and display.spellName and display.spellName(moveKey)) or moveKey)
+  local c = e.color or ns.Colors.HIGHLIGHT
+  bar.elmiraSwatch.elmiraFill:SetColorTexture(c.r, c.g, c.b, 1)
+  -- Textures.sizeOf is the same clamp the tab's own slider reads through, so the toolbar can never
+  -- open showing a number the texture is not actually drawn at.
+  local size = (ns.Textures and ns.Textures.sizeOf and ns.Textures.sizeOf(e)) or 48
+  local alpha = math.max(0.05, math.min(1, tonumber(e.alpha) or 1))
+  -- Loading, not editing: SetValue fires OnValueChanged exactly as a drag does (see toolSlider).
+  settingTools = true
+  bar.elmiraSize:SetValue(size)
+  bar.elmiraAlpha:SetValue(alpha)
+  settingTools = false
+  -- The template's own label does not follow a SetValue on every client, and the toolbar's whole
+  -- claim is that it shows what the texture is set to right now.
+  bar.elmiraSize.elmiraRetitle(size)
+  bar.elmiraAlpha.elmiraRetitle(alpha)
+  for _, region in ipairs(tools) do region:Show() end
+  bar:SetWidth(TOOL_BAR_W)
+  bar:SetHeight(TOOL_BAR_H)
+  return true
 end
 
 -- Called by the mode itself (Display/Queue, Display/Textures, Display/Announcers), never by the
@@ -1505,12 +1705,17 @@ function Options.BeginMove(what, key)
     subject = L[subject]
   end
   moveSubject = subject
+  -- AT4-D1: the toolbar belongs to ONE texture being dragged. Every other mode ("Position the
+  -- Indicators" included) keeps the sentence and Done, because there is nothing on the bar for them
+  -- to adjust.
+  moveKey = (what == "texture") and key or nil
   local bar = moveBarFrame()
   if bar then
     if bar.elmiraText then
       bar.elmiraText:SetText(
         string.format(L["Moving %s. Drag it where you want it, then press Done."], subject))
     end
+    applyToolbar(bar)
     bar:Show()
   end
   hidePanel()
@@ -1522,6 +1727,12 @@ end
 function Options.EndMove()
   if not moveSubject then return false end
   moveSubject = nil
+  -- AT4-D2: the picker window is a child of this moment, not of the options panel -- it was opened
+  -- from the toolbar and there is nothing to preview against once the drag is over. Closed as KEPT,
+  -- never cancelled: the player has been looking at their choice on screen, and Done must not take
+  -- it away.
+  if ns.TexturePanel and ns.TexturePanel.isOpen() then ns.TexturePanel.Close(false) end
+  moveKey = nil
   if moveBar then
     closingBar = true
     moveBar:Hide()

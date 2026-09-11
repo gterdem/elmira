@@ -63,8 +63,13 @@ Interface.CONTRACT = {
 -- with a STRING is a genuinely different capability -- the cheat sheet's own deprecation note says
 -- the retail replacement, `C_Spell.GetSpellInfo`, takes an id only, so "resolve by name" is a real
 -- axis a future adapter can answer false on even though this one answers true.
+--
+-- `addonLoaded` is AT4-D2's: whether this client will say if ANOTHER addon is loaded. The texture
+-- library lists WeakAuras' and PowerAuras' files by path on a character that has WeakAuras, and
+-- lists neither on one that does not -- so "we cannot ask" has to read as "do not offer them"
+-- rather than as an error out of the picker.
 Interface.CAPABILITIES = { "runes", "setAPI", "swing", "inspect", "nameplates", "engraving", "seal",
-                           "addonMemory", "chatMessageGroups", "spellNameLookup" }
+                           "addonMemory", "chatMessageGroups", "spellNameLookup", "addonLoaded" }
 
 -- Checks that `state` implements every contract member as a callable. Both dot-style
 -- (state.now(state)) and colon-style (state:now()) implementations satisfy this, since both put a

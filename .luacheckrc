@@ -40,6 +40,10 @@ local WOW_API = {
   -- `/elm debug perf`: per-addon memory, so the diagnostic can answer "is ELMIRA expensive" instead
   -- of reporting the whole client's Lua heap.
   "UpdateAddOnMemoryUsage", "GetAddOnMemoryUsage",
+  -- AT4-D2 (capability `addonLoaded`): whether another addon is loaded. The texture library lists
+  -- WeakAuras' files by path on a character that runs it and lists none on one that does not, and
+  -- this is the only call that can tell. C_AddOns above carries the modern spelling.
+  "IsAddOnLoaded",
   -- M5e: which frame owns the keyboard, so the Builder's live refresh never rebuilds the panel out
   -- from under a half-typed value. Presence-checked at the call site (Vanilla.typing) rather than
   -- assumed -- an every-frame FrameXML global is not the same promise as a documented C API.
@@ -99,6 +103,9 @@ files["Elmira/Setup/"] = { read_globals = { "CreateFrame", "UIParent", "UnitClas
   "InCombatLockdown" },
   globals = { "StaticPopupDialogs" } }
 files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent",
+  -- AT4: the texture picker window and its grid widget reach AceGUI through LibStub (Display/ has
+  -- the same entry for the same reason).
+  "LibStub",
   -- M5h, the options window's own chrome (Options.lua): the reposition button's tooltip, and
   -- CLOSE -- the client's localised button text, which is how AceGUI's anonymous Close button is
   -- identified (ElvUI Config.lua:1441-1447). Presentation only; no state is read through either.
@@ -109,7 +116,10 @@ files["Elmira/Options/"] = { read_globals = { "CreateFrame", "UIParent",
   -- Both are WRITABLE globals rather than functions we call: every addon registers its own dialogs
   -- into StaticPopupDialogs, and UISpecialFrames (FX1-D5) is the client's LIST of frame names
   -- Escape closes -- an addon joins it by appending its own frame's name.
-  globals = { "StaticPopupDialogs", "UISpecialFrames" } }
+  -- AT4-D1: the Move toolbar's colour swatch opens the client's own ColorPickerFrame, and the
+  -- pre-10.2.5 contract for it is to WRITE its callback fields (`func`/`cancelFunc`/`hasOpacity`)
+  -- before showing it -- which is a write to a client global, like the two above, not a call.
+  globals = { "StaticPopupDialogs", "UISpecialFrames", "ColorPickerFrame" } }
 
 -- Shipped class data (ADR-0011): data only, and held to Core's bar. A WoW API call here is as wrong
 -- as one in Core/ — these files are inside the core addon now, and hard rule 3 does not soften
@@ -149,7 +159,7 @@ files["tests/"] = {
     -- `/elm debug perf`: per-addon memory. C_AddOns already covers loadClassPack/addonVersion above;
     -- this mock also exercises its GetNumAddOns/GetAddOnInfo/UpdateAddOnMemoryUsage/
     -- GetAddOnMemoryUsage members, plus the bare-global forms of the memory pair.
-    "C_AddOns", "UpdateAddOnMemoryUsage", "GetAddOnMemoryUsage",
+    "C_AddOns", "UpdateAddOnMemoryUsage", "GetAddOnMemoryUsage", "IsAddOnLoaded",
     -- init_spec.lua loads the real vendored Ace3 stack (Elmira/Libs/) against Core/Init.lua, the one
     -- file allowed to touch LibStub. These are what those libraries read at file scope or per call.
     "geterrorhandler", "IsLoggedIn", "GetLocale", "SlashCmdList", "hash_SlashCmdList",

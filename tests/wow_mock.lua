@@ -338,6 +338,14 @@ function CreateFrame(frameType, name, parent, template)
     if not self.__fontString then self.__fontString = self:CreateFontString() end
     return self.__fontString
   end
+  -- Frame levels are real numbers, not no-ops: AceGUI stacks a dropdown's pullout one level above
+  -- the control (AceGUIWidget-DropDown.lua:451) and does ARITHMETIC on what it reads back, so a
+  -- frame that answers nil takes the widget's own constructor down.
+  function frame:SetFrameLevel(v) self.__level = v end
+  -- Counted, not swallowed: "this window opened above the one that was already there" is the only
+  -- difference between a button that works and one that looks like it did nothing.
+  function frame:Raise() self.__raised = (self.__raised or 0) + 1 end
+  function frame:GetFrameLevel() return self.__level or 1 end
   function frame:GetRegions() return unpack(self.__regions) end
   function frame:GetChildren() return unpack(self.__children) end
   function frame:GetNumChildren() return #self.__children end
@@ -425,6 +433,17 @@ function CreateFrame(frameType, name, parent, template)
   if parent and rawget(parent, "__children") then
     parent.__children[#parent.__children + 1] = frame
   end
+  -- UIDropDownMenuTemplate publishes five children under the PARENT frame's name, and AceGUI's
+  -- Dropdown widget reads all five straight out of _G and anchors them
+  -- (AceGUIWidget-DropDown.lua:685-716) -- so a template that hands back nothing is a widget that
+  -- errors in its own constructor. Only the names matter here; what they draw does not.
+  if name and template and tostring(template):find("UIDropDownMenuTemplate", 1, true) then
+    for _, part in ipairs({ "Left", "Middle", "Right" }) do
+      _G[name .. part] = frame:CreateTexture()
+    end
+    _G[name .. "Text"] = frame:CreateFontString()
+    _G[name .. "Button"] = CreateFrame("Button", name .. "Button", frame)
+  end
   -- Named frames are reachable by name, because that is the whole contract UISpecialFrames rests on:
   -- the client's Escape closes frames by GLOBAL NAME, so a frame that never published its own could
   -- not be closed by Escape in a spec any more than in game.
@@ -467,7 +486,19 @@ local function findAddonByName(name)
   return nil
 end
 
+-- AT4-D2: IsAddOnLoaded, in both of the spellings the adapter accepts. `loaded` is a field a
+-- fixture sets on an entry; an addon that is merely listed is INSTALLED but not loaded, which is
+-- the distinction the texture library rests on -- a disabled WeakAuras has handed the client no
+-- files, so offering its paths would draw a grid of nothing.
+local function isAddOnLoaded(name)
+  local a = findAddonByName(name)
+  return (a and a.loaded == true) or false
+end
+
+function IsAddOnLoaded(name) return isAddOnLoaded(name) end
+
 C_AddOns = {
+  IsAddOnLoaded = function(name) return isAddOnLoaded(name) end,
   GetNumAddOns = function() return #M.addons end,
   GetAddOnInfo = function(i)
     local a = M.addons[i]

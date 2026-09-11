@@ -43,10 +43,12 @@ local DEFAULTS = {
   -- (and any other spec that loads this file alone) never loads Core/Visibility.lua first.
   glow     = { enabled = true, style = "PROC", color = false, show = "combat_or_target",
                particles = false, frequency = false, thickness = false, speed = false },
-  -- AB3-D1. `source` picks between the ability's own spell icon, one of the shipped shapes
-  -- (`Elmira/media/shape_*.tga`) and a path the player typed; `shape` and `path` are what those two
-  -- answers need and are stored whichever source is live, so switching back and forth does not
-  -- forget the other one. All five events are offered: `suggested` and `active` SHOW the texture
+  -- AB3-D1, as rewritten by AT4-D2: `source` is either `icon` (the ability's own spell icon, the
+  -- shipped answer) or `path`, and then `path` says which file -- picked from the visual library or
+  -- typed by hand, which are the same stored fact. The old `shape` field and its dropdown are gone
+  -- with the sources that needed them; nothing has ever been released, so nothing migrates and a
+  -- row still carrying one simply reads as `icon`.
+  -- All five events are offered: `suggested` and `active` SHOW the texture
   -- while the state holds, the other three FLASH it, which is why a texture can afford the three
   -- events a screen edge cannot.
   --
@@ -57,7 +59,7 @@ local DEFAULTS = {
   -- because a swipe over a texture that is only on screen for a second and a half is noise, and
   -- because both of the other two are meaningless for an ability the tracker has no numbers for.
   -- An appearance CHOICE, so it inherits like size and colour.
-  texture  = { enabled = false, source = "icon", shape = "ring", path = "",
+  texture  = { enabled = false, source = "icon", path = "",
                size = 48, color = false, alpha = 1, fill = "none",
                suggested = true, active = true, ready = false, used = false, expiring = false,
                place = "row", x = 0, y = 0 },

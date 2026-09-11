@@ -310,6 +310,59 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.is_false(Vanilla.capabilities().spellNameLookup)
       _G.GetSpellInfo = saved
     end)
+
+    -- AT4-D2: whether this client will say if ANOTHER addon is loaded. The texture library offers
+    -- WeakAuras' files by path on a character that runs it and offers none on one that does not, so
+    -- "we cannot ask" has to be a declared capability rather than an error out of the picker.
+    it("reports addonLoaded from the client's real call, not from a constant", function()
+      local bare, modern = _G.IsAddOnLoaded, _G.C_AddOns.IsAddOnLoaded
+      assert.is_true(Vanilla.capabilities().addonLoaded)
+      _G.IsAddOnLoaded, _G.C_AddOns.IsAddOnLoaded = nil, nil
+      assert.is_false(Vanilla.capabilities().addonLoaded)
+      _G.IsAddOnLoaded, _G.C_AddOns.IsAddOnLoaded = bare, modern
+    end)
+  end)
+
+  -- ============================================================ 1b. addonLoaded()
+  describe("addonLoaded() — is another addon running on this character (AT4-D2)", function()
+    before_each(function()
+      mock.addons = { { name = "WeakAuras", loaded = true }, { name = "Bartender4" } }
+    end)
+
+    it("answers for the addon that is loaded and refuses the one that is only installed", function()
+      assert.is_true(Vanilla.addonLoaded("WeakAuras"))
+      -- Installed but not loaded: disabled for this character, or load-on-demand and still waiting.
+      -- It has handed the client no files, and a picker offering them would draw empty cells.
+      assert.is_false(Vanilla.addonLoaded("Bartender4"))
+      assert.is_false(Vanilla.addonLoaded("NotInstalled"))
+    end)
+
+    it("answers false rather than erroring on a name that is not one", function()
+      assert.is_false(Vanilla.addonLoaded(nil))
+      assert.is_false(Vanilla.addonLoaded(""))
+      assert.is_false(Vanilla.addonLoaded(42))
+    end)
+
+    -- The bare global is what Classic Era has; C_AddOns is where retail moved it. Either alone must
+    -- carry the answer, which a spec that only ever removes one of them cannot show.
+    it("falls back to C_AddOns when the bare global is gone, and reads a numeric 1 as true",
+      function()
+        local bare = _G.IsAddOnLoaded
+        _G.IsAddOnLoaded = nil
+        assert.is_true(Vanilla.addonLoaded("WeakAuras"))
+        -- This call returned a number for most of the client's life; a boolean-only test would read
+        -- every installed addon as absent on a build that still answers the old way.
+        _G.IsAddOnLoaded = function() return 1 end
+        assert.is_true(Vanilla.addonLoaded("Anything"))
+        _G.IsAddOnLoaded = bare
+      end)
+
+    it("says false on a client with neither call", function()
+      local bare, modern = _G.IsAddOnLoaded, _G.C_AddOns.IsAddOnLoaded
+      _G.IsAddOnLoaded, _G.C_AddOns.IsAddOnLoaded = nil, nil
+      assert.is_false(Vanilla.addonLoaded("WeakAuras"))
+      _G.IsAddOnLoaded, _G.C_AddOns.IsAddOnLoaded = bare, modern
+    end)
   end)
 
   -- R2 (D53/D54): the three client lookups the Spells registry is built from.

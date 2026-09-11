@@ -183,11 +183,14 @@ describe("Display.Textures", function()
       assert.equal("custom", Textures.placementOf({ place = "custom" }))
     end)
 
-    it("resolves a shipped shape to its media file, and an unknown shape to the ring", function()
-      assert.equal("Interface\\AddOns\\Elmira\\media\\shape_star",
-        Textures.texturePath({ source = "shape", shape = "star" }))
-      assert.equal("Interface\\AddOns\\Elmira\\media\\shape_ring",
-        Textures.texturePath({ source = "shape", shape = "octagon" }))
+    -- AT4-D2: there is no `shape` source any more -- the shipped shapes are eight files in the
+    -- picker's first category, reached like every other file, through `path`.
+    it("draws the shipped ring for a file source nobody has chosen a file for yet", function()
+      assert.equal("Interface\\AddOns\\Elmira\\media\\shape_ring", Textures.DEFAULT_PATH)
+      assert.equal(Textures.DEFAULT_PATH, Textures.texturePath({ source = "path", path = "" }))
+      assert.equal(Textures.DEFAULT_PATH, Textures.texturePath({ source = "path" }))
+      -- and a source this code has never heard of is the ability's own icon, not nothing
+      assert.equal("icon:exorcism", Textures.texturePath({ source = "shape", shape = "star" }, "EXORCISM"))
     end)
 
     it("resolves the ability's own icon through Display, and reports nil when there is none", function()
@@ -197,10 +200,11 @@ describe("Display.Textures", function()
       assert.equal("icon:exorcism", Textures.texturePath({ source = "spraypaint" }, "EXORCISM"))
     end)
 
-    it("hands back a custom path, and nil for an empty one", function()
-      assert.equal("Interface\\Icons\\X", Textures.texturePath({ source = "custom", path = "Interface\\Icons\\X" }))
-      assert.is_nil(Textures.texturePath({ source = "custom", path = "" }))
-      assert.is_nil(Textures.texturePath({ source = "custom" }))
+    it("hands back the chosen file, whether it is a path or a numeric file id", function()
+      assert.equal("Interface\\Icons\\X", Textures.texturePath({ source = "path", path = "Interface\\Icons\\X" }))
+      -- Blizzard's own art is addressable only by file id on this client, stored as the string it
+      -- was picked as; TextureLibrary.drawable is what turns it back into a number for SetTexture.
+      assert.equal("165558", Textures.texturePath({ source = "path", path = "165558" }))
     end)
   end)
 
@@ -310,11 +314,11 @@ describe("Display.Textures", function()
       assert.same({ "CENTER", anchor(), "CENTER", 0, 0 }, f.point)
     end)
 
-    it("draws the chosen shape in the chosen colour at the chosen size", function()
+    it("draws the chosen file in the chosen colour at the chosen size", function()
       switchOn("EXORCISM")
       A.setInherit("EXORCISM", "texture", false)
-      A.set("EXORCISM", "texture", "source", "shape")
-      A.set("EXORCISM", "texture", "shape", "diamond")
+      A.set("EXORCISM", "texture", "source", "path")
+      A.set("EXORCISM", "texture", "path", "Interface\\AddOns\\Elmira\\media\\shape_diamond")
       A.set("EXORCISM", "texture", "color", { r = 0.2, g = 0.4, b = 0.9 })
       A.set("EXORCISM", "texture", "size", 120)
       A.set("EXORCISM", "texture", "alpha", 0.5)
@@ -1172,6 +1176,106 @@ describe("Display.Textures", function()
       Textures.TestFire("EXORCISM")
       assert.is_true(Textures.Sync(nil, {}, clock + 1.5))
       assert.equal(0, #showing())
+    end)
+  end)
+  -- ------------------------------------------------------------------ AT4-D2/D3: the library
+
+  -- What the picker is offered, and why a stored file can draw nothing. Both are answered here
+  -- rather than in the picker, so the tab, the window and `/elm debug textures` cannot disagree.
+  describe("the texture library on this character", function()
+    local function withAddons(loaded)
+      ns.Adapter = { addonLoaded = function(name) return loaded[name] == true end }
+    end
+
+    before_each(function()
+      helper.load("Elmira/Display/TextureLibrary.lua")
+      withAddons({})
+    end)
+
+    after_each(function()
+      _G.LibStub = nil
+    end)
+
+    local function keysOf(list)
+      local out = {}
+      for _, group in ipairs(list) do out[#out + 1] = group.key end
+      return out
+    end
+
+    it("asks the adapter before offering another addon's files", function()
+      local asked = {}
+      ns.Adapter = { addonLoaded = function(name) asked[#asked + 1] = name; return true end }
+      assert.is_true(Textures.addonLoaded("WeakAuras"))
+      assert.same({ "WeakAuras" }, asked)
+      -- A client (or a load order) with no adapter cannot say, and "cannot say" must read as no.
+      ns.Adapter = nil
+      assert.is_false(Textures.addonLoaded("WeakAuras"))
+    end)
+
+    it("drops the WeakAuras categories on a character that is not running it", function()
+      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers" },
+        keysOf(Textures.libraryGroups()))
+      withAddons({ WeakAuras = true })
+      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers",
+                    "weakauras", "powerauras" }, keysOf(Textures.libraryGroups()))
+    end)
+
+    -- LibSharedMedia's category is LIVE -- whatever media packs this player runs -- so it is built
+    -- here rather than listed in the library, and it is absent altogether when they run none.
+    it("adds the player's own media packs, bar textures and backgrounds alike, once each", function()
+      assert.is_falsy(keysOf(Textures.libraryGroups())[8], "a media category with no media library")
+      local media = {
+        List = function(_, kind)
+          if kind == "statusbar" then return { "Smooth", "Shared" } end
+          return { "Shared", "Parchment" }
+        end,
+        Fetch = function(_, kind, name) return "Interface\\Media\\" .. name end,
+      }
+      _G.LibStub = function(name) return name == "LibSharedMedia-3.0" and media or nil end
+      local groups = Textures.libraryGroups()
+      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers", "sharedmedia" },
+        keysOf(groups))
+      local entries = groups[8].textures
+      assert.equal(3, #entries, "a file registered under both types was listed twice")
+      assert.same({ path = "Interface\\Media\\Smooth", name = "Smooth" }, entries[1])
+      assert.equal("Parchment", entries[3].name, "the player's own name for it, not one of ours")
+    end)
+
+    -- ...and it sits BEFORE the two categories that need WeakAuras, wherever those land.
+    it("puts the media category ahead of the WeakAuras ones", function()
+      _G.LibStub = function()
+        return { List = function() return { "Smooth" } end, Fetch = function() return "file" end }
+      end
+      withAddons({ WeakAuras = true })
+      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers",
+                    "sharedmedia", "weakauras", "powerauras" }, keysOf(Textures.libraryGroups()))
+    end)
+
+    -- AT4-D3. The ring is drawn either way, so the two silences must not read the same.
+    it("says which addon a stored file needs, and draws the ring meanwhile", function()
+      local e = { source = "path",
+                  path = "Interface\\AddOns\\WeakAuras\\Media\\Textures\\Ring_10px.tga" }
+      assert.equal("WeakAuras", Textures.missingAddon(e))
+      assert.is_nil(Textures.texturePath(e, "EXORCISM"), "it drew a file that is not there")
+
+      withAddons({ WeakAuras = true })
+      assert.is_nil(Textures.missingAddon(e))
+      assert.equal(e.path, Textures.texturePath(e, "EXORCISM"))
+    end)
+
+    it("asks nothing of any addon for a file every client has", function()
+      assert.is_nil(Textures.missingAddon({ source = "path", path = "165558" }))
+      assert.is_nil(Textures.missingAddon({ source = "icon" }))
+      assert.is_nil(Textures.missingAddon(nil))
+    end)
+
+    -- The library is a separate file and a load order could leave it out; the indicator must still
+    -- paint, and the picker must offer nothing rather than error.
+    it("carries on with no library loaded at all", function()
+      ns.TextureLibrary = nil
+      assert.same({}, Textures.libraryGroups())
+      assert.is_nil(Textures.missingAddon({ source = "path", path = "x" }))
+      assert.equal("x", Textures.texturePath({ source = "path", path = "x" }))
     end)
   end)
 end)

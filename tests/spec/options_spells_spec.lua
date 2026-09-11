@@ -45,6 +45,9 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       end })
     end
     helper.load("Elmira/Display/Textures.lua")
+    -- AT4-D2: the path library behind the picker, loaded for the same reason -- the tab asks it
+    -- whether a stored file needs an addon this character does not have.
+    helper.load("Elmira/Display/TextureLibrary.lua")
     SpellsPage = helper.load("Elmira/Options/Spells.lua")
     -- Every page build starts from an unfiltered tree; the filter is module state.
     SpellsPage.setFilter("", "all")
@@ -1123,58 +1126,89 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_nil(entry("*").args.texture, "All abilities must have no Texture tab")
     end)
 
-    it("offers the three sources, and stores the pick", function()
-      local row = tab("EXORCISM", "texture").source
-      assert.equal("select", row.type)
+    -- AT4-D2 (owner, 2026-09-11): the Source and Shape dropdowns are gone. One tick box asks the
+    -- only question most people have -- its own icon or not -- and unticking it reveals the file
+    -- and the button that opens the picker.
+    it("asks for the ability's own icon with a tick box, ticked out of the box", function()
+      local row = tab("EXORCISM", "texture").ownIcon
+      assert.equal("toggle", row.type)
       assert.equal(3, row.order)
-      assert.equal("Show", row.name)
+      assert.equal("full", row.width)
+      assert.equal("Use this ability's own icon", row.name)
       assert.is_falsy(row.disabled)
-      assert.same({ "icon", "shape", "custom" }, row.sorting)
-      assert.equal("This ability's icon", row.values.icon)
-      assert.equal("icon", row.get())
-      row.set(nil, "shape")
-      assert.equal("shape", A.effective("EXORCISM", "texture").source)
+      assert.is_true(row.get())
+      assert.is_nil(tab("EXORCISM", "texture").source, "the Source dropdown is gone")
+      assert.is_nil(tab("EXORCISM", "texture").shape, "the Shape dropdown is gone")
     end)
 
-    -- Hidden rather than greyed: a shape picker is not "unavailable" while the source is the spell
-    -- icon, it is irrelevant, and a greyed control invites the player to hunt for what unlocks it.
-    it("shows the shape picker only for the shape source, and the path box only for a custom one",
+    -- Unticking must DRAW something: an empty file field beside a texture that fell back to the
+    -- ring anyway is the "looks broken" state this whole tab is about.
+    it("starts the file at the shipped ring when the tick box comes off, and keeps an earlier pick",
       function()
-        local args = tab("EXORCISM", "texture")
-        assert.is_true(args.shape.hidden())
-        assert.is_true(args.path.hidden())
-        args.source.set(nil, "shape")
-        assert.is_false(tab("EXORCISM", "texture").shape.hidden())
-        assert.is_true(tab("EXORCISM", "texture").path.hidden())
-        args.source.set(nil, "custom")
-        assert.is_true(tab("EXORCISM", "texture").shape.hidden())
-        assert.is_false(tab("EXORCISM", "texture").path.hidden())
+        tab("EXORCISM", "texture").ownIcon.set(nil, false)
+        local e = A.effective("EXORCISM", "texture")
+        assert.equal("path", e.source)
+        assert.equal("Interface\\AddOns\\Elmira\\media\\shape_ring", e.path)
+
+        tab("EXORCISM", "texture").path.set(nil, "Interface\\Icons\\Ability_Rogue_Ambush")
+        tab("EXORCISM", "texture").ownIcon.set(nil, true)
+        assert.equal("icon", A.effective("EXORCISM", "texture").source)
+        tab("EXORCISM", "texture").ownIcon.set(nil, false)
+        assert.equal("Interface\\Icons\\Ability_Rogue_Ambush",
+          A.effective("EXORCISM", "texture").path, "the file they chose was thrown away")
       end)
 
-    it("lists the eight shipped shapes and stores the one picked", function()
-      local row = tab("EXORCISM", "texture").shape
-      assert.equal("select", row.type)
-      assert.equal(4, row.order)
-      assert.equal("Shape", row.name)
-      assert.is_falsy(row.disabled)
-      assert.same({ "ring", "disc", "square", "diamond", "arrow", "star", "bar", "chevron" },
-        row.sorting)
-      assert.equal("Diamond", row.values.diamond)
-      assert.equal("ring", row.get())
-      row.set(nil, "star")
-      assert.equal("star", A.effective("EXORCISM", "texture").shape)
+    it("shows the file and the Choose button only when the icon is not being used", function()
+      local args = tab("EXORCISM", "texture")
+      assert.is_true(args.path.hidden())
+      assert.is_true(args.choose.hidden())
+      args.ownIcon.set(nil, false)
+      assert.is_false(tab("EXORCISM", "texture").path.hidden())
+      assert.is_false(tab("EXORCISM", "texture").choose.hidden())
     end)
 
-    it("stores a custom path", function()
+    it("stores a typed path, and shows the ring rather than an empty box", function()
       local row = tab("EXORCISM", "texture").path
       assert.equal("input", row.type)
-      assert.equal(5, row.order)
+      assert.equal(4, row.order)
       assert.equal("Texture file", row.name)
       assert.equal("full", row.width)
       assert.is_falsy(row.disabled)
-      assert.equal("", row.get())
+      assert.equal("Interface\\AddOns\\Elmira\\media\\shape_ring", row.get())
       row.set(nil, "Interface\\Icons\\Ability_Rogue_Ambush")
       assert.equal("Interface\\Icons\\Ability_Rogue_Ambush", A.effective("EXORCISM", "texture").path)
+      assert.equal("Interface\\Icons\\Ability_Rogue_Ambush", tab("EXORCISM", "texture").path.get())
+    end)
+
+    -- The button opens the picker WINDOW (Options/TexturePanel.lua), which is the same window the
+    -- Move toolbar's Texture button opens -- a second picker could look right and write elsewhere.
+    it("opens the texture picker for THIS ability", function()
+      local opened = {}
+      ns.TexturePanel = { Toggle = function(key) opened[#opened + 1] = key end }
+      local row = tab("EXORCISM", "texture").choose
+      assert.equal("execute", row.type)
+      assert.equal(5, row.order)
+      assert.equal("Choose…", row.name)
+      row.func()
+      assert.same({ "EXORCISM" }, opened)
+    end)
+
+    -- AT4-D3. A file inside another addon's folder is a file on the character that has that addon
+    -- and nothing at all on the one that does not -- where the ring is drawn and looks exactly like
+    -- a working setting. One warning, not two: the generic "nothing to draw" stands down.
+    it("says which addon a texture needs when this character does not have it", function()
+      local args = tab("EXORCISM", "texture")
+      args.ownIcon.set(nil, false)
+      args.path.set(nil, "Interface\\AddOns\\WeakAuras\\Media\\Textures\\Ring_10px.tga")
+      local shown = tab("EXORCISM", "texture")
+      assert.equal("description", shown.needsAddon.type)
+      assert.is_false(shown.needsAddon.hidden())
+      assert.is_truthy(shown.needsAddon.name():find(
+        "This texture needs WeakAuras, which is not installed on this character.", 1, true))
+      assert.is_true(shown.missing.hidden(), "two warnings about one texture")
+
+      ns.Adapter = { addonLoaded = function(name) return name == "WeakAuras" end }
+      assert.is_true(tab("EXORCISM", "texture").needsAddon.hidden())
     end)
 
     -- The one silence a texture has that a screen edge does not, said where it happens: on screen a
@@ -1188,7 +1222,8 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("full", args.missing.width)
       assert.is_false(args.missing.hidden())
       assert.is_truthy(args.missing.name:find("falls back to the ring", 1, true))
-      args.source.set(nil, "shape")
+      -- a file source always resolves to something -- the ring, if nothing was ever chosen
+      args.ownIcon.set(nil, false)
       assert.is_true(tab("EXORCISM", "texture").missing.hidden())
     end)
 
@@ -1323,7 +1358,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     it("never greys the appearance -- only the missing/silent warnings still gate on state", function()
       local args = tab("EXORCISM", "texture")
       assert.is_falsy(args.size.disabled)
-      assert.is_falsy(args.source.disabled)
+      assert.is_falsy(args.ownIcon.disabled)
       assert.is_falsy(args.suggested.disabled)
       assert.is_falsy(args.enabled.disabled)
     end)

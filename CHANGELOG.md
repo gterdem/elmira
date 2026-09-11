@@ -1,5 +1,22 @@
 # Changelog
 ## Unreleased
+- **New: a visual texture picker.** An ability's Texture tab now asks one question -- "Use this
+  ability's own icon" -- and, when you untick it, shows the file it draws with a **Choose…** button
+  beside it. Choose… opens a window of pictures: Elmira's own shapes, Blizzard's icons, runes,
+  beams, sparks, PvP emblems and target markers, and every texture your LibSharedMedia packs
+  provide, with a category dropdown and a search box. Clicking a picture puts it on screen straight
+  away so you can judge it at its real size; Cancel puts back what you had. If WeakAuras is
+  installed, its shapes and all 145 PowerAuras textures are offered too -- by path, from your own
+  copy of WeakAuras, and only while it is installed. The Source and Shape dropdowns are gone; typing
+  a path still works, in the same box.
+- **New: the bar you get while moving a texture is a toolbar.** Drag an indicator and the bar at the
+  top of the screen carries that ability's icon and name, a Texture button that opens the picker,
+  Size, Colour and Opacity -- so you can try a texture out on a clear screen without the
+  configuration window in the way. Everything you change there is the same setting the Texture tab
+  holds.
+- **New: a texture that needs an addon you do not have says so.** A picture from WeakAuras' folder
+  draws Elmira's ring on a character without WeakAuras, and both the Texture tab and
+  `/elm debug textures` now say why instead of leaving it looking like it works. Nothing is reset.
 - **Changed: the default glow style is Proc, the game's own proc glow.**
 - **New: an ability's glow has its own "Show the glow" schedule** (Always / in combat or when you
   have a target / in combat only), on the Glow tab, independent of the queue strip -- a hidden strip

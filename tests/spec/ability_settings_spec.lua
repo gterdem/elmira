@@ -55,7 +55,9 @@ describe("Core.AbilitySettings", function()
     it("ships the texture at 48px, the spell's own icon, and two of the five moments", function()
       local t = A.effective("X", "texture")
       assert.equal("icon", t.source)
-      assert.equal("ring", t.shape)
+      -- AT4-D2: no `shape` field any more -- the shipped shapes are files in the picker like any
+      -- other, so there are two sources (the spell's own icon, or a path) and one path field.
+      assert.is_nil(t.shape)
       assert.equal("", t.path)
       assert.equal(48, t.size)
       assert.is_false(t.color)

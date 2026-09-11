@@ -1285,6 +1285,8 @@ describe("Core.Slash", function()
       helper.load("Elmira/Core/Spells.lua")
       A = helper.load("Elmira/Core/AbilitySettings.lua")
       helper.load("Elmira/Display/Textures.lua")
+      -- AT4-D2: the path library Textures reads to answer "does this file need another addon".
+      helper.load("Elmira/Display/TextureLibrary.lua")
       ns.db = { char = { spells = {}, abilities = {}, textures = { anchor = false } } }
       ns.Display = { currentPack = function() return { class = "PALADIN",
                        spells = { EXORCISM = { id = 415073 }, JUDGEMENT = { id = 20271 } } } end,
@@ -1327,8 +1329,25 @@ describe("Core.Slash", function()
     it("says when the source resolves to no file at all", function()
       A.set("EXORCISM", "texture", "enabled", true)
       assert.is_true(hasLineMatching(Slash.run("debug textures"), "no file"))
-      A.set("EXORCISM", "texture", "source", "shape")
+      -- AT4-D2: a file source resolves to the shipped ring even before anything is picked, so
+      -- there is nothing left to warn about.
+      A.set("EXORCISM", "texture", "source", "path")
       assert.is_false(hasLineMatching(Slash.run("debug textures"), "no file"))
+    end)
+
+    -- AT4-D3. A path inside WeakAuras' own folder is a file on the character that has WeakAuras and
+    -- nothing at all on the one that does not -- where the ring is drawn instead and looks exactly
+    -- like a working setting. The two silences must not read the same.
+    it("says when a texture needs an addon this character does not have", function()
+      A.set("EXORCISM", "texture", "enabled", true)
+      A.set("EXORCISM", "texture", "source", "path")
+      A.set("EXORCISM", "texture", "path", "Interface\\AddOns\\WeakAuras\\Media\\Textures\\Ring_10px.tga")
+      local lines = Slash.run("debug textures")
+      assert.is_true(hasLineMatching(lines, "needs WeakAuras, which is not installed"))
+      assert.is_false(hasLineMatching(lines, "no file"), "two warnings about one texture")
+
+      ns.Adapter = { addonLoaded = function(name) return name == "WeakAuras" end }
+      assert.is_false(hasLineMatching(Slash.run("debug textures"), "needs WeakAuras"))
     end)
 
     it("says a switched-off ability is off, and how to switch it on", function()

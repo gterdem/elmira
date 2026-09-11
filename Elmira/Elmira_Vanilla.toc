@@ -68,6 +68,10 @@ Display\Overlay.lua
 # AB3-D1: the per-ability indicator textures. After Queue.lua, whose frame the Indicators anchor
 # hangs above until the player drags it somewhere else.
 Display\Textures.lua
+# AT4-D2: the visual texture library -- pure path data and pure lookups, read by the picker window
+# and by Textures.texturePath. Listed after Textures.lua for reading order only; neither file
+# touches the other at load.
+Display\TextureLibrary.lua
 # AB1-D8: the one LibSharedMedia fetch + PlaySoundFile path, shared by the announcement sink below
 # and by the Abilities page's per-event sounds. Before Announcers.lua, which now delegates to it.
 Display\Sounds.lua
@@ -85,6 +89,11 @@ Setup\Wizard.lua
 # builds any option that names it as a `dialogControl` -- though the registration itself happens at
 # file scope regardless of order, since Rotation.lua only READS the type name when a page opens.
 Options\CardWidget.lua
+# AT4-D2: the texture picker. The widget registers itself at file scope, like CardWidget above, and
+# TexturePanel.lua is the window that creates one -- opened from the Texture tab and from the Move
+# toolbar, so it loads before both.
+Options\TexturePickerWidget.lua
+Options\TexturePanel.lua
 Options\Rotation.lua
 # R2 (D52): before Options.lua, which reads ns.SpellsPage.group() into the top-level tree.
 Options\Spells.lua

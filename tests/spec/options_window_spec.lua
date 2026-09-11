@@ -24,8 +24,11 @@ describe("Options window", function()
   -- Show / Hide surface as a texture. Declared before fakeFrame, which hands one back from
   -- CreateFontString.
   local function fakeTexture(id)
-    local t = { points = {} }
-    function t:GetTexture() return id end
+    local t = { points = {}, texture = id }
+    function t:GetTexture() return self.texture end
+    -- AT4-D1: the Move toolbar's ability icon is a texture the bar SETS, not one it was built with.
+    function t:SetTexture(v) self.texture = v end
+    function t:SetHeight(v) self.height = v end
     function t:ClearAllPoints() self.points = {} end
     function t:SetPoint(...) self.points[#self.points + 1] = { ... } end
     -- Real GetPoint/GetNumPoints, not a mock-only shortcut: Options.Undecorate reads a region's own
@@ -73,6 +76,11 @@ describe("Options window", function()
       t.SetAllPoints = function(tex, other) tex.allPointsOf = other end
       t.SetColorTexture = function(tex, ...) tex.colorTexture = { ... } end
       self.textures = (self.textures or 0) + 1
+      -- Both ends of the list are asserted on: the bar's backdrop is the FIRST texture it draws
+      -- and the toolbar's ability icon (AT4-D1) is a later one, so "the last texture" alone stopped
+      -- being able to identify either.
+      self.textureList = self.textureList or {}
+      self.textureList[#self.textureList + 1] = t
       self.lastTexture = t
       return t
     end
@@ -87,6 +95,19 @@ describe("Options window", function()
         return fn(...)
       end
     end
+    -- AT4-D1: the Move toolbar's two sliders. `SetValue` FIRES OnValueChanged, exactly as the real
+    -- one does whether the value came from a drag or from code -- which is the whole reason the
+    -- toolbar has to stand its own setter down while it loads an ability's current numbers.
+    function f:SetMinMaxValues(low, high) self.range = { low, high } end
+    function f:SetValueStep(v) self.valueStep = v end
+    function f:SetObeyStepOnDrag(v) self.obeyStep = v and true or false end
+    function f:SetOrientation(v) self.orientation = v end
+    function f:SetValue(v)
+      self.value = v
+      if self.scripts.OnValueChanged then self.scripts.OnValueChanged(self, v) end
+    end
+    function f:GetValue() return self.value end
+    function f:EnableMouse(v) self.mouse = v and true or false end
     function f:SetNormalTexture(t) self.normalTexture = t end
     function f:SetPushedTexture(t) self.pushedTexture = t end
     function f:SetHighlightTexture(t) self.highlightTexture = t end
@@ -1439,9 +1460,10 @@ describe("Options window", function()
       assert.equal(380, b.width)
       assert.equal(76, b.height)
       assert.same({ "TOP", _G.UIParent, "TOP", 0, -40 }, b.points[1])
-      assert.equal(1, b.textures, "no backdrop was drawn behind the text")
-      assert.equal(b, b.lastTexture.allPointsOf, "the backdrop does not cover the bar")
-      assert.same({ 0, 0, 0, 0.85 }, b.lastTexture.colorTexture, "the backdrop is invisible")
+      local backdrop = b.textureList[1]
+      assert.is_table(backdrop, "no backdrop was drawn behind the text")
+      assert.equal(b, backdrop.allPointsOf, "the backdrop does not cover the bar")
+      assert.same({ 0, 0, 0, 0.85 }, backdrop.colorTexture, "the backdrop is invisible")
       -- Both horizontal anchors, which is what makes the sentence wrap instead of running off the
       -- ends of the bar.
       assert.same({ "TOPLEFT", b, "TOPLEFT", 10, -10 }, b.elmiraText.points[1])
@@ -1470,6 +1492,143 @@ describe("Options window", function()
       Options.BeginMove("strip")
       assert.equal("[Moving [the queue strip]. Drag it where you want it, then press Done.]",
                    bar().elmiraText.text)
+    end)
+
+    -- AT4-D1. The owner, dragging a texture around: "I also want to select the texture to try
+    -- different stuff and also to be able to change the size, without seeing the Configuration
+    -- popup; in a clear screen". So the bar grows a row of live controls -- but ONLY while one
+    -- texture is being dragged, and every one of them writes the same `texture` channel the Texture
+    -- tab writes, or the window would come back disagreeing with the screen.
+    describe("the Move toolbar (AT4-D1)", function()
+      local A, refreshes, panelCalls
+
+      before_each(function()
+        ns.db.char = { abilities = {} }
+        A = helper.load("Elmira/Core/AbilitySettings.lua")
+        refreshes = 0
+        ns.Textures = {
+          StopMoveMode = function() stopped.textures = stopped.textures + 1 end,
+          sizeOf = function(e) return tonumber(e and e.size) or 48 end,
+          Refresh = function() refreshes = refreshes + 1 end,
+        }
+        ns.Display = {
+          spellName = function(key) return "Name of " .. key end,
+          spellIcon = function(key) return "icon:" .. key end,
+        }
+        panelCalls = {}
+        ns.TexturePanel = {
+          Toggle = function(key) panelCalls[#panelCalls + 1] = { "toggle", key } end,
+          isOpen = function() return true end,
+          Close = function(cancelled) panelCalls[#panelCalls + 1] = { "close", cancelled } end,
+        }
+      end)
+
+      it("names the ability it is for and opens at its current size, colour and opacity", function()
+        open()
+        A.set("EXORCISM", "texture", "size", 96)
+        A.set("EXORCISM", "texture", "alpha", 0.4)
+        A.set("EXORCISM", "texture", "color", { r = 0.2, g = 0.4, b = 0.9 })
+        Options.BeginMove("texture", "EXORCISM")
+        local b = bar()
+        assert.equal("icon:EXORCISM", b.elmiraIcon:GetTexture())
+        assert.equal("Name of EXORCISM", b.elmiraName.text)
+        assert.equal(96, b.elmiraSize.value)
+        assert.equal(0.4, b.elmiraAlpha.value)
+        assert.same({ 0.2, 0.4, 0.9, 1 }, b.elmiraSwatch.elmiraFill.colorTexture)
+        assert.same({ 16, 256 }, b.elmiraSize.range)
+        assert.same({ 0.05, 1 }, b.elmiraAlpha.range)
+        for _, region in ipairs(b.elmiraTools) do
+          assert.is_false(region.hidden, "a toolbar control was left off the bar")
+        end
+        assert.equal(620, b.width, "the bar did not make room for the toolbar")
+        assert.equal(130, b.height)
+      end)
+
+      -- Loading is not editing. SetValue fires OnValueChanged exactly as a drag does, so without
+      -- the guard, opening the toolbar would write its own starting numbers back over the settings
+      -- it had just read -- and a repaint on every open is how you hide that it happened.
+      it("writes nothing while it is loading the ability's own values", function()
+        open()
+        A.set("EXORCISM", "texture", "size", 96)
+        Options.BeginMove("texture", "EXORCISM")
+        assert.equal(0, refreshes, "loading the toolbar repainted, so it was writing")
+        assert.equal(96, A.effective("EXORCISM", "texture").size)
+      end)
+
+      it("writes the size and the opacity straight to the ability, and repaints", function()
+        open()
+        Options.BeginMove("texture", "EXORCISM")
+        bar().elmiraSize:SetValue(120)
+        assert.equal(120, A.effective("EXORCISM", "texture").size)
+        assert.equal(1, refreshes, "the texture on screen was not repainted")
+        bar().elmiraAlpha:SetValue(0.25)
+        assert.equal(0.25, A.effective("EXORCISM", "texture").alpha)
+        assert.equal(2, refreshes)
+      end)
+
+      -- The client's own colour picker, on the contract this client answers. What matters is what
+      -- happens to the SETTING when a colour comes back, and what happens when the player cancels.
+      it("opens the client's colour picker and stores what comes back", function()
+        open()
+        local shown
+        _G.ColorPickerFrame = {
+          SetupColorPickerAndShow = function(_, info) shown = info end,
+          GetColorRGB = function() return 0.1, 0.2, 0.3 end,
+        }
+        Options.BeginMove("texture", "EXORCISM")
+        bar().elmiraSwatch.scripts.OnClick()
+        assert.is_table(shown, "no colour picker was opened")
+        assert.is_false(shown.hasOpacity)
+        assert.same({ 1.0, 0.8274509803921568, 0.47843137254901963 },
+          { shown.r, shown.g, shown.b }, "the picker did not open on the current colour")
+
+        shown.swatchFunc()
+        assert.same({ r = 0.1, g = 0.2, b = 0.3 }, A.effective("EXORCISM", "texture").color)
+        assert.same({ 0.1, 0.2, 0.3, 1 }, bar().elmiraSwatch.elmiraFill.colorTexture)
+
+        -- Cancel puts back what the swatch opened on, so changing your mind changes nothing.
+        shown.cancelFunc()
+        local c = A.effective("EXORCISM", "texture").color
+        assert.equal(1.0, c.r)
+        _G.ColorPickerFrame = nil
+      end)
+
+      it("opens the texture picker for the ability being moved", function()
+        open()
+        Options.BeginMove("texture", "EXORCISM")
+        bar().elmiraChoose.scripts.OnClick()
+        assert.same({ { "toggle", "EXORCISM" } }, panelCalls)
+      end)
+
+      -- Done must not throw away the texture the player has been looking at on screen: the picker
+      -- is closed as KEPT, never cancelled.
+      it("closes the picker window when the mode ends, keeping the choice", function()
+        open()
+        Options.BeginMove("texture", "EXORCISM")
+        Options.EndMove()
+        assert.same({ { "close", false } }, panelCalls)
+      end)
+
+      -- Every other Move mode keeps the bar it always had: there is nothing on a row of indicators
+      -- or a queue strip for these controls to write to, and a control that writes to nothing is
+      -- this project's characteristic defect.
+      it("is not on the bar for any other mode, and leaves none of itself behind", function()
+        open()
+        Options.BeginMove("texture", "EXORCISM")
+        Options.EndMove()
+        Options.BeginMove("indicators")
+        local b = bar()
+        for _, region in ipairs(b.elmiraTools) do
+          assert.is_true(region.hidden, "a texture control stayed on the bar for another mode")
+        end
+        assert.equal(380, b.width)
+        assert.equal(76, b.height)
+        -- ...and the slider is inert now: nothing to write to, so nothing is written.
+        b.elmiraSize:SetValue(200)
+        assert.equal(0, refreshes)
+        assert.is_nil(ns.db.char.abilities.EXORCISM,
+          "a slider with no ability behind it still wrote a settings row")
+      end)
     end)
 
     -- A client with no CreateFrame at all is only reachable in a spec, but the mode still has to

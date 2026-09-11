@@ -31,10 +31,18 @@ local Textures = {}
 local MEDIA = "Interface\\AddOns\\Elmira\\media\\"
 local ALL = "*"
 
--- The shipped shapes (`tools/gen_shapes.lua` draws them). White with the shape in the alpha
--- channel, so one file tints to any colour the player picks. Ordered for the dropdown.
-Textures.SHAPES = { "ring", "disc", "square", "diamond", "arrow", "star", "bar", "chevron" }
-Textures.SOURCES = { "icon", "shape", "custom" }
+-- AT4-D2 (owner, 2026-09-11): TWO sources, not four. Either the ability draws its own spell icon --
+-- which is what a tick box says, and what nearly everyone wants -- or it draws a FILE, and the one
+-- question left is which file. The shipped shapes, the visual picker and a hand-typed path all
+-- produce the same answer to that question, so they are all `path` and the difference between them
+-- is only how the player arrived at it. `shape` and `custom` are gone with the dropdown that
+-- offered them; there are no users to migrate, so a row still carrying one reads as `icon`.
+Textures.SOURCES = { "icon", "path" }
+-- What the file field holds before anyone chooses anything, and what the ring fallback draws: the
+-- shipped ring (`tools/gen_shapes.lua` draws these -- white, with the shape in the alpha channel, so
+-- one file tints to any colour the player picks). Exported because the Texture tab shows it as the
+-- starting value the moment the icon tick box comes off.
+Textures.DEFAULT_PATH = MEDIA .. "shape_ring"
 Textures.PLACEMENTS = { "row", "centre", "custom" }
 -- All five of Core/Track's events, unlike the screen edge's two: a shape the size of a coin on a
 -- fixed spot is not the strobe a full-screen flash is, so the three moments ADR-0009 keeps off the
@@ -155,6 +163,77 @@ function Textures.placementOf(e)
   return oneOf(Textures.PLACEMENTS, place) and place or "row"
 end
 
+-- Textures.addonLoaded(name) -> is that addon running on this character (AT4-D2)
+--
+-- Through the adapter, never through the client: Display may hold frames, but `IsAddOnLoaded` is a
+-- WoW API call and lives in Adapters/ behind the `addonLoaded` capability like every other one.
+-- false when the adapter cannot answer, which drops the WeakAuras groups from the picker rather
+-- than offering files that would draw nothing.
+function Textures.addonLoaded(name)
+  local A = ns.Adapter
+  if not (A and A.addonLoaded) then return false end
+  return A.addonLoaded(name) == true
+end
+
+-- AT4-D2: the LibSharedMedia category, built from the library the player actually runs rather than
+-- from a list here -- bar textures and backgrounds from every media pack they have installed, named
+-- the way LibSharedMedia names them (those names are the player's own vocabulary; generating our
+-- own from the file path would make the picker disagree with every other addon they configure).
+-- Both media TYPES in one category: a statusbar file and a background file are the same kind of
+-- thing to an indicator, and two categories of four entries each is worse than one of eight. A
+-- duplicate PATH is listed once -- packs routinely register the same file under both types.
+local LSM_TYPES = { "statusbar", "background" }
+local function sharedMediaTextures()
+  local lsm = LibStub and LibStub("LibSharedMedia-3.0", true)
+  if not lsm then return {} end
+  local out, seen = {}, {}
+  for _, kind in ipairs(LSM_TYPES) do
+    for _, name in ipairs((lsm.List and lsm:List(kind)) or {}) do
+      local path = lsm.Fetch and lsm:Fetch(kind, name)
+      if path and not seen[path] then
+        seen[path] = true
+        out[#out + 1] = { path = path, name = name }
+      end
+    end
+  end
+  return out
+end
+
+-- The categories this character can actually see, in the order the picker's dropdown offers them:
+-- the library's own fixed ones, with LibSharedMedia's live one before the two that need WeakAuras.
+-- `Textures.addonLoaded` is itself the predicate the library asks with, so "is WeakAuras here" is
+-- answered in one place for the picker, the tab and the diagnostic alike.
+function Textures.libraryGroups()
+  local lib = ns.TextureLibrary
+  if not lib then return {} end
+  local out, media = {}, sharedMediaTextures()
+  for _, group in ipairs(lib.groups(Textures.addonLoaded)) do
+    -- Before the WeakAuras pair, which are the last two the library declares; on a client without
+    -- WeakAuras that is simply the end of the list.
+    if group.requires and #media > 0 then
+      out[#out + 1] = { key = "sharedmedia", name = "LibSharedMedia Textures", textures = media }
+      media = {}
+    end
+    out[#out + 1] = group
+  end
+  if #media > 0 then
+    out[#out + 1] = { key = "sharedmedia", name = "LibSharedMedia Textures", textures = media }
+  end
+  return out
+end
+
+-- Textures.missingAddon(e) -> the addon this setting's file needs and this character lacks, or nil
+--
+-- AT4-D3. The only failure the library adds over a typed path: a file that exists on the machine
+-- the setting was chosen on and not on this one. nil is the normal answer.
+function Textures.missingAddon(e)
+  local lib = ns.TextureLibrary
+  if not (lib and e and e.source == "path") then return nil end
+  local needs = lib.requires(e.path)
+  if needs and not Textures.addonLoaded(needs) then return needs end
+  return nil
+end
+
 -- Textures.texturePath(e, key) -> the file to draw, or nil
 --
 -- nil is a real answer and the panel says so: an ability whose icon this client cannot resolve, or
@@ -163,13 +242,16 @@ end
 -- working" must not look the same.
 function Textures.texturePath(e, key)
   local source = (e and oneOf(Textures.SOURCES, e.source) and e.source) or "icon"
-  if source == "shape" then
-    local shape = (e and oneOf(Textures.SHAPES, e.shape) and e.shape) or "ring"
-    return MEDIA .. "shape_" .. shape
-  end
-  if source == "custom" then
+  if source == "path" then
+    -- AT4-D3: a path that lives inside another addon's folder is only a file while that addon is
+    -- loaded. nil here is what draws the ring and what makes `/elm debug textures` and the Texture
+    -- tab say WHY -- an uninstalled WeakAuras must not look like a working setting, and the stored
+    -- path is never reset behind the player's back.
+    if Textures.missingAddon(e) then return nil end
     local path = tostring((e and e.path) or "")
-    return path ~= "" and path or nil
+    -- An empty file field is the shipped ring, not nothing: the tab shows the same path as its own
+    -- starting value, so what is drawn and what is written there agree before anything is chosen.
+    return path ~= "" and path or Textures.DEFAULT_PATH
   end
   -- Through Display's one lookup (Driver.spellIcon), never GetSpellTexture from here.
   return (ns.Display and ns.Display.spellIcon and ns.Display.spellIcon(key)) or nil
@@ -378,7 +460,11 @@ local function paint(f, key, e)
   f:SetSize(size, size)
   -- The ring stands in for a path that resolved to nothing, so the cue is never silently invisible;
   -- `describe` and the Texture tab still report the nil, so it is never silently WRONG either.
-  f.icon:SetTexture(Textures.texturePath(e, key) or (MEDIA .. "shape_ring"))
+  -- Through TextureLibrary.drawable: a Blizzard library entry is a numeric file id stored as a
+  -- string, and this client draws an id only when it arrives as a NUMBER. Guarded rather than
+  -- required, so the indicator still paints on a load order where the library is absent.
+  local file = Textures.texturePath(e, key) or (MEDIA .. "shape_ring")
+  f.icon:SetTexture(ns.TextureLibrary and ns.TextureLibrary.drawable(file) or file)
   local c = e.color
   if type(c) == "table" then
     f.icon:SetVertexColor(c.r or 1, c.g or 1, c.b or 1)
@@ -636,6 +722,10 @@ function Textures.describe()
       local f = frames[key]
       out.textures[#out.textures + 1] = {
         key = key, enabled = on, source = e.source, path = Textures.texturePath(e, key),
+        -- AT4-D3: WHY the path above is nil, when the reason is an addon this character does not
+        -- have. "You typed it wrong" and "WeakAuras is not installed here" are different problems
+        -- with the same symptom, and the ring is drawn for both.
+        needsAddon = Textures.missingAddon(e),
         size = Textures.sizeOf(e), place = Textures.placementOf(e), events = events,
         shownAt = shownAt[key], visible = (held[key] or flashUntil[key]) ~= nil,
         -- AB4-D1: what the swipe is SET to, and what it is actually running. The two differ in

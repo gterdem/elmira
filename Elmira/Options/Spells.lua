@@ -540,11 +540,10 @@ end
 
 -- ---------------------------------------------------------------- AB3-D1/D2: the Texture tab
 
--- Named for humans. `Textures` is the authority on which sources, shapes and placements exist -- it
--- is what can actually draw them -- so adding one there cannot leave an unnamed entry here.
-local SOURCE_LABELS = { icon = "This ability's icon", shape = "A shape", custom = "A file of my own" }
-local SHAPE_LABELS = { ring = "Ring", disc = "Disc", square = "Square", diamond = "Diamond",
-                       arrow = "Arrow", star = "Star", bar = "Bar", chevron = "Chevron" }
+-- Named for humans. `Textures` is the authority on which placements exist -- it is what can actually
+-- draw them -- so adding one there cannot leave an unnamed entry here. AT4-D2 took the Source and
+-- Shape dropdowns off this tab entirely: the question is now a tick box ("its own icon?") and, when
+-- that is off, one file path with a Choose… button beside it.
 local PLACE_LABELS = { row = "With the other indicators", centre = "Centre of the screen",
                        custom = "Somewhere I choose" }
 -- AB4-D1. Worded as what the swipe MEASURES, not as what it looks like: "radial progress" tells a
@@ -590,43 +589,80 @@ local function textureArgs(key)
     get = function() return effective(key, "texture").enabled == true end,
     set = function(_, v) put(key, "texture", "enabled", v) end,
   }
-  args.source = {
-    type = "select", order = 3, name = L["Show"],
-    values = labelled(textureList("SOURCES"), SOURCE_LABELS),
-    sorting = textureList("SOURCES"),
-    desc = L["The ability's own spell icon, one of the shapes that ship with Elmira, or any "
-          .. "texture file you have."],
-    get = function() return sourceOf(key) end,
-    set = function(_, v) put(key, "texture", "source", v) end,
-  }
-  args.shape = {
-    type = "select", order = 4, name = L["Shape"],
-    values = labelled(textureList("SHAPES"), SHAPE_LABELS),
-    sorting = textureList("SHAPES"),
-    -- Hidden rather than greyed: a shape picker is not "unavailable" while the source is the spell
-    -- icon, it is irrelevant, and a greyed control invites the player to look for what unlocks it.
-    hidden = function() return sourceOf(key) ~= "shape" end,
-    get = function() return effective(key, "texture").shape or "ring" end,
-    set = function(_, v) put(key, "texture", "shape", v) end,
+  -- AT4-D2, and the whole of the source question: the ability's own spell icon, or a file. Ships
+  -- ticked, because the spell icon is what a texture has always defaulted to and is what almost
+  -- everybody wants -- the file field below only appears for the people who do not.
+  args.ownIcon = {
+    type = "toggle", order = 3, width = "full", name = L["Use this ability's own icon"],
+    desc = L["Untick to draw a picture of your choosing instead -- one of Elmira's shapes, "
+          .. "Blizzard's own art, or any texture file you have."],
+    get = function() return sourceOf(key) == "icon" end,
+    set = function(_, v)
+      if v then
+        put(key, "texture", "source", "icon")
+        return
+      end
+      put(key, "texture", "source", "path")
+      -- The ring, so unticking the box draws something recognisable straight away instead of
+      -- leaving an empty field and a texture that looks broken. Only when nothing was chosen
+      -- before: a player who picked a file, ticked the box and changed their mind gets theirs back.
+      if (effective(key, "texture").path or "") == "" then
+        put(key, "texture", "path", (ns.Textures and ns.Textures.DEFAULT_PATH) or "")
+      end
+    end,
   }
   args.path = {
-    type = "input", order = 5, width = "full", name = L["Texture file"],
-    desc = L["A path the client can load, e.g. Interface\\Icons\\Spell_Holy_Excorcism. Elmira "
-          .. "cannot check it -- if nothing appears, the ring is drawn instead."],
-    hidden = function() return sourceOf(key) ~= "custom" end,
-    get = function() return effective(key, "texture").path or "" end,
+    type = "input", order = 4, width = "full", name = L["Texture file"],
+    desc = L["The picture this ability draws. Pick one with Choose…, or type any path the client "
+          .. "can load, e.g. Interface\\Icons\\Spell_Holy_Excorcism. Elmira cannot check a path you "
+          .. "type -- if nothing appears, the ring is drawn instead."],
+    hidden = function() return sourceOf(key) == "icon" end,
+    -- Never blank: an empty field is the shipped ring, which is also what gets drawn, so the field
+    -- and the screen always agree.
+    get = function()
+      local path = effective(key, "texture").path
+      if path == nil or path == "" then return (ns.Textures and ns.Textures.DEFAULT_PATH) or "" end
+      return path
+    end,
     set = function(_, v) put(key, "texture", "path", v or "") end,
   }
-  -- The one failure a texture has that a screen edge does not: a source that resolves to no file.
-  -- Said here, where it happens, because on screen it is indistinguishable from a working setting.
+  args.choose = {
+    type = "execute", order = 5, name = L["Choose…"],
+    desc = L["Opens the texture picker: Elmira's shapes, Blizzard's own art and your media packs, "
+          .. "as pictures. Click one to see it on screen straight away."],
+    hidden = function() return sourceOf(key) == "icon" end,
+    func = function()
+      if ns.TexturePanel then ns.TexturePanel.Toggle(key) end
+    end,
+  }
+  -- AT4-D3: the one failure the picker adds. A path inside another addon's folder is only a file
+  -- while that addon is loaded, and on a character without it the ring is drawn -- which is
+  -- indistinguishable from a working setting. Nothing is reset; the path is still there for the
+  -- character that has WeakAuras.
+  args.needsAddon = {
+    type = "description", order = 5.5, width = "full", fontSize = "medium",
+    hidden = function()
+      return not (ns.Textures and ns.Textures.missingAddon(effective(key, "texture")))
+    end,
+    name = function()
+      local needs = ns.Textures and ns.Textures.missingAddon(effective(key, "texture"))
+      return ns.Colors.wrap(ns.Colors.WARN, string.format(
+        L["This texture needs %s, which is not installed on this character."], tostring(needs)))
+    end,
+  }
+  -- The other one: a file that resolves to nothing at all. Said here, where it happens, because on
+  -- screen it is indistinguishable from a working setting.
   args.missing = {
     type = "description", order = 6, width = "full", fontSize = "medium",
     hidden = function()
       if not ns.Textures then return true end
+      -- The line above already says it, with the cause and the cure. Two warnings about one
+      -- texture teach the player that warnings here are noise.
+      if ns.Textures.missingAddon(effective(key, "texture")) then return true end
       return ns.Textures.texturePath(effective(key, "texture"), key) ~= nil
     end,
     name = ns.Colors.wrap(ns.Colors.WARN,
-      L["Nothing to draw -- Elmira falls back to the ring. Check the file, or pick a shape."]),
+      L["Nothing to draw -- Elmira falls back to the ring. Check the file, or pick another."]),
   }
   args.size = {
     type = "range", order = 7, name = L["Size"], min = 16, max = 256, step = 8,
