@@ -82,6 +82,10 @@ DB.defaults = {
     -- difference the hint is allowed to make: it has no style of its own, because a global shape
     -- for the second glow would silently overrule what was set on the ability.
     glow = { barGlow = true, secondary = false, secondaryAlpha = 0.35 },
+    -- AT2-D3: the strip's own glow, opt-in and off by default -- the strip already says "this one"
+    -- with size and motion (ADR-0015 §3, amended), so lighting slot 1 too is a player's choice. Its
+    -- own switch: unaffected by `glow.barGlow` above, in either direction.
+    queue = { stripGlow = false },
     -- F37. `routes` starts EMPTY and Core/Announce falls back to its shipped defaults, so a category
     -- added by a later release arrives with its intended routing rather than silent -- and a user
     -- who has never opened the panel is not carrying a frozen copy of an old default set.

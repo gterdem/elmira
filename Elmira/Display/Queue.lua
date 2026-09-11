@@ -7,10 +7,14 @@
 -- The frame is movable and its anchor persists, because the setup wizard is M4: without `/elm lock`
 -- M3 would ship a strip you can see and cannot move.
 --
--- ADR-0015 §3: the strip NEVER glows. It says "this one" with size and opacity and says "something
--- changed" with motion; the single attention signal belongs to the action bar, where the hand
--- already is. What the sizes and the motions ARE lives in Core/Transition.lua -- this file only
--- applies them to frames.
+-- ADR-0015 §3: the strip does not glow BY DEFAULT. It says "this one" with size and opacity and
+-- says "something changed" with motion; the single attention signal belongs to the action bar,
+-- where the hand already is. AT2-D3 (2026-09-10 amendment, docs/adr/0015-rotation-panel-and-
+-- display-hierarchy.md) lets a player switch slot 1's own glow on anyway, off by default, because
+-- it is the one button that can never be missing -- Display/Glow.lua lights `Queue.firstSlotFrame()`
+-- through the same LibCustomGlow path a bar button uses. What the sizes and the motions ARE lives
+-- in Core/Transition.lua -- this file only applies them to frames; the glow is Glow.lua's, not this
+-- file's, which is why the only thing this file hands it is the frame.
 local ADDON, ns = ...
 ns = ns or _G.__ELM_NS or {}
 
@@ -475,6 +479,11 @@ local function playOp(b, op, slots, index, grow)
 end
 
 function Queue.frame() return container end
+
+-- AT2-D3: the strip's own glow (opt-in, off by default) lights THIS frame -- slot 1, the one icon
+-- that can never be missing from the screen the way a bar button can. nil before Queue.Create() has
+-- ever run, same as Queue.frame() above.
+function Queue.firstSlotFrame() return buttons[1] end
 
 -- PE11-D5. Positioning mode: the Queue page's "Position the Strip" button puts the strip on screen
 -- with a sample of icons and lets it be dragged where it would normally be hidden -- by default the

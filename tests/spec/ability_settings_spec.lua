@@ -82,6 +82,9 @@ describe("Core.AbilitySettings", function()
       assert.is_false(g.frequency)
       assert.is_false(g.thickness)
       assert.is_false(g.speed)
+      -- AT2-D1: ships as the display's own default mode, so nothing about today's screen changes
+      -- for a player who never opens the Glow tab's new dropdown.
+      assert.equal("combat_or_target", g.show)
     end)
 
     it("ships the general and edge shapes AB1-D5 and AB2-D1 read", function()

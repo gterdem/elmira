@@ -100,10 +100,10 @@ describe("Options (the settings pages)", function()
     -- PE11-D1: the switch is named for what it switches ("Enable the queue strip", the shape
     -- General's "Enable action bar glow" already uses). It used to be "Show the queue strip", five
     -- rows above a dropdown called "Show the queue" -- one page, two nearly identical labels.
-    it("offers the strip separately, and says the glow survives it", function()
+    it("offers the strip separately, and says the glow is unaffected", function()
       local row = queueArgs().showQueue
       assert.equal("Enable the queue strip", row.name)
-      assert.is_truthy(row.desc:find("keeps the action-bar glow", 1, true))
+      assert.is_truthy(row.desc:find("action%-bar glow"))
       assert.is_true(row.get())
       row.set(nil, false)
       assert.is_false(ns.db.profile.showQueue)
@@ -402,9 +402,11 @@ describe("Options (the settings pages)", function()
         assert.same({ "showQueue", "visibility", "oocAlpha" }, orderOf("when"))
         assert.same({ "depth", "scale", "matchBars", "grow", "spacing", "position" },
                     orderOf("size"))
-        -- `animate` sits with what the strip TELLS you, not with its size: ADR-0015 §3 forbids the
-        -- strip to glow, so motion is how it says "something changed" -- information, not decoration.
-        assert.same({ "waits", "keybinds", "showReason", "animate", "learning" }, orderOf("tells"))
+        -- `animate` sits with what the strip TELLS you, not with its size: ADR-0015 §3 (amended
+        -- AT2-D3) keeps the strip dark by default, so motion is still normally how it says
+        -- "something changed" -- information, not decoration. `stripGlow` is the opt-in beside it.
+        assert.same({ "waits", "keybinds", "showReason", "animate", "stripGlow", "learning" },
+                    orderOf("tells"))
 
         -- The rows that left for General stayed gone, at either level.
         for _, panel in pairs(queue.args) do
@@ -471,15 +473,16 @@ describe("Options (the settings pages)", function()
     it("says on every control exactly what the owner wrote there", function()
       local expected = {
       when_oocAlpha = "How solid the strip is while you are not fighting. It goes back to full the moment you enter combat. To hide it entirely out of combat, use \"When to show it\" above instead.",
-      when_showQueue = "The row of icons showing what to press now and what comes after it. Turning it off hides the icons and keeps the action-bar glow, for players who watch only the highlighted button.",
-      when_visibility = "Which moments the strip and its bar glow are on screen. Hiding it also stops the update loop, so a hidden queue costs nothing at all. The default keeps it out of your way in town and up the moment you have something to fight.",
+      when_showQueue = "The row of icons showing what to press now and what comes after it. Turning it off hides the icons only; the action-bar glow keeps whatever schedule you gave it and is not affected.",
+      when_visibility = "Which moments the strip is on screen. Hiding it also stops the update loop, so a hidden queue costs nothing at all. The default keeps it out of your way in town and up the moment you have something to fight.",
       size_depth = "How many casts ahead the strip shows. The first icon is what to press now; the rest are what the rotation projects after it. One is the whole answer with nothing to read past it; five is a plan.",
       size_grow = "Which way the strip lays out after the first icon. The first icon does not move, so you can position the strip first and pick a direction afterwards. Down or Up suits a strip beside your character; Left suits one anchored to the right of the screen.",
       size_matchBars = "Measures a button on your action bars and sets the size above so the first icon is drawn the same. Needs one of the rotation's spells to be on a bar you can see.",
       size_position = "Puts the strip on screen with sample icons and lets you drag it, even in the moments it would normally be hidden. Press it again when the strip is where you want it. Nothing is saved except the position: your lock setting is left exactly as it was, and closing this window ends it too.",
       size_scale = "How large the queue icons are drawn on your screen. If you want them the size of the buttons you already read, use \"Match my action bars\" below rather than hunting for the number.",
       size_spacing = "How many pixels apart the icons sit. Zero makes the strip read as one block; a wide gap makes the first icon easier to pick out of the corner of your eye.",
-      tells_animate = "Icons slide when the queue moves and pop when you cast the suggestion. The strip never glows, so movement is how it says something changed: with this off, a new first suggestion simply appears and is easy to miss.",
+      tells_animate = "Icons slide when the queue moves and pop when you cast the suggestion. The strip does not glow unless you turn that on below, so motion is normally how it says something changed: with this off, a new first suggestion simply appears and is easy to miss.",
+      tells_stripGlow = "Puts the same glow the action bar uses on the strip's first icon too, in the suggested ability's own colour and style. Off by default -- the strip already says \"this one\" with size and motion. Follows the same \"Show the glow\" schedule and \"Only in combat\" guard as the bar glow (set on each ability's Glow tab), and is not affected by \"Enable action bar glow\" on General: it is its own switch.",
       tells_keybinds = "Prints the key each suggestion is bound to on your action bars, in the icon's top-right corner. Nothing appears for an ability you have not put on a bar. On the first icon only by default: on a later icon it is a key NOT to press yet.",
       tells_learning = "Shows one suggestion at a time, larger, with the name of the rule that chose it. It writes three settings on this page for you: \"Casts to show\" to 1, \"Size\" to 140% and \"Show the rule name\" on -- and puts all three back the way they were when you switch it off again. Anything you change yourself while it is on is yours and stays. Does not turn on any screen-edge cues; those stay your choice.",
       tells_showReason = "Writes the name of the rule that chose the first suggestion underneath it, so you learn why rather than memorising an order. Works at any number of icons; Learning mode below switches it on for you.",
@@ -497,7 +500,7 @@ describe("Options (the settings pages)", function()
         end
       end
       -- A row that moved panels or lost its desc would silently drop out of the walk above.
-      assert.equal(14, seen)
+      assert.equal(15, seen)
     end)
 
     -- PE11-D4. The third instance this session of "the master switch is off and the twelve
@@ -511,7 +514,7 @@ describe("Options (the settings pages)", function()
                  queue.args.size.args.spacing, queue.args.size.args.position,
                  queue.args.tells.args.waits, queue.args.tells.args.keybinds,
                  queue.args.tells.args.showReason, queue.args.tells.args.animate,
-                 queue.args.tells.args.learning }
+                 queue.args.tells.args.stripGlow, queue.args.tells.args.learning }
       end
 
       it("greys out every other control and names the switch that brings them back", function()

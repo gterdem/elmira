@@ -19,6 +19,11 @@ local LABELS = {
   combat_or_target = "In combat, or when you have a target",
   combat = "In combat only",
 }
+-- AT2-D1: Options/Spells.lua's Glow tab offers the SAME dropdown, verbatim -- shared by reference
+-- rather than by a second copy of the English so the two pages cannot say the mode differently.
+-- Spells.lua loads before this file (Elmira_Vanilla.toc), but only ever reads this inside an
+-- AceConfig `values` callback, which fires long after every file has loaded.
+Options.VISIBILITY_LABELS = LABELS
 
 -- PE9-D4. Same split as LABELS above: Display/Queue.lua decides what these strings DO, this side
 -- decides what they are called and in what order the dropdown offers them. Loosest last in both,
@@ -1836,18 +1841,21 @@ local function queueGroup()
         -- bar glow" on General) rather than for the question the dropdown below it answers.
         showQueue = {
           type = "toggle", order = 1, name = L["Enable the queue strip"],
+          -- AT2-D2: reworded to the strip alone. The action-bar glow (and the strip's own glow,
+          -- D3) no longer take their visibility from this switch or from the dropdown below it --
+          -- each answers to its own "Show the glow" mode on the ability's Glow tab now.
           desc = L["The row of icons showing what to press now and what comes after it. Turning it "
-                .. "off hides the icons and keeps the action-bar glow, for players who watch only "
-                .. "the highlighted button."],
+                .. "off hides the icons only; the action-bar glow keeps whatever schedule you gave "
+                .. "it and is not affected."],
           get = function() return profile().showQueue ~= false end,
           set = function(_, v) profile().showQueue = v; redraw() end,
         },
         visibility = {
           type = "select", order = 2, width = "full", name = L["When to show it"],
-          desc = queueDesc(L["Which moments the strip and its bar glow are on screen. Hiding it "
-                .. "also stops the update loop, so a hidden queue costs nothing at all. The "
-                .. "default keeps it out of your way in town and up the moment you have something "
-                .. "to fight."]),
+          -- AT2-D2: reworded to the strip alone, for the same reason as showQueue's desc above.
+          desc = queueDesc(L["Which moments the strip is on screen. Hiding it also stops the "
+                .. "update loop, so a hidden queue costs nothing at all. The default keeps it out "
+                .. "of your way in town and up the moment you have something to fight."]),
           disabled = stripDisabled,
           values = function()
             local out = {}
@@ -2019,19 +2027,43 @@ local function queueGroup()
         },
         animate = {
           type = "toggle", order = 4, name = L["Animate changes"],
+          -- AT2-D3 amends ADR-0015 §3: the strip no longer NEVER glows, only never by default, so
+          -- this no longer claims it as a fact.
           desc = queueDesc(L["Icons slide when the queue moves and pop when you cast the "
-                .. "suggestion. The strip never glows, so movement is how it says something "
-                .. "changed: with this off, a new first suggestion simply appears and is easy to "
-                .. "miss."]),
+                .. "suggestion. The strip does not glow unless you turn that on below, so motion "
+                .. "is normally how it says something changed: with this off, a new first "
+                .. "suggestion simply appears and is easy to miss."]),
           disabled = stripDisabled,
           get = function() return profile().animate ~= false end,
           set = function(_, v) profile().animate = v; redraw() end,
+        },
+        -- AT2-D3: opt-in, off by default, and its own switch -- unaffected by "Enable action bar
+        -- glow" on General in either direction. Lives beside `animate` rather than in the size
+        -- panel: both are ways the strip says "something changed", and this is the one that used
+        -- to be forbidden outright.
+        stripGlow = {
+          type = "toggle", order = 5, name = L["Glow the first icon on the strip"],
+          desc = queueDesc(L["Puts the same glow the action bar uses on the strip's first icon "
+                .. "too, in the suggested ability's own colour and style. Off by default -- the "
+                .. "strip already says \"this one\" with size and motion. Follows the same \"Show "
+                .. "the glow\" schedule and \"Only in combat\" guard as the bar glow (set on each "
+                .. "ability's Glow tab), and is not affected by \"Enable action bar glow\" on "
+                .. "General: it is its own switch."]),
+          disabled = stripDisabled,
+          get = function() local p = profile(); return p and p.queue and p.queue.stripGlow == true end,
+          set = function(_, v)
+            local p = profile()
+            p.queue = p.queue or {}
+            p.queue.stripGlow = v
+            if ns.Glow then ns.Glow.StopAll() end
+            redraw()
+          end,
         },
         -- PE11-D3: the tooltip names all three settings the preset moves. A preset that rewrites
         -- controls the player can see in the same panel without saying which is how a settings
         -- page loses their trust.
         learning = {
-          type = "toggle", order = 5, width = "full", name = L["Learning mode"],
+          type = "toggle", order = 6, width = "full", name = L["Learning mode"],
           desc = queueDesc(L["Shows one suggestion at a time, larger, with the name of the rule "
                 .. "that chose it. It writes three settings on this page for you: \"Casts to "
                 .. "show\" to 1, \"Size\" to 140% and \"Show the rule name\" on -- and puts all "

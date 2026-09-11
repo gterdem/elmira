@@ -122,6 +122,58 @@ describe("Display.Driver", function()
     end)
   end)
 
+  -- AT2-D1: the glow no longer takes its visibility from the strip's. The strip stays hidden by
+  -- its OWN mode throughout this block (`visibility = "combat"`, out of combat, no target) so every
+  -- assertion is really about the glow's gate, not about accidentally making the strip visible too.
+  describe("the glow keeps its own visibility while the strip stays hidden (AT2-D1)", function()
+    local A
+
+    before_each(function()
+      A = helper.load("Elmira/Core/AbilitySettings.lua")
+      ns.db.char = { abilities = {} }
+      ns.db.profile.glow = { barGlow = true }
+      ns.db.profile.visibility = "combat"
+      stubState(false, false)
+    end)
+
+    it("costs nothing extra while nobody has touched either mode", function()
+      -- Both still read the shipped default ("combat_or_target"): a hidden strip means an equally
+      -- hidden glow, which is the "nothing changes by default" promise AT2-D1 makes.
+      assert.is_false(Display.glowCouldBeVisible())
+      local computed = false
+      Display.computeQueue = function() computed = true; return {}, "k" end
+      assert.equal("hidden", tick())
+      assert.is_false(computed)
+    end)
+
+    it("answers true once the glow's own mode says Always, though the strip's does not", function()
+      A.set(A.ALL, "glow", "show", "always")
+      assert.is_true(Display.glowCouldBeVisible())
+    end)
+
+    it("computes and renders for the glow's sake while the strip itself paints hidden", function()
+      A.set(A.ALL, "glow", "show", "always")
+      stubQueue({ { spell = "EXORCISM" } }, "PALADIN_EXODIN")
+      assert.equal("rendered", tick())
+      assert.equal(1, #rendered)
+      assert.is_false(rendered[1].visible, "the strip's own visibility is still false")
+      assert.is_not_nil(rendered[1].queue, "the glow needs a real queue to have anything to light")
+    end)
+
+    it("General's 'Only in combat' silences the glow's pre-check too (the AND the tooltip promises)",
+      function()
+        A.set(A.ALL, "glow", "show", "always")
+        A.set(A.ALL, "general", "onlyInCombat", true)
+        assert.is_false(Display.glowCouldBeVisible())
+      end)
+
+    it("answers false with no glow feature switched on at all, whatever the mode says", function()
+      ns.db.profile.glow.barGlow = false
+      A.set(A.ALL, "glow", "show", "always")
+      assert.is_false(Display.glowCouldBeVisible())
+    end)
+  end)
+
   -- Display.stats() is what `/elm debug perf` reads. lastBuildKey is only set by a RENDER, so before
   -- M4b it was nil whenever the display was hidden -- most of a session, and exactly when someone
   -- runs this to ask why the screen is empty.

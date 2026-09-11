@@ -335,7 +335,7 @@ end
 -- failure shape this project keeps refusing to ship again.
 local function expiringArgs(key, order, extraDisabled)
   return {
-    type = "range", order = order, name = L["Warn me when its buff has N seconds left"],
+    type = "range", order = order, name = L["Warn me about to expire"],
     min = 1, max = 15, step = 1,
     desc = L["Only fires for an ability whose buff is actually on you -- one that never has a buff "
           .. "of its own, like Exorcism or Judgement, never sees it."],
@@ -409,14 +409,39 @@ local function glowArgs(key)
     get = function() return effective(key, "glow").enabled == true end,
     set = function(_, v) put(key, "glow", "enabled", v) end,
   }
+  -- AT2-D1: which moments this ability's glow (bar and strip alike) is allowed on screen, in the
+  -- SAME words and order as the Queue page's "When to show it" -- shared by reference
+  -- (`Options.VISIBILITY_LABELS`) rather than a second copy of the English, so the two pages
+  -- cannot drift apart. Independent of the display: a hidden strip does not silence "Always", and
+  -- a shown strip does not force "In combat only".
+  args.show = {
+    type = "select", order = 3, width = "full", name = L["Show the glow"],
+    disabled = glowDisabled(key),
+    desc = L["Which moments this ability's glow is allowed on screen -- its own schedule, not the "
+          .. "queue strip's. A hidden strip does not silence a glow set to Always, and a visible "
+          .. "strip does not force one set to In combat only."],
+    values = function()
+      local out = {}
+      local labels = (ns.Options and ns.Options.VISIBILITY_LABELS) or {}
+      for _, mode in ipairs(ns.Visibility.MODES) do out[mode] = L[labels[mode]] end
+      return out
+    end,
+    sorting = function()
+      local out = {}
+      for i, mode in ipairs(ns.Visibility.MODES) do out[i] = mode end
+      return out
+    end,
+    get = function() return effective(key, "glow").show or ns.Visibility.DEFAULT end,
+    set = function(_, v) put(key, "glow", "show", v) end,
+  }
   args.style = {
-    type = "select", order = 3, name = L["Style"], disabled = glowDisabled(key),
+    type = "select", order = 4, name = L["Style"], disabled = glowDisabled(key),
     values = function() return SpellsPage.glowStyleNames() end,
     get = function() return styleOf(key) end,
     set = function(_, v) put(key, "glow", "style", v) end,
   }
   args.color = {
-    type = "color", order = 4, name = L["Colour"], hasAlpha = false, disabled = glowDisabled(key),
+    type = "color", order = 5, name = L["Colour"], hasAlpha = false, disabled = glowDisabled(key),
     desc = L["The colour of the glow on your action bar."],
     get = function()
       local c = effective(key, "glow").color or ns.Colors.HIGHLIGHT
@@ -424,17 +449,17 @@ local function glowArgs(key)
     end,
     set = function(_, r, g, b) put(key, "glow", "color", { r = r, g = g, b = b }) end,
   }
-  args.particles = numberRow(key, 5, L["Particles"], "particles", 1, 20, 1,
+  args.particles = numberRow(key, 6, L["Particles"], "particles", 1, 20, 1,
     L["How many dots or sparks travel around the button."])
   -- 0.025 rather than 0.05 so Autocast's own default of 0.125 is a step the slider can land on.
-  args.frequency = numberRow(key, 6, L["Speed"], "frequency", 0.025, 2, 0.025,
+  args.frequency = numberRow(key, 7, L["Speed"], "frequency", 0.025, 2, 0.025,
     L["How fast they travel."])
-  args.thickness = numberRow(key, 7, L["Thickness"], "thickness", 1, 6, 1,
+  args.thickness = numberRow(key, 8, L["Thickness"], "thickness", 1, 6, 1,
     L["How heavy the outline is."])
-  args.speed = numberRow(key, 8, L["Pulse length"], "speed", 0.2, 3, 0.1,
+  args.speed = numberRow(key, 9, L["Pulse length"], "speed", 0.2, 3, 0.1,
     L["How long one pulse of the proc animation lasts, in seconds."])
   args.preview = {
-    type = "execute", order = 9, name = L["Preview Glow"], disabled = glowDisabled(key),
+    type = "execute", order = 10, name = L["Preview Glow"], disabled = glowDisabled(key),
     desc = L["Flashes a button on your bars with these settings."],
     func = function() if ns.Options then ns.Options.previewGlow(false, key) end end,
   }
@@ -442,7 +467,7 @@ local function glowArgs(key)
     -- AB1-D3: `Options.resetGlow` is this button. Only the All abilities entry has one -- resetting
     -- a single ability is what its "Same as All abilities" toggle already does, in one click.
     args.reset = {
-      type = "execute", order = 10, name = L["Reset These to Defaults"], confirm = true,
+      type = "execute", order = 11, name = L["Reset These to Defaults"], confirm = true,
       desc = L["Puts every glow setting back the way it shipped, including the colour."],
       confirmText = L["Put every glow setting back to its default?"],
       func = function() if ns.Options then ns.Options.resetGlow() end end,

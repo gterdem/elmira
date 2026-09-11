@@ -35,7 +35,13 @@ AbilitySettings.ALL = ALL
 -- texture or a party-visible announcement on everything is the strobe the ADR exists to prevent.
 local DEFAULTS = {
   general  = { onlyInCombat = false, expiringSeconds = 3 },
-  glow     = { enabled = true, style = "PIXEL", color = false,
+  -- AT2-D1: `show` is which moments this ability's glow (bar AND strip, D3) is allowed on screen --
+  -- the SAME values Core/Visibility.MODES offers the display, but its OWN gate: a hidden strip with
+  -- glow set to "Always" still glows, and a visible strip with glow set to "In combat only" does
+  -- not. Ships as the display's own default so nothing changes for a player who never opens this
+  -- tab; a plain string literal rather than `ns.Visibility.DEFAULT`, because ability_settings_spec
+  -- (and any other spec that loads this file alone) never loads Core/Visibility.lua first.
+  glow     = { enabled = true, style = "PIXEL", color = false, show = "combat_or_target",
                particles = false, frequency = false, thickness = false, speed = false },
   -- AB3-D1. `source` picks between the ability's own spell icon, one of the shipped shapes
   -- (`Elmira/media/shape_*.tga`) and a path the player typed; `shape` and `path` are what those two

@@ -48,6 +48,7 @@ describe("Display.Glow", function()
     _G.LibStub = function(major) return major == "LibCustomGlow-1.0" and lib or nil end
     helper.load("Elmira/Core/Colors.lua")
     helper.load("Elmira/Core/DB.lua")
+    helper.load("Elmira/Core/Visibility.lua")
     helper.load("Elmira/Core/AbilitySettings.lua")
     Glow = helper.load("Elmira/Display/Glow.lua")
     -- AB1-D3: what a glow LOOKS like is per ability and per character now. `barGlow`,
@@ -515,6 +516,57 @@ describe("Display.Glow", function()
     end)
   end)
 
+  -- AT2-D1: each ability's glow answers to its OWN "Show the glow" mode and the same "Only in
+  -- combat" guard the four cue channels already obey -- independently of the strip, which nothing
+  -- here even mentions.
+  describe("each ability's glow has its own visibility (AT2-D1)", function()
+    before_each(function()
+      ns.db.profile.glow.barGlow = true
+      ns.BarGlow = { buttonsFor = function() return { frame("bar") }, "ElvUI" end,
+                     noteMissing = function() end }
+    end)
+
+    local function stubState(inCombat, hasTarget)
+      ns.API = { GetState = function()
+        return { inCombat = function() return inCombat end,
+                 targetAttackable = function() return hasTarget end }
+      end }
+    end
+
+    it("glows through a hidden strip when its own mode says Always", function()
+      setGlow("show", "always")
+      stubState(false, false)
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(1, Glow.activeCount())
+    end)
+
+    it("stays dark out of combat when its own mode says In combat only", function()
+      setGlow("show", "combat")
+      stubState(false, false)
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(0, Glow.activeCount())
+      stubState(true, false)
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(1, Glow.activeCount())
+    end)
+
+    it("General's 'Only in combat' silences it too, even when its own mode says Always", function()
+      setGlow("show", "always")
+      ns.AbilitySettings.set(ns.AbilitySettings.ALL, "general", "onlyInCombat", true)
+      stubState(false, false)
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(0, Glow.activeCount())
+    end)
+
+    it("fails open -- shows rather than silently darkens every bar -- when the state errors", function()
+      setGlow("show", "combat")
+      ns.API = { GetState = function() return { inCombat = function() error("boom") end,
+                                                 targetAttackable = function() return false end } end }
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(1, Glow.activeCount())
+    end)
+  end)
+
   -- Wiring, not behaviour. `BarGlow.noteMissing` was covered in barglow_spec and the CALL to it from
   -- here was not, so deleting the call broke no test at all — "correct code that is never reached"
   -- is this codebase's most reliable failure, and a spec that cannot notice it is decoration.
@@ -555,6 +607,55 @@ describe("Display.Glow", function()
       assert.equal(0, Glow.activeCount())
     end)
   end)
+
+  -- AT2-D3: opt-in, off by default, and its own switch either direction -- an off bar glow must not
+  -- silence it, and it being off must not silence the bar glow.
+  describe("the strip's own glow (AT2-D3)", function()
+    local stripButton
+
+    before_each(function()
+      stripButton = frame("strip-slot1")
+      ns.Queue = { firstSlotFrame = function() return stripButton end }
+    end)
+
+    it("lights the strip's first icon when the switch is on, even with the bar glow off", function()
+      ns.db.profile.glow.barGlow = false
+      ns.db.profile.queue = { stripGlow = true }
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(1, Glow.activeCount())
+      local hit
+      for _, c in ipairs(calls) do if c.r == stripButton then hit = c end end
+      assert.is_not_nil(hit, "the strip's own frame was never handed to the library")
+    end)
+
+    it("does nothing while the switch is off, whatever the bar glow is doing", function()
+      ns.db.profile.glow.barGlow = true
+      ns.BarGlow = { buttonsFor = function() return {} end, noteMissing = function() end }
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(0, Glow.activeCount())
+    end)
+
+    it("glows independently of whether the bar glow can find a button at all", function()
+      ns.db.profile.glow.barGlow = true
+      ns.db.profile.queue = { stripGlow = true }
+      local missing = {}
+      ns.BarGlow = { buttonsFor = function() return {} end,
+                     noteMissing = function(key) missing[#missing + 1] = key end }
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(1, Glow.activeCount(), "no bar button found, but the strip still lit")
+      assert.same({ "NOW" }, missing,
+        "the strip glow must not silence the bar's own missing-button warning")
+    end)
+
+    it("does not need its own switch on for the bar glow to keep working", function()
+      ns.db.profile.glow.barGlow = true
+      ns.db.profile.queue = { stripGlow = false }
+      ns.BarGlow = { buttonsFor = function() return { frame("bar") } end, noteMissing = function() end }
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(1, Glow.activeCount(), "only the bar button -- the strip's own switch is off")
+      for _, c in ipairs(calls) do assert.are_not.equal(stripButton, c.r) end
+    end)
+  end)
 end)
 
 -- Its own renderer, not something the strip does on the side. Joined, hiding the icons hid the glow.
@@ -574,7 +675,11 @@ describe("Glow.Render", function()
     helper.load("Elmira/Core/DB.lua")
     Glow = helper.load("Elmira/Display/Glow.lua")
     ns.db = { profile = { glow = { style = "PIXEL", barGlow = true } } }
-    ns.BarGlow = { buttonsFor = function() return { frame("bar") }, "ElvUI" end }
+    -- The SAME frame every call, the way the real BarGlow.buttonsFor returns the same cached button
+    -- for an unchanged key -- a fresh table per call would make two ticks in a row look, by
+    -- identity, like the button changed underneath an unchanged suggestion.
+    local barButton = frame("bar")
+    ns.BarGlow = { buttonsFor = function() return { barButton }, "ElvUI" end }
   end)
 
   after_each(function() _G.LibStub = nil end)
@@ -585,15 +690,27 @@ describe("Glow.Render", function()
     assert.equal(1, Glow.activeCount())
   end)
 
-  it("releases everything when the driver says hidden", function()
+  -- AT2-D1: the glow no longer takes its cue from the STRIP's visibility. Passing `visible = false`
+  -- with a real suggestion used to release every glow (ADR-0015 coupling); now the glow's own mode
+  -- decides, and with no AbilitySettings store loaded here it defaults to showing.
+  it("keeps glowing when the driver says the strip is hidden, as long as there is a real queue", function()
     Glow.Render({ { spell = "EXORCISM" } }, "K", true)
     Glow.Render({ { spell = "EXORCISM" } }, "K", false)
+    assert.equal(0, #stopped, "the strip's own visibility must not stop a glow any more")
+    assert.equal(1, Glow.activeCount())
+  end)
+
+  it("releases everything when the driver hands over no queue at all", function()
+    Glow.Render({ { spell = "EXORCISM" } }, "K", true)
+    Glow.Render(nil, nil, false)
     assert.equal(1, #stopped)
     assert.equal(0, Glow.activeCount())
   end)
 
-  it("treats an omitted visibility as visible, like every other renderer", function()
+  it("ignores the visibility argument entirely -- it is the strip's, not the glow's", function()
     Glow.Render({ { spell = "EXORCISM" } }, "K")
+    assert.equal(1, Glow.activeCount())
+    Glow.Render({ { spell = "EXORCISM" } }, "K", false)
     assert.equal(1, Glow.activeCount())
   end)
 

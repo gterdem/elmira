@@ -82,6 +82,39 @@ function Glow.enabledFor(key)
   return A.channelOn(key or A.ALL, "glow")
 end
 
+-- AT2-D1: this ability's OWN ctx read -- inCombat/targetAttackable, the same two fields
+-- Display/Driver's showCtx carries -- kept here rather than threaded in from the driver because
+-- every Display file already reads the state for itself (Queue.Render does the same for its
+-- cooldown sweep). Unreadable/absent state answers nil, which callers below treat as "fail open":
+-- the same philosophy Display.shouldShow uses, since a broken read must not silently darken every
+-- bar in the game.
+local function glowCtx()
+  local state = ns.API and ns.API.GetState()
+  if not state then return nil end
+  local ctx = {}
+  local ok = pcall(function()
+    ctx.inCombat = state:inCombat() == true
+    ctx.targetAttackable = state:targetAttackable() == true
+  end)
+  return ok and ctx or nil
+end
+
+-- AT2-D1: is THIS ability's glow allowed on screen right now -- its own "Show the glow" mode and
+-- the same "Only in combat" guard the four cue channels already obey (Display/Driver.abilityEvent),
+-- both independent of whether the strip itself is showing. `ctx` may be shared across a now/next
+-- pair by the caller so one tick asks the state once, not twice.
+function Glow.visibleFor(key, ctx)
+  local A = ns.AbilitySettings
+  if not (A and ns.Visibility) then return true end
+  ctx = ctx or glowCtx()
+  if not ctx then return true end
+  local mode = A.effective(key or A.ALL, "glow").show or ns.Visibility.DEFAULT
+  if not ns.Visibility.shouldShow(mode, ctx) then return false end
+  local gen = A.effective(key or A.ALL, "general")
+  if gen and gen.onlyInCombat and not ctx.inCombat then return false end
+  return true
+end
+
 -- Which style to draw with -- one answer for both glows. The next-cast glow always uses the SAME
 -- style as the real suggestion, dimmed; it never picks its own. PE7 (owner, 2026-09-08): each
 -- ability carries its own glow style and colour, so a global override for the second glow would
@@ -215,16 +248,23 @@ end
 --
 -- The queue's own icon used to be in this set. ADR-0015 took it out: the strip and the bar were
 -- lighting up for the same spell at the same instant, and the strip's half is the one you cannot
--- press. The glow is now the action bar's alone, and the strip speaks in size and motion.
+-- press. The glow is the action bar's by default, and the strip speaks in size and motion; AT2-D3's
+-- amendment puts the strip's first icon back into this same `wantNow` set, opt-in, when the player
+-- asks for it -- the one button that can never be missing the way a bar button can.
 function Glow.SetNowSlot(slot, nextSlot)
   local p = (ns.db and ns.db.profile) or ns.DB.defaults.profile
   local g = p.glow or {}
+  local q = p.queue or {}
   local wantNow, wantNext = {}, {}
 
   local nowKey = slot and slot.spell or nil
   local nextKey = nextSlot and nextSlot.spell or nil
+  -- One ctx for the whole call: now and next answer the same "is it in combat / is there a target"
+  -- question, so there is no reason to read the state twice for one tick.
+  local ctx = glowCtx()
+  local nowOn = nowKey and Glow.enabledFor(nowKey) and Glow.visibleFor(nowKey, ctx)
   if g.barGlow and ns.BarGlow then
-    if nowKey and Glow.enabledFor(nowKey) then
+    if nowOn then
       local buttons = ns.BarGlow.buttonsFor(nowKey)
       for _, button in ipairs(buttons or {}) do
         wantNow[button] = true
@@ -237,11 +277,20 @@ function Glow.SetNowSlot(slot, nextSlot)
     end
     -- The cast after this one, dim, only if asked for. A spell that is both now and next gets the
     -- bright glow alone: two glows on one button is not "more information", it is a flicker.
-    if g.secondary and nextKey and Glow.enabledFor(nextKey) then
+    if g.secondary and nextKey and Glow.enabledFor(nextKey) and Glow.visibleFor(nextKey, ctx) then
       for _, button in ipairs(ns.BarGlow.buttonsFor(nextKey) or {}) do
         if not wantNow[button] then wantNext[button] = true end
       end
     end
+  end
+
+  -- AT2-D3: the strip's own switch, independent of `barGlow` above in both directions -- an
+  -- action-bar glow that is off must not silence this, and this being off must not silence the
+  -- bars. Slot 1 only, and never through BarGlow.buttonsFor/noteMissing: the strip is not an action
+  -- bar, and it is never the button the player "could not find".
+  if q.stripGlow and nowOn then
+    local stripButton = ns.Queue and ns.Queue.firstSlotFrame and ns.Queue.firstSlotFrame()
+    if stripButton then wantNow[stripButton] = true end
   end
 
   for frame in pairs(nowFrames) do
@@ -264,9 +313,14 @@ end
 -- Renderer, registered with Display/Driver in its own right rather than being called from the
 -- strip's renderer. That is what lets a player hide the strip and keep the glow: with the two
 -- joined, turning the queue off silently turned off the half of the display they were using.
-function Glow.Render(queue, _key, visible)
+--
+-- AT2-D1: `visible` -- the STRIP's own visibility -- is no longer read here at all. The glow
+-- answers to its own mode (`Glow.visibleFor`, inside `SetNowSlot`), so a hidden strip with the glow
+-- set to "Always" still lights the bars; only an actually empty queue (the driver truly has
+-- nothing, or nothing at all could want the glow either) releases everything.
+function Glow.Render(queue, _key, _visible)
   local slot, nextSlot = nil, nil
-  if visible ~= false and queue then slot, nextSlot = queue[1], queue[2] end
+  if queue then slot, nextSlot = queue[1], queue[2] end
   Glow.SetNowSlot(slot, nextSlot)
 end
 

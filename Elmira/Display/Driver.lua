@@ -408,6 +408,29 @@ function Display.shouldShow()
   return ns.Visibility.shouldShow(mode, ctx)
 end
 
+-- AT2-D1: could the glow (bar or strip, D3) want the queue even though the STRIP itself is hidden?
+-- A coarse pre-check, asked BEFORE the queue exists, so it can only read the All abilities entry's
+-- mode -- the real per-key mode (a player may override one ability) is not known until the queue is
+-- computed, and a divergent override costs one extra recompute the tick after it starts mattering,
+-- same as any other settings change. In the untouched-by-anyone case this answers exactly what
+-- shouldShow() just answered (same mode, same ctx), so a default install pays nothing extra for it.
+function Display.glowCouldBeVisible()
+  local profile = ns.db and ns.db.profile
+  local wantsBar = profile and profile.glow and profile.glow.barGlow
+  local wantsStrip = profile and profile.queue and profile.queue.stripGlow
+  if not (wantsBar or wantsStrip) then return false end
+  local A = ns.AbilitySettings
+  local mode = (A and A.effective(A.ALL, "glow").show) or ns.Visibility.DEFAULT
+  local state = ns.API and ns.API.GetState()
+  if not state then return true end
+  local ok, ctx = pcall(readShowCtx, state)
+  if not ok then return true end
+  if not ns.Visibility.shouldShow(mode, ctx) then return false end
+  local gen = A and A.effective(A.ALL, "general")
+  if gen and gen.onlyInCombat and not ctx.inCombat then return false end
+  return true
+end
+
 -- The two halves are measured separately (Core/MemProbe) because they fail for different reasons:
 -- resolving the build is a cache lookup that should cost nothing, while simulating the queue is
 -- hundreds of client calls. A single "computeQueue" number cannot tell those apart, and which one
@@ -486,12 +509,14 @@ function Display.tick(now)
 
   -- Hidden costs one boolean read and no queue computation at all — which is the point, since for
   -- most of a session the answer is "hidden". The transition is painted once so the strip actually
-  -- disappears and any bar glow is released; after that a hidden tick does nothing.
+  -- disappears; after that a hidden tick does nothing, UNLESS the glow could still want the queue
+  -- (AT2-D1: the glow no longer takes its visibility from the strip's).
   local M = ns.MemProbe
   local mark = M and M.enter()
   local visible = Display.shouldShow()
+  local mayGlow = (not visible) and Display.glowCouldBeVisible()
   if mark then M.leave("visibility", mark) end
-  if not visible then
+  if not visible and not mayGlow then
     if lastVisible ~= false then
       lastVisible = false
       lastQueue, lastBuildKey = nil, nil
@@ -503,7 +528,11 @@ function Display.tick(now)
     end
     return "hidden"
   end
-  lastVisible = true
+  -- A strip that flips visible<->hidden while the queue underneath it happens not to move would
+  -- otherwise skip `renderAll` entirely below (nothing else in `changed` notices) and leave the
+  -- container showing what it last painted -- captured before `lastVisible` is overwritten.
+  local wasVisible = lastVisible
+  lastVisible = visible
 
   local profile = ns.db and ns.db.profile
   local depth = (profile and profile.depth) or 3
@@ -515,8 +544,9 @@ function Display.tick(now)
   local queue, key = Display.computeQueue(depth, spare)
 
   -- A build change must repaint even if the queue happens to look the same: the icons may be
-  -- identical while the reasons behind them are not.
-  local changed = (key ~= lastBuildKey) or ns.Ticker.queuesDiffer(lastQueue, queue)
+  -- identical while the reasons behind them are not. The strip's own visibility flipping is the
+  -- third reason (above): only relevant while `mayGlow` kept a hidden strip in this branch at all.
+  local changed = (key ~= lastBuildKey) or ns.Ticker.queuesDiffer(lastQueue, queue) or (visible ~= wasVisible)
   if not changed then
     -- The queue is the same, but a countdown drawn on it is not (PE9-D1). pcall for the same reason
     -- renderAll uses one: a throwing tick must not kill the OnUpdate handler. Not reported here --
@@ -530,13 +560,15 @@ function Display.tick(now)
   lastQueue, lastBuildKey = queue, key
   -- The `suggested` event (AB1-D5): the now-slot became THIS ability. Compared separately from
   -- `changed` above, which is true for any movement anywhere in the queue -- firing a cue because
-  -- the third icon changed is the strobe ADR-0009 is about.
-  local nowKey = queue[1] and queue[1].spell or nil
+  -- the third icon changed is the strobe ADR-0009 is about. Gated on `visible`, not `mayGlow`: the
+  -- four cue channels (sound/edge/texture/announce) still answer only to the STRIP's own
+  -- visibility -- this pass is about the glow, and widening every cue's schedule was not asked for.
+  local nowKey = queue and queue[1] and queue[1].spell or nil
   if nowKey ~= lastNowKey then
     lastNowKey = nowKey
-    if nowKey then Display.abilityEvent(nowKey, "suggested") end
+    if nowKey and visible then Display.abilityEvent(nowKey, "suggested") end
   end
-  renderAll(queue, key, true)
+  renderAll(queue, key, visible)
   return "rendered"
 end
 

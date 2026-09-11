@@ -1,5 +1,12 @@
 # Changelog
 ## Unreleased
+- **New: an ability's glow has its own "Show the glow" schedule** (Always / in combat or when you
+  have a target / in combat only), on the Glow tab, independent of the queue strip -- a hidden strip
+  no longer silences a glow set to Always, and a visible strip no longer forces one set to In combat
+  only.
+- **New: the strip's first icon can glow too.** "Glow the first icon on the strip", on the Queue
+  page, is off by default; switched on, it lights in the suggested ability's own colour and style,
+  on the same schedule as the action-bar glow and independent of "Enable action bar glow".
 - **Changed: All abilities now sets only General and Glow.** Texture, Screen-edge, Sound and
   Announcement are set per ability only; the "Warn me when its buff has N seconds left" slider moved
   onto the Sound and Texture tabs, right after the moment it guards, and All abilities' own copy
