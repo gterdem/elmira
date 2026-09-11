@@ -34,7 +34,13 @@ AbilitySettings.ALL = ALL
 -- AB1-D4: a bar glow on everything is what this addon already did, while a screen flash, a sound, a
 -- texture or a party-visible announcement on everything is the strobe the ADR exists to prevent.
 local DEFAULTS = {
-  general  = { onlyInCombat = false, expiringSeconds = 3 },
+  -- AT9-D3: `hasBuff` is what this CHARACTER has been seen to prove -- the tracker watched a buff
+  -- of this ability's own name appear on the player, so the buff-only controls (the two buff
+  -- moments and the warning seconds) are worth SHOWING at all. It is learned, never chosen:
+  -- nothing in the options panel writes it, and it is OWN (below) because what one character has
+  -- seen says nothing about another's spellbook. The class pack's `buff = true` is the other half
+  -- of the answer and lives in the pack, not here (`AbilitySettings.hasBuff`).
+  general  = { onlyInCombat = false, expiringSeconds = 3, hasBuff = false },
   -- AT2-D1: `show` is which moments this ability's glow (bar AND strip, D3) is allowed on screen --
   -- the SAME values Core/Visibility.MODES offers the display, but its OWN gate: a hidden strip with
   -- glow set to "Always" still glows, and a visible strip with glow set to "In combat only" does
@@ -62,10 +68,14 @@ local DEFAULTS = {
   -- because a swipe over a texture that is only on screen for a second and a half is noise, and
   -- because both of the other two are meaningless for an ability the tracker has no numbers for.
   -- An appearance CHOICE, so it inherits like size and colour.
+  --
+  -- AT9-D4: `seconds` draws the whole seconds left of the buff in the middle of the texture. ON by
+  -- default, and drawn only while the texture is on screen BECAUSE of the buff -- a texture up for
+  -- the suggestion, or flashing because a cooldown finished, has no seconds to count.
   texture  = { enabled = false, source = "icon", path = "",
                size = 48, color = false, alpha = 1, fill = "none", blend = "blend",
                suggested = true, active = true, ready = false, used = false, expiring = false,
-               x = 0, y = 0 },
+               seconds = true, x = 0, y = 0 },
   -- AB2-D1: `suggested` and `ready` are the two moments a screen edge can flash. `suggested` ships
   -- ON so that switching the tab on does something the first time (a channel that is "on" and fires
   -- on nothing is the silent failure this project keeps shipping); `ready` ships OFF, because a
@@ -101,7 +111,11 @@ AbilitySettings.DEFAULTS = DEFAULTS
 -- Sound and Texture tabs and must never vanish into what All abilities holds -- the exact silent
 -- failure this project keeps refusing to ship. All abilities no longer offers a control for it at
 -- all (Options/Spells.lua), so nothing can even write to the layer this bypasses any more.
-local OWN = { general = { expiringSeconds = true },
+--
+-- AT9-D3: `general.hasBuff` joins it. It is an observation about THIS ability on THIS character --
+-- inheriting it from All abilities would open the buff-only controls for every ability the moment
+-- one of them was seen to buff you, which is the opposite of what the flag is for.
+local OWN = { general = { expiringSeconds = true, hasBuff = true },
               texture = { enabled = true, x = true, y = true }, edge = { enabled = true },
               sound = { enabled = true }, announce = { enabled = true } }
 
@@ -185,10 +199,14 @@ end
 -- (the class read behind that call is the adapter's), and a guarded read cannot be forgotten by a
 -- wiring step the way an injected setter can. `nil` is a NORMAL answer -- a class with no shipped
 -- pack configures everything by hand and gets every channel off (the standing rule for this pass).
-local function packDefault(key, channel)
+local function packSpell(key)
   local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
   local spells = pack and pack.spells
-  local entry = spells and spells[key]
+  return spells and spells[key] or nil
+end
+
+local function packDefault(key, channel)
+  local entry = packSpell(key)
   local block = entry and entry.defaults
   local t = block and block[channel]
   return type(t) == "table" and t or nil
@@ -276,6 +294,48 @@ function AbilitySettings.channelOn(key, channel)
     if e[event] and e[event] ~= "None" then return true end
   end
   return false
+end
+
+-- ---------------------------------------------------------------- AT9-D3: does it buff you
+
+-- AbilitySettings.buffSource(key) -> "pack" | "learned" | nil
+--
+-- Whether this ability is known to put a buff ON YOU, and on whose word. Three controls hang off
+-- it on each of two tabs -- "When its buff appears", "When buff is about to expire" and the warning
+-- seconds -- because every one of them reads `state:buff(key)`, and an ability that never has a
+-- buff of its own can only ever answer nil. Offering them for Exorcism is a control the player can
+-- tick that will never once fire: this project's characteristic silent failure, sold as a feature.
+-- They are HIDDEN rather than greyed for an ability nothing has ever seen buff you (AT9-D3 as
+-- amended by the owner), with one line at the foot of the Texture tab saying what would bring them
+-- back.
+--
+-- Two sources and either suffices. The CLASS PACK may say so outright (`buff = true` on the spell
+-- entry, schema-checked in Core/Schema.lua) -- that is the answer for every shipped ability of
+-- every class, available before the player has cast anything. RUNTIME LEARNING is the answer for
+-- everything else: a spell the player added themselves, or a whole class with no pack at all. The
+-- render loop records it the first time the tracker sees the buff up (Display/Driver), so an
+-- ability ships "unknown" and opens the moment it is cast once.
+function AbilitySettings.buffSource(key)
+  local entry = packSpell(key)
+  if entry and entry.buff == true then return "pack" end
+  local t = stored(key, "general")
+  if t and t.hasBuff == true then return "learned" end
+  return nil
+end
+
+function AbilitySettings.hasBuff(key)
+  return AbilitySettings.buffSource(key) ~= nil
+end
+
+-- AbilitySettings.learnBuff(key) -> was this the first sighting
+--
+-- Called from the render loop, so it does as little as possible on the overwhelmingly common path:
+-- an ability already known to buff you writes nothing and -- this is the part that matters -- does
+-- NOT bump the version counter, which would make Display/Driver rebuild its tracked set ten times
+-- a second for the rest of the session.
+function AbilitySettings.learnBuff(key)
+  if AbilitySettings.buffSource(key) then return false end
+  return AbilitySettings.set(key, "general", "hasBuff", true)
 end
 
 -- Anything at all on: what the tree's desaturation and the "Any configured" filter ask (AB1-D9).

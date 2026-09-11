@@ -391,8 +391,13 @@ local function abilityRankLines()
       note = (entry.source == "pack") and "  (another rank; the pack id is kept, matched by name)"
         or "  <- MISMATCH"
     end
-    lines[#lines + 1] = string.format("  %s: %s -> %s%s", entry.name, tostring(entry.id),
-      tostring(now), note)
+    -- AT9-D3: and whether this ability is known to put a buff on you, on whose word. Three states
+    -- with one symptom on the page -- "pack" and "learned" both put the buff moments on its tabs,
+    -- "unknown" keeps them off -- and only the player can fix the third, by casting it once.
+    local A = ns.AbilitySettings
+    local buff = (A and A.buffSource and A.buffSource(entry.key)) or "unknown"
+    lines[#lines + 1] = string.format("  %s: %s -> %s  has buff: %s%s", entry.name,
+      tostring(entry.id), tostring(now), buff, note)
   end
   return lines
 end
@@ -610,6 +615,11 @@ Slash.register{
         else
           lines[#lines + 1] = string.format("   on  shows on: %s", table.concat(t.events, ", "))
         end
+        -- AT9-D3/D4: why two of the five moments may not be on this ability's tab at all, and
+        -- whether the countdown is switched on -- a number that never appears and one that was
+        -- never asked for look the same on screen.
+        lines[#lines + 1] = string.format("   has buff: %s  seconds left: %s",
+          tostring(t.buffSource or "unknown"), tostring(t.seconds))
         if t.needsAddon then
           -- AT4-D3, and said before the generic line below: this one has a cause and a cure, and
           -- "check the source and path" would send the player hunting for a typo that is not there.

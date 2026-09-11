@@ -1281,6 +1281,41 @@ describe("Display.Driver", function()
         assert.same({}, played)
       end)
 
+      -- AT9-D3: the render loop is where a buff the tracker saw becomes the flag that puts an
+      -- ability's buff moments on its own tabs. Asserted through `buffSource`, which is what the
+      -- options page reads -- "learnBuff was called" would pass on a flag nothing stored.
+      it("records that an ability buffs you the first time the tracker sees its buff", function()
+        A.set("EXORCISM", "texture", "enabled", true)
+        assert.is_false(A.hasBuff("EXORCISM"))
+        local state = { inCombat = function() return true end,
+                        targetExists = function() return true end,
+                        targetAttackable = function() return true end,
+                        cooldown = function() return 0 end,
+                        usable = function() return true end,
+                        buff = function(_, key) return key == "EXORCISM" and 1 or nil end }
+        ns.API = { GetState = function() return state end }
+        tick()
+        assert.equal("learned", A.buffSource("EXORCISM"))
+        assert.is_nil(A.buffSource("JUDGEMENT"), "an ability with no buff up was flagged anyway")
+      end)
+
+      -- The learning is a FACT about the ability, not a cue, so it happens either side of the gate
+      -- that decides whether anything is shown. Out of combat with "Only in combat" set, the player
+      -- would otherwise buff up before a pull and find the controls still missing.
+      it("records it out of combat even while Only in combat silences every cue", function()
+        A.set("EXORCISM", "texture", "enabled", true)
+        A.set(A.ALL, "general", "onlyInCombat", true)
+        local state = { inCombat = function() return false end,
+                        targetExists = function() return false end,
+                        targetAttackable = function() return false end,
+                        cooldown = function() return 0 end,
+                        usable = function() return true end,
+                        buff = function() return 1 end }
+        ns.API = { GetState = function() return state end }
+        tick()
+        assert.equal("learned", A.buffSource("EXORCISM"))
+      end)
+
       -- AB1-D6: "Only in combat" guards EVERY channel of the ability, asked once rather than once
       -- per channel -- a guard applied in four places is one that will be forgotten in one of them.
       it("does nothing out of combat once Only in combat is set", function()

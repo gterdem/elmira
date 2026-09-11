@@ -11,8 +11,9 @@
 --     and goes when it stops -- which means something has to notice that it stopped, and that is
 --     `Sync` below. A "show" with no matching "hide" is a texture stuck on screen for the rest of
 --     the session.
---   * `ready`, `used` and `expiring` are INSTANTS. There is no state to hold, so they FLASH for
---     `FLASH_SECONDS` and clear themselves.
+--   * `ready` and `used` are INSTANTS. There is no state to hold, so they FLASH for
+--     `FLASH_SECONDS` and clear themselves. (`expiring` was one of them until AT9-D1 moved it to
+--     the held side.)
 -- `Fire` starts both kinds, from Display/Driver's one ability-event call, so a texture appears in
 -- the same frame the sound plays rather than up to a tick later. `Sync` only ever ENDS things.
 --
@@ -55,7 +56,12 @@ Textures.DEFAULT_PATH = MEDIA .. "shape_ring"
 Textures.EVENTS = { "suggested", "ready", "used", "active", "expiring" }
 -- Which of them are STATES rather than instants. Read by Fire and by Sync, so the two can never
 -- disagree about which events have an ending to wait for.
-Textures.HELD = { suggested = true, active = true }
+--
+-- AT9-D1 moves `expiring` across the line (owner: a warning that blinks once while you are looking
+-- at the boss is a warning you did not get). It is held from the edge until the buff is gone --
+-- which is Track's own `expiring` going false, so a buff REFRESHED back above the threshold takes
+-- the warning off screen instead of leaving it standing over a full-length buff.
+Textures.HELD = { suggested = true, active = true, expiring = true }
 Textures.FLASH_SECONDS = 1.5
 -- AT5-D1, replacing AB4-D1's radial swipe: what the texture's OPACITY follows while it is on
 -- screen. Ordered for the dropdown, "none" first because it is the shipped answer.
@@ -301,6 +307,14 @@ local function newFrame()
   f:SetScript("OnDragStop", onTextureDragStop)
   f.icon = f:CreateTexture(nil, "ARTWORK")
   f.icon:SetAllPoints()
+  -- AT9-D4: the countdown. One FontString per frame, made here rather than on demand, for the
+  -- reason the icon is: these frames are POOLED, and a region created the first time a number
+  -- happened to be needed would be a region the next ability to borrow this frame inherits with
+  -- someone else's text still in it. OVERLAY so it draws above the art it sits on, whatever the
+  -- art is; hidden until `countdown` has a number, and hidden again the moment it has not.
+  f.count = f:CreateFontString(nil, "OVERLAY")
+  f.count:SetPoint("CENTER")
+  f.count:Hide()
   return f
 end
 
@@ -342,13 +356,72 @@ end
 -- slider that does nothing.
 local function fadeRow(key)
   if key == previewKey then return nil end
-  -- A flash is an instant -- ready, used, about to run out -- and draws at the tab's full opacity.
-  -- The fade belongs to the HELD states only (suggested, buff appears): with "Fade with: Buff" the
-  -- about-to-run-out flash at 5 s left of a 30 s seal came out at 17 % and was never seen
-  -- (owner, in game, Seal of Martyrdom, 2026-09-11). A key that is both held and flashing keeps
+  -- A flash is an instant -- ready, used -- and draws at the tab's full opacity. The fade belongs
+  -- to the HELD states (suggested, buff appears, and since AT9-D1 the expiry warning): with
+  -- "Fade with: Buff" the about-to-expire FLASH at 5 s left of a 30 s seal came out at 17 % and was
+  -- never seen (owner, in game, Seal of Martyrdom, 2026-09-11) -- which is a large part of why that
+  -- moment is held rather than flashed now. A key that is both held and flashing keeps
   -- fading: the flash then adds nothing on top of a texture already on screen.
   if flashUntil[key] and not held[key] then return nil end
   return fillMemory and fillMemory[key]
+end
+
+-- ---------------------------------------------------------------- AT9-D4: the countdown
+
+-- What the toolbar and the Texture tab's own preview show instead of a real reading: neither has a
+-- buff running, and a toggle called "Show seconds left" that shows nothing while you are looking
+-- straight at it is a toggle that appears not to work.
+Textures.SAMPLE_SECONDS = 30
+-- The number is a third of the texture, which is what makes it read at 48 px and at 400 px alike --
+-- a fixed point size is either a smudge or a wall depending on which source the ability uses.
+local COUNT_SCALE, COUNT_MIN_SIZE = 3, 8
+-- The client's own number font, so this counts down in the same face as every cooldown on the bars.
+-- Read off the shipped font OBJECT rather than written as a path: the literal is the last resort,
+-- for a client (or a spec's mock) that publishes neither global.
+local FALLBACK_FONT = "Fonts\\FRIZQT__.TTF"
+local function numberFont()
+  local object = _G.NumberFontNormal
+  local path = object and object.GetFont and object:GetFont()
+  return path or _G.STANDARD_TEXT_FONT or FALLBACK_FONT
+end
+
+-- Textures.secondsLeft(key, e, row) -> whole seconds to draw, or nil
+--
+-- nil is the normal answer and means "draw no number". The number is only ever about the BUFF: a
+-- texture on screen because the rotation suggests the ability, or flashing because its cooldown
+-- just finished, has nothing to count down -- a number over it would be counting something that is
+-- not on you.
+--
+-- `row` is one row of Core/Track's memory, the same table the fade reads, so the number and the
+-- opacity can never disagree about how much of the buff is left. Rounded UP: a buff with 0.4 s left
+-- is in its last second, and "0" is a number nobody wants to read off a warning.
+function Textures.secondsLeft(key, e, row)
+  if not (e and e.seconds == true) then return nil end
+  if key == previewKey or key == moving then return Textures.SAMPLE_SECONDS end
+  if type(row) ~= "table" then return nil end
+  if not ((e.active and row.active) or (e.expiring and row.expiring)) then return nil end
+  local remaining = tonumber(row.remaining) or 0
+  if remaining <= 0 then return nil end
+  return math.ceil(remaining)
+end
+
+-- Pushed every tick from Sync, not once when the texture appears: a number written on the frame
+-- that put it there and never again would freeze at "30" for the whole thirty seconds.
+local function countdown(f, key, e)
+  local fs = f.count
+  if not fs then return end
+  local seconds = Textures.secondsLeft(key, e, fillMemory and fillMemory[key])
+  if not seconds then
+    fs:Hide()
+    return
+  end
+  -- White with a dark outline, because the texture underneath may be anything from a black shape to
+  -- a bright spell icon and the number has to be legible on both.
+  fs:SetFont(numberFont(), math.max(COUNT_MIN_SIZE, math.floor(Textures.sizeOf(e) / COUNT_SCALE)),
+             "OUTLINE")
+  fs:SetTextColor(1, 1, 1)
+  fs:SetText(tostring(seconds))
+  fs:Show()
 end
 
 local function paint(f, key, e)
@@ -371,6 +444,10 @@ local function paint(f, key, e)
     f.icon:SetVertexColor(1, 1, 1)
   end
   f:SetAlpha(Textures.alphaOf(e, fadeRow(key)))
+  -- AT9-D4, here as well as in Sync: a texture that has just appeared shows its number in the same
+  -- frame, and the Texture tab's live preview (which never reaches Sync's loop while nothing is
+  -- holding it) shows the sample the instant the toggle is ticked.
+  countdown(f, key, e)
 end
 
 -- AT6-D4: the centre of the screen, plus whatever the player dragged this one to. Two untouched
@@ -448,6 +525,11 @@ function Textures.Fire(key, event)
   if not e[event] then return false end
   local now = ns.now and ns.now() or 0
   if Textures.HELD[event] then
+    -- Already on screen for a state that still holds: nothing to do, and saying so costs a layout
+    -- pass. `held` is one boolean per ability, so a second state starting while the first is up is
+    -- the same texture standing in the same place -- the interesting work is all in `Sync`, which
+    -- decides when NONE of the reasons hold any more.
+    if held[key] then return false end
     held[key] = true
   else
     flashUntil[key] = now + Textures.FLASH_SECONDS
@@ -476,9 +558,14 @@ function Textures.Sync(nowKey, memory, now)
   local changed = false
   for key in pairs(held) do
     local e = A.effective(key, "texture")
+    local row = memory and memory[key]
     local still = A.channelOn(key, "texture")
       and ((e.suggested and key == nowKey)
-        or (e.active and memory and memory[key] and memory[key].active))
+        or (e.active and row and row.active)
+        -- AT9-D1: the warning stays until the buff is gone. Track's own `expiring` is what says so,
+        -- and it goes false on both endings that matter -- the buff running out (no aura left to
+        -- warn about) and the buff being REFRESHED (there is time on it again).
+        or (e.expiring and row and row.expiring))
     if not still then held[key] = nil; changed = true end
   end
   for key, ends in pairs(flashUntil) do
@@ -490,7 +577,13 @@ function Textures.Sync(nowKey, memory, now)
   -- set once when it appeared and never again would sit at full while the buff ran out. Cheap by
   -- construction -- at most a few textures are ever on screen, and `SetAlpha` restarts nothing, so
   -- there is no idempotency to guard the way the swipe it replaced needed.
-  for key, f in pairs(frames) do f:SetAlpha(Textures.alphaOf(A.effective(key, "texture"), fadeRow(key))) end
+  for key, f in pairs(frames) do
+    local e = A.effective(key, "texture")
+    f:SetAlpha(Textures.alphaOf(e, fadeRow(key)))
+    -- AT9-D4, and for the same reason as the alpha beside it: the seconds left move every tick,
+    -- and a number drawn once when the texture appeared would sit at "30" while the buff ran out.
+    countdown(f, key, e)
+  end
   return changed
 end
 
@@ -615,6 +708,13 @@ function Textures.describe()
         -- case worth reporting -- a fade picked for an ability whose cooldown or buff this client
         -- has no numbers for multiplies nothing, and a static opacity is how that looks.
         fill = Textures.fillOf(e), fade = Textures.fillFraction(e, fillMemory and fillMemory[key]),
+        -- AT9-D3: WHY the two buff moments are missing from this ability's tab. "The class pack
+        -- says so", "I have seen it" and "nobody has ever told me" are three different situations
+        -- with one symptom, and the third is the only one the player can fix (by casting it once).
+        buffSource = A.buffSource and A.buffSource(key) or nil,
+        -- AT9-D4: a countdown that is switched on and never drawn looks exactly like one that is
+        -- switched off, so the setting is reported rather than inferred from the screen.
+        seconds = e.seconds == true,
       }
     end
   end

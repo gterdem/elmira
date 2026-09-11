@@ -697,7 +697,10 @@ describe("Core.Slash", function()
       _G.__ELM_NS.Adapter.spellIDByName = function(name) return name == "Exorcism" and 415073 or nil end
       local lines = Slash.run("debug state")
       assert.is_true(hasLineMatching(lines, "^abilities %(name: stored id %-> spellbook now%):$"))
-      assert.is_true(hasLineMatching(lines, "Exorcism: 415072 %-> 415073  <%- MISMATCH$"))
+      -- AT9-D3: and whether anything has ever seen this ability buff you. "unknown" is the honest
+      -- answer for a registry entry no pack flagged and nobody has cast yet.
+      assert.is_true(hasLineMatching(lines,
+        "Exorcism: 415072 %-> 415073  has buff: unknown  <%- MISMATCH$"))
     end)
 
     it("flags nothing when the stored id already matches the spellbook", function()
@@ -706,7 +709,7 @@ describe("Core.Slash", function()
       } } }
       _G.__ELM_NS.Adapter.spellIDByName = function() return 415073 end
       local lines = Slash.run("debug state")
-      assert.is_true(hasLineMatching(lines, "Exorcism: 415073 %-> 415073$"))
+      assert.is_true(hasLineMatching(lines, "Exorcism: 415073 %-> 415073  has buff: unknown$"))
       assert.is_false(hasLineMatching(lines, "MISMATCH"))
     end)
 
@@ -717,8 +720,8 @@ describe("Core.Slash", function()
       } } }
       _G.__ELM_NS.Adapter.spellIDByName = function(name) return name == "Holy Shock" and 20930 or nil end
       local lines = Slash.run("debug state")
-      assert.is_true(hasLineMatching(lines, "Holy Shock: 20473 %-> 20930  %(another rank; the pack id is kept, matched by name%)$"))
-      assert.is_true(hasLineMatching(lines, "Holy Shield: 20928 %-> nil  %(not known on this character%)$"))
+      assert.is_true(hasLineMatching(lines, "Holy Shock: 20473 %-> 20930  has buff: unknown  %(another rank; the pack id is kept, matched by name%)$"))
+      assert.is_true(hasLineMatching(lines, "Holy Shield: 20928 %-> nil  has buff: unknown  %(not known on this character%)$"))
       assert.is_false(hasLineMatching(lines, "MISMATCH"))
     end)
 
@@ -728,7 +731,7 @@ describe("Core.Slash", function()
       } } }
       local lines
       assert.has_no.errors(function() lines = Slash.run("debug state") end)
-      assert.is_true(hasLineMatching(lines, "Exorcism: 415073 %-> nil  %(not known on this character%)$"))
+      assert.is_true(hasLineMatching(lines, "Exorcism: 415073 %-> nil  has buff: unknown  %(not known on this character%)$"))
     end)
   end)
 

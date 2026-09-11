@@ -51,6 +51,20 @@ describe("Display.Textures", function()
       self.textures[#self.textures + 1] = t
       return t
     end
+    -- AT9-D4: the countdown's FontString. A real one, recording what it was told: `SetText` with no
+    -- `Show`, or a size nobody set, is exactly the "the number is there, you just cannot see it"
+    -- failure this channel keeps producing.
+    function f:CreateFontString()
+      local fs = fakeFrame("FontString")
+      fs.shown = false
+      fs.SetFont = function(this, path, size, flags) this.font = { path, size, flags } end
+      fs.SetTextColor = function(this, r, g, b) this.textColor = { r, g, b } end
+      fs.SetText = function(this, t) this.text = t end
+      fs.GetText = function(this) return this.text end
+      self.fontStrings = self.fontStrings or {}
+      self.fontStrings[#self.fontStrings + 1] = fs
+      return fs
+    end
     -- PascalCase only, so a field the module assigns (`f.icon`) reads as nil rather than as a
     -- stray function -- a catch-all that answers every key makes a missing child untestable.
     return setmetatable(f, { __index = function(_, k)
@@ -237,9 +251,22 @@ describe("Display.Textures", function()
     it("ships suggested and active on, and ready/used/expiring off", function()
       switchOn("EXORCISM")
       assert.is_true(Textures.Fire("EXORCISM", "suggested"))
-      assert.is_true(Textures.Fire("EXORCISM", "active"))
       assert.is_false(Textures.Fire("EXORCISM", "used"))
       assert.is_false(Textures.Fire("EXORCISM", "expiring"))
+      -- `active` ships on too -- asserted on an ability that is not already held for its
+      -- suggestion, because one boolean holds a texture no matter how many states want it.
+      switchOn("JUDGEMENT")
+      assert.is_true(Textures.Fire("JUDGEMENT", "active"))
+    end)
+
+    -- AT9-D1 makes three of the five moments held, so two of them holding at once is now the
+    -- normal case. The second one must not re-lay the screen out: `held` is one boolean per
+    -- ability, and the texture is already standing exactly where the second state would put it.
+    it("does nothing when a second held state starts while one already holds", function()
+      switchOn("EXORCISM")
+      assert.is_true(Textures.Fire("EXORCISM", "suggested"))
+      assert.is_false(Textures.Fire("EXORCISM", "active"), "the same texture was shown twice")
+      assert.equal(1, #showing())
     end)
 
     -- AT6-D4, and deliberately the opposite of what the row used to guarantee: two textures nobody
@@ -328,6 +355,100 @@ describe("Display.Textures", function()
     it("does nothing at all before Core/AbilitySettings exists", function()
       ns.AbilitySettings = nil
       assert.is_false(Textures.Sync("EXORCISM", {}, clock))
+    end)
+
+    -- AT9-D1 (owner): the expiry warning is a HELD state now, not a flash. A warning that blinks
+    -- once while you are watching the boss is a warning you never got.
+    describe("the expiry warning (AT9-D1)", function()
+      -- The warning ALONE: `suggested` and `active` ship on, and either would hold the same texture
+      -- up for its own reason, which would make every assertion below vacuous.
+      local function warnOn()
+        switchOn("EXORCISM")
+        A.set("EXORCISM", "texture", "suggested", false)
+        A.set("EXORCISM", "texture", "active", false)
+        A.set("EXORCISM", "texture", "expiring", true)
+        Textures.Fire("EXORCISM", "expiring")
+        assert.equal(1, #showing())
+      end
+
+      it("stays up past the flash length, for as long as the buff is running out", function()
+        warnOn()
+        local low = { EXORCISM = { active = true, expiring = true, remaining = 2, duration = 30 } }
+        assert.is_false(Textures.Sync(nil, low, clock + 9))
+        assert.equal(1, #showing(), "the warning was gone a second and a half in")
+      end)
+
+      it("goes when the buff is gone", function()
+        warnOn()
+        Textures.Sync(nil, { EXORCISM = { active = true, expiring = true, remaining = 1 } }, clock)
+        assert.is_true(Textures.Sync(nil, { EXORCISM = { active = false } }, clock + 1))
+        assert.equal(0, #showing())
+      end)
+
+      it("goes when the buff is refreshed back above the threshold", function()
+        warnOn()
+        assert.is_true(Textures.Sync(nil,
+          { EXORCISM = { active = true, expiring = false, remaining = 30, duration = 30 } }, clock))
+        assert.equal(0, #showing(), "a warning left standing over a full-length buff")
+      end)
+    end)
+
+    -- AT9-D4: the countdown. What is asserted is the TEXT on the frame and whether it is shown --
+    -- "the FontString exists" is exactly the observation that would pass while nothing was legible.
+    describe("the countdown (AT9-D4)", function()
+      local function count()
+        local f = showing()[1]
+        return f and f.fontStrings and f.fontStrings[1] or nil
+      end
+
+      local function buffUp(remaining)
+        switchOn("EXORCISM")
+        Textures.Fire("EXORCISM", "active")
+        Textures.Sync(nil, { EXORCISM = { active = true, remaining = remaining, duration = 30 } },
+                      clock)
+      end
+
+      it("draws the whole seconds left of the buff, rounded up, and follows them down", function()
+        buffUp(29.6)
+        assert.is_true(count().shown)
+        assert.equal("30", count().text)
+        Textures.Sync(nil, { EXORCISM = { active = true, remaining = 0.4, duration = 30 } }, clock)
+        assert.equal("1", count().text, "the last second read as zero")
+      end)
+
+      it("sizes it to the texture in the game's number font, white with an outline", function()
+        A.set("EXORCISM", "texture", "size", 120)
+        buffUp(10)
+        assert.equal(40, count().font[2], "a fixed point size is a smudge or a wall")
+        assert.equal("OUTLINE", count().font[3])
+        assert.same({ 1, 1, 1 }, count().textColor)
+      end)
+
+      it("draws nothing while the texture is up for the suggestion alone", function()
+        switchOn("EXORCISM")
+        Textures.Fire("EXORCISM", "suggested")
+        Textures.Sync("EXORCISM", { EXORCISM = { active = false } }, clock)
+        assert.is_false(count().shown, "a number counting down something that is not on you")
+      end)
+
+      it("draws nothing when the toggle is off, and clears a number already there", function()
+        buffUp(12)
+        assert.is_true(count().shown)
+        A.set("EXORCISM", "texture", "seconds", false)
+        Textures.Sync(nil, { EXORCISM = { active = true, remaining = 11, duration = 30 } }, clock)
+        assert.is_false(count().shown)
+      end)
+
+      -- The toolbar and the tab's preview have no buff to count: a toggle that shows nothing while
+      -- you are looking straight at it is a toggle that appears not to work.
+      it("shows a sample while the texture is being moved or previewed", function()
+        switchOn("EXORCISM")
+        Textures.StartMove("EXORCISM")
+        assert.equal("30", count().text)
+        Textures.StopMoveMode()
+        Textures.Preview("EXORCISM")
+        assert.equal("30", count().text)
+      end)
     end)
   end)
 

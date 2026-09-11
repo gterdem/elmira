@@ -424,6 +424,63 @@ describe("Core.AbilitySettings", function()
     end)
   end)
 
+  -- AT9-D3: which abilities are known to put a buff ON YOU, which is what decides whether the two
+  -- buff moments and the warning seconds are on their tabs at all. Two sources and either suffices.
+  describe("does it buff you", function()
+    local function packSays(flag)
+      ns.Display = { currentPack = function()
+        return { class = "PALADIN", spells = { SEAL_OF_MARTYRDOM = { id = 407798, buff = flag },
+                                               EXORCISM = { id = 415073 } } }
+      end }
+    end
+
+    it("takes the class pack's word before anything has been cast", function()
+      packSays(true)
+      assert.equal("pack", A.buffSource("SEAL_OF_MARTYRDOM"))
+      assert.is_true(A.hasBuff("SEAL_OF_MARTYRDOM"))
+      assert.is_nil(A.buffSource("EXORCISM"))
+      assert.is_false(A.hasBuff("EXORCISM"))
+    end)
+
+    it("learns it the first time the tracker sees the buff, and only writes once", function()
+      packSays(nil)
+      assert.is_false(A.hasBuff("SEAL_OF_MARTYRDOM"))
+      local before = A.version()
+      assert.is_true(A.learnBuff("SEAL_OF_MARTYRDOM"))
+      assert.equal("learned", A.buffSource("SEAL_OF_MARTYRDOM"))
+      assert.is_true(A.version() > before, "nothing was stored")
+      -- The render loop calls this ten times a second: a second write would rebuild the driver's
+      -- tracked set on every tick for the rest of the session.
+      local after = A.version()
+      assert.is_false(A.learnBuff("SEAL_OF_MARTYRDOM"))
+      assert.equal(after, A.version())
+      -- ...and it is nothing but a flag on this ability's General row.
+      assert.is_true(ns.db.char.abilities.SEAL_OF_MARTYRDOM.general.hasBuff)
+    end)
+
+    it("never writes over a pack that already said so", function()
+      packSays(true)
+      assert.is_false(A.learnBuff("SEAL_OF_MARTYRDOM"))
+      assert.is_nil(ns.db.char.abilities.SEAL_OF_MARTYRDOM)
+    end)
+
+    -- OWN: what one ability has been seen to do says nothing about the next one, and All abilities
+    -- is not allowed to open the buff controls for the whole rotation at once.
+    it("is never inherited from the All abilities row", function()
+      packSays(nil)
+      A.set(A.ALL, "general", "hasBuff", true)
+      assert.is_false(A.hasBuff("EXORCISM"))
+      assert.is_false(A.effective("EXORCISM", "general").hasBuff)
+    end)
+
+    it("answers for a class with no pack at all", function()
+      ns.Display = nil
+      assert.is_false(A.hasBuff("SLICE_AND_DICE"))
+      assert.is_true(A.learnBuff("SLICE_AND_DICE"))
+      assert.is_true(A.hasBuff("SLICE_AND_DICE"))
+    end)
+  end)
+
   -- AB2-D5. The store is per character, so this is the only way to carry a setup to an alt.
   describe("sharing", function()
     it("exports only what is stored, and copies rather than referencing it", function()

@@ -1,5 +1,22 @@
 # Changelog
 ## Unreleased
+- **Changed: a texture's expiry warning stays on screen until the buff is gone.** "When it's about
+  to expire" no longer flashes for a second and a half and disappears -- it holds, the way "when its
+  buff appears" does, and goes when the buff runs out or you refresh it. Sounds and screen-edge
+  flashes still fire once.
+- **New: a countdown on the texture.** While a texture is on screen for its buff -- "when its buff
+  appears" or "when it's about to expire" -- the whole seconds left are drawn in the middle of it,
+  in the game's number font, sized to the texture. "Show seconds left" on the Texture tab switches
+  it off; the Move toolbar and the tab's own live preview show 30 as a sample.
+- **Changed: the buff options only appear for abilities that buff you.** "When its buff appears",
+  "When it's about to expire" and the "Warn me about to expire" slider are on an ability's Texture
+  and Sound tabs only when Elmira knows it puts a buff on you -- every paladin seal, blessing, Horn
+  of Lordaeron, Avenging Wrath, Holy Shield and Righteous Fury from the start, and anything else the
+  first time it sees the buff up. A line at the foot of the Texture tab says so for the rest.
+- **Changed: "When its buff is about to run out" is now "When it's about to expire"**, and the
+  seconds slider under it only appears while that box is ticked.
+- `/elm debug state` and `/elm debug textures` now say whether each ability is known to buff you
+  (pack, learned or unknown), and whether its countdown is switched on.
 - **Changed: the "about to run out" warning is per ability now, never inherited.** Its slider sits
   directly under the checkbox it gates, on the Texture tab and the Sound tab. All abilities' own
   copy is gone, so its General tab is just "Only in combat".

@@ -582,6 +582,34 @@ function Schema.abilityDefaultErrors(spells)
   return out
 end
 
+-- Schema.spellBuffErrors(spells) -> { "EXORCISM: ...", ... }
+--
+-- AT9-D3, and `abilityDefaultErrors` above is the pattern: a class pack's spell entry may carry
+-- `buff = true`, meaning "this ability puts a buff on the player" -- which is what opens the four
+-- buff-only controls on that ability's Texture and Sound tabs for someone who has not cast it yet.
+-- Any class pack may say it; nothing but the pack can.
+--
+-- Only `true` is a statement. `buff = false` is a promise the runtime would override the first time
+-- it saw the buff anyway (the flag is an OR with what this character has been seen to have), and a
+-- string or a table is a typo that would read as `false` in silence. Reported, not refused, for the
+-- same reason the defaults are: an ignored flag costs four greyed controls, and taking a class's
+-- rotations away over it would cost the class.
+function Schema.spellBuffErrors(spells)
+  local out = {}
+  if type(spells) ~= "table" then return out end
+  for _, key in ipairs(sortedKeys(spells)) do
+    local entry = spells[key]
+    -- Read into a local rather than `type(entry) == "table" and entry.buff or nil`: that idiom
+    -- collapses `buff = false` to nil, which is the one wrong value most likely to be written.
+    local flag
+    if type(entry) == "table" then flag = entry.buff end
+    if flag ~= nil and flag ~= true then
+      out[#out + 1] = key .. ": buff must be true or absent, got " .. tostring(flag)
+    end
+  end
+  return out
+end
+
 -- Recurses through all/any/not exactly as compileCond does. Scanning only the top level of `when`
 -- would let `{"any", {"custom", fn}, {"buff", ...}}` export with the raw function still embedded —
 -- functions cannot serialize, so that is a broken export string, not a lost condition.

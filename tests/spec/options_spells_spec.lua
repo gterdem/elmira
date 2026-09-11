@@ -1032,10 +1032,22 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         assert.equal(2 + i, args[event].order)
         assert.equal("Chime", args[event].values().Chime)
       end
+      -- AT9 (owner): the expiry box reads "When it's about to expire" on every tab that has one.
       assert.same({ "When it is suggested", "When it comes off cooldown", "When you use it",
-                    "When its buff appears", "When its buff is about to run out" },
+                    "When its buff appears", "When it's about to expire" },
                   { args.suggested.name, args.ready.name, args.used.name, args.active.name,
                     args.expiring.name })
+      -- AT9-D3 (owner): the two buff moments are not on the page at all until Elmira knows this
+      -- ability buffs you; the other three never ask.
+      assert.is_true(args.active.hidden())
+      assert.is_true(args.expiring.hidden())
+      assert.is_nil(args.suggested.hidden)
+      assert.is_nil(args.ready.hidden)
+      assert.is_nil(args.used.hidden)
+      A.learnBuff("EXORCISM")
+      local seen = tab("EXORCISM", "sound")
+      assert.is_false(seen.active.hidden())
+      assert.is_false(seen.expiring.hidden())
       -- AT8-D4, verbatim: "a flash" becomes "a sound", and the persistence sentence drops --
       -- a sound plays once.
       assert.equal("A sound when you cast it.", args.used.desc)
@@ -1043,18 +1055,21 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_truthy(args.active.desc:find("Avenging Wrath", 1, true))
     end)
 
-    -- AT8-D1/D2: right after "When its buff is about to run out", greyed only until a sound is
-    -- actually picked for that moment -- no General-linkage gate left, since the field is per
-    -- ability and never inherited any more. Indented under its checkbox: a bare gap shares its row.
-    it("offers the warning threshold right after the expiring event, greyed until a sound is picked", function()
+    -- AT8-D1/D2, as amended by AT9-D3/D4: right after "When it's about to expire", and HIDDEN
+    -- rather than greyed -- until Elmira knows the ability buffs you, and until a sound is actually
+    -- picked for that moment. Indented under its checkbox: a bare gap shares its row.
+    it("offers the warning threshold right after the expiring event, hidden until a sound is picked", function()
       local row = tab("EXORCISM", "sound").expiringSeconds
       assert.equal("range", row.type)
       assert.equal(7.5, row.order, "immediately after the expiring event select at order 7")
       assert.equal("Warn me about to expire", row.name)
       assert.equal(3, row.get())
-      assert.is_true(row.disabled(), "no sound picked for expiring yet")
+      assert.is_true(row.hidden(), "nothing has ever seen this ability buff anyone")
+      A.learnBuff("EXORCISM")
+      assert.is_true(tab("EXORCISM", "sound").expiringSeconds.hidden(),
+        "no sound picked for expiring yet")
       tab("EXORCISM", "sound").expiring.set(nil, "Chime")
-      assert.is_false(tab("EXORCISM", "sound").expiringSeconds.disabled(), "a sound is now picked")
+      assert.is_false(tab("EXORCISM", "sound").expiringSeconds.hidden(), "a sound is now picked")
       tab("EXORCISM", "sound").expiringSeconds.set(nil, 11)
       assert.equal(11, A.effective("EXORCISM", "general").expiringSeconds)
       -- The gap that indents the slider under its checkbox: no label of its own, sharing the row.
@@ -1062,6 +1077,11 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("description", gap.type)
       assert.equal(7.49, gap.order, "immediately before the slider, same row")
       assert.equal("", gap.name)
+      -- ...and it goes with the slider: an indent standing under a checkbox with nothing beside it
+      -- reads as a control that failed to draw.
+      assert.is_false(gap.hidden())
+      tab("EXORCISM", "sound").expiring.set(nil, "None")
+      assert.is_true(tab("EXORCISM", "sound").expiringGap.hidden())
       assert.equal("relative", gap.width)
       assert.equal("relative", row.width)
       assert.is_true(gap.relWidth + row.relWidth == 1, "the two sum to a full row")
@@ -1340,10 +1360,10 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(A.effective("EXORCISM", "texture").ready)
     end)
 
-    -- AT8-D1/D2: the warning threshold's per-ability copy, right after the "about to run out"
-    -- checkbox -- no General-linkage gate left, only the two gates this tab itself owns (switched
-    -- on, and the moment ticked).
-    it("offers the warning threshold right after the about-to-run-out checkbox, greyed until both are ready",
+    -- AT8-D1/D2 as amended by AT9-D3/D4: the warning threshold's per-ability copy, right after the
+    -- "about to expire" checkbox, and HIDDEN rather than greyed -- until Elmira knows the ability
+    -- buffs you, and until that checkbox is actually ticked.
+    it("offers the warning threshold right after the about-to-expire checkbox, hidden until it is ticked",
       function()
         local args = tab("EXORCISM", "texture")
         local row = args.expiringSeconds
@@ -1354,14 +1374,13 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         assert.equal(15, row.max)
         assert.equal(1, row.step)
         assert.equal(3, row.get())
-        assert.is_true(row.disabled(), "the texture is switched off by default")
-        -- AT6-D1: off means off, so the switch at the top of the tab is the first of the two
-        -- gates this control sits behind.
+        assert.is_true(row.hidden(), "nothing has ever seen this ability buff anyone")
+        A.learnBuff("EXORCISM")
         args.enabled.set(nil, true)
-        assert.is_true(tab("EXORCISM", "texture").expiringSeconds.disabled(),
+        assert.is_true(tab("EXORCISM", "texture").expiringSeconds.hidden(),
           "the expiring checkbox is off by default")
         tab("EXORCISM", "texture").expiring.set(nil, true)
-        assert.is_false(tab("EXORCISM", "texture").expiringSeconds.disabled(), "both gates are clear")
+        assert.is_false(tab("EXORCISM", "texture").expiringSeconds.hidden(), "both gates are clear")
         tab("EXORCISM", "texture").expiringSeconds.set(nil, 9)
         assert.equal(9, A.effective("EXORCISM", "general").expiringSeconds)
         -- The same field the Sound tab reads and writes, for the same ability.
@@ -1370,6 +1389,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         local gap = tab("EXORCISM", "texture").expiringGap
         assert.equal("description", gap.type)
         assert.equal(14.49, gap.order, "immediately before the slider, same row")
+        assert.is_false(gap.hidden(), "the indent has to come and go with the slider it indents")
         assert.equal("relative", gap.width)
         assert.equal("relative", row.width)
         assert.is_true(gap.relWidth + row.relWidth == 1, "the two sum to a full row")
@@ -1418,9 +1438,12 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       function()
         local args = tab("EXORCISM", "texture")
         assert.is_falsy(args.enabled.disabled, "the one control that must stay live")
+        -- AT9-D4 adds "Show seconds left" to the list. `expiringSeconds` stays on it: AT9 hid it
+        -- behind its own checkbox, but "off means off" is a separate promise and a live slider in
+        -- the middle of a dead tab is exactly what AT6-D1 was written against.
         local greyed = { "ownIcon", "path", "choose", "size", "color", "alpha", "fill",
                          "suggested", "ready", "used", "active", "expiring", "expiringSeconds",
-                         "move", "reset" }
+                         "seconds", "move", "reset" }
         for _, field in ipairs(greyed) do
           assert.is_truthy(args[field], field .. " is not on the tab at all")
           assert.is_true(args[field].disabled(), field .. " is live while the texture is off")
@@ -1428,9 +1451,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         args.enabled.set(nil, true)
         local on = tab("EXORCISM", "texture")
         for _, field in ipairs(greyed) do
-          if field ~= "expiringSeconds" then   -- one more gate of its own (AT8-D2), tested above
-            assert.is_false(on[field].disabled(), field .. " stayed greyed with the texture on")
-          end
+          assert.is_false(on[field].disabled(), field .. " stayed greyed with the texture on")
         end
       end)
 
@@ -1444,6 +1465,10 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       args.enabled.set(nil, true)
       assert.is_true(tab("EXORCISM", "texture").silent.hidden())
       tab("EXORCISM", "texture").suggested.set(nil, false)
+      -- AT9-D3: `active` is still ticked, but it is a moment this ability can never reach and a
+      -- control that is not even on the page -- so the tab still says it appears at no moment.
+      assert.is_true(A.effective("EXORCISM", "texture").active)
+      assert.is_false(tab("EXORCISM", "texture").silent.hidden())
       tab("EXORCISM", "texture").active.set(nil, false)
       assert.is_false(tab("EXORCISM", "texture").silent.hidden())
       -- ...and an ability that is OFF with no moment ticked is not a problem to shout about: it is

@@ -63,6 +63,12 @@ function API.RegisterDataPack(a, b)
   for _, problem in ipairs(ns.Schema and ns.Schema.abilityDefaultErrors(spec.spells) or {}) do
     ns.log("data pack %s: %s", spec.class, problem)
   end
+  -- AT9-D3, and here for the same reason: `buff = true` on a spell entry is what opens an ability's
+  -- buff-only controls before anyone has cast it, and a malformed one is INERT -- four controls
+  -- stay greyed and nothing anywhere says why.
+  for _, problem in ipairs(ns.Schema and ns.Schema.spellBuffErrors(spec.spells) or {}) do
+    ns.log("data pack %s: %s", spec.class, problem)
+  end
   return true
 end
 

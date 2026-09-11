@@ -364,6 +364,28 @@ local function effective(key, channel)
   return (A and A.effective(key, channel)) or {}
 end
 
+-- ---------------------------------------------------------------- AT9-D3: the buff-only controls
+
+-- The moments that can only ever fire for an ability that puts a buff ON YOU, on either tab. Both
+-- are read out of `state:buff(key)`, so on Exorcism they are a tick box the player can set that
+-- will never once do anything -- which is this project's characteristic silent failure dressed up
+-- as a feature.
+local BUFF_EVENTS = { active = true, expiring = true }
+
+-- HIDDEN, not greyed (owner, amending AT9-D3): a control that is on the page but dead still has to
+-- be read, understood and dismissed every time the player scans the tab, and there is nothing they
+-- can do to it. One line at the foot of the Texture tab says what brings them back.
+--
+-- `AbilitySettings.hasBuff` is the pack's flag OR what this character has been seen to have, so a
+-- shipped seal shows its buff moments before the first pull and a spell the player added themselves
+-- shows them the first time they cast it.
+local function buffUnknown(key)
+  return function()
+    local A = AS()
+    return not (A and A.hasBuff(key))
+  end
+end
+
 -- AT8-D1: the "about to run out" warning threshold is per ability now and never inherited --
 -- `general.expiringSeconds` joined `AbilitySettings`'s `OWN` table, so it is always this ability's
 -- own value regardless of what "Same as All abilities" says on its General tab. One field, read and
@@ -371,22 +393,28 @@ end
 -- out" moment -- so changing it on one shows on the other. All abilities no longer carries a copy
 -- of its own (there is nothing left for a per-ability copy to inherit).
 --
--- AT8-D2: the slider is enabled exactly when the tab's own "about to run out" moment is live -- no
--- other gate -- and sits directly under that moment's own control, indented: a bare gap (`args`'
--- other new key) shares its row, relWidth 0.06 then 0.94, so the checkbox above and the slider read
--- as one control without the label text itself carrying any indent marks.
+-- AT8-D2: the slider belongs to the tab's own "about to expire" moment -- no other gate -- and sits
+-- directly under that moment's own control, indented: a bare gap (`args`' other new key) shares its
+-- row, relWidth 0.06 then 0.94, so the checkbox above and the slider read as one control without
+-- the label text itself carrying any indent marks.
+--
+-- AT9-D3/D4 (owner): HIDDEN rather than greyed, and the gap goes with it -- an indent left standing
+-- under a checkbox with nothing beside it reads as a control that failed to draw. `hidden` covers
+-- both halves of the question: the ability is not known to buff you at all, or this tab's
+-- about-to-expire moment is not ticked.
 local EXPIRING_GAP_WIDTH, EXPIRING_SLIDER_WIDTH = 0.06, 0.94
 
-local function expiringArgs(key, args, order, disabled)
+-- `disabled` is the Texture tab's own AT6-D1 gate ("off means off") and is passed only by that tab;
+-- the Sound tab has no master switch to grey it with.
+local function expiringArgs(key, args, order, hidden, disabled)
   args.expiringGap = { type = "description", order = order - 0.01, width = "relative",
-                       relWidth = EXPIRING_GAP_WIDTH, name = "" }
+                       relWidth = EXPIRING_GAP_WIDTH, name = "", hidden = hidden }
   args.expiringSeconds = {
     type = "range", order = order, name = L["Warn me about to expire"],
     width = "relative", relWidth = EXPIRING_SLIDER_WIDTH,
     min = 1, max = 15, step = 1,
-    desc = L["Only fires for an ability whose buff is actually on you -- one that never has a buff "
-          .. "of its own, like Exorcism or Judgement, never sees it."],
-    disabled = disabled,
+    desc = L["How many seconds before the buff runs out counts as \"about to expire\"."],
+    hidden = hidden, disabled = disabled,
     get = function() return effective(key, "general").expiringSeconds or 3 end,
     set = function(_, v) put(key, "general", "expiringSeconds", v) end,
   }
@@ -521,9 +549,11 @@ end
 
 -- AB1-D8. One sound per event, "None" by default, played the moment it is picked -- the list is
 -- whatever media packs the player runs, so a name alone tells them nothing.
+-- AT9 (owner): "When its buff is about to run out" reads as "When it's about to expire" now, on
+-- every tab that offers the moment.
 local EVENT_LABELS = { suggested = "When it is suggested", ready = "When it comes off cooldown",
                        used = "When you use it", active = "When its buff appears",
-                       expiring = "When its buff is about to run out" }
+                       expiring = "When it's about to expire" }
 
 -- AT8-D4, verbatim (owner's wording). The Texture tab's own copy sits with its toggles below;
 -- Sound's reads "a sound" where Texture reads "a flash", and drops the persistence sentence -- a
@@ -549,10 +579,15 @@ local function soundArgs(key)
     set = function(_, v) put(key, "sound", "enabled", v) end,
   }
   local A = AS()
+  local unknown = buffUnknown(key)
   for i, event in ipairs((A and A.EVENTS) or {}) do
+    -- AT9-D3 (owner): the two buff moments are not on the page at all for an ability nothing has
+    -- ever seen buff you. The other three ask nothing of the buff and are always there.
+    local buffOnly = BUFF_EVENTS[event] == true
     args[event] = {
       type = "select", order = 2 + i, name = L[EVENT_LABELS[event] or event],
       desc = L[SOUND_EVENT_DESC[event]],
+      hidden = buffOnly and unknown or nil,
       values = function() return (ns.Sounds and ns.Sounds.list()) or { None = "None" } end,
       get = function() return effective(key, "sound")[event] or "None" end,
       set = function(_, v)
@@ -563,10 +598,10 @@ local function soundArgs(key)
       end,
     }
   end
-  -- AT8-D2, right after "When its buff is about to run out": greyed until a sound is actually
-  -- picked for that moment -- switching a threshold nothing plays at is not a live control.
+  -- AT8-D2/AT9-D4, right under "When it's about to expire": there only while a sound is actually
+  -- picked for that moment -- a threshold nothing plays at is not a control, it is furniture.
   expiringArgs(key, args, 7.5, function()
-    return (effective(key, "sound").expiring or "None") == "None"
+    return unknown() or (effective(key, "sound").expiring or "None") == "None"
   end)
   return args
 end
@@ -613,7 +648,11 @@ local TEXTURE_EVENT_DESC = {
   used = "A flash when you cast it.",
   active = "While the buff it puts on you is up. Stays as long as the buff lasts. Only for abilities "
         .. "that give you a buff: seals, blessings, Avenging Wrath, Holy Shield.",
-  expiring = "A flash when that buff has only a few seconds left. The number below says how many.",
+  -- AT9-D1, verbatim (owner's wording): this moment is a HELD state on this tab now, not a flash --
+  -- a warning that blinks once while you are watching the boss is a warning you never received.
+  -- The Sound tab's copy above still reads "a sound", because a sound cannot stay.
+  expiring = "Shows when that buff has only a few seconds left and stays until it is gone. The "
+          .. "number below says how many.",
 }
 
 local function labelled(list, labels)
@@ -820,10 +859,16 @@ local function textureArgs(key)
   -- All five of Core/Track's events, unlike the screen edge's two (AB3-D1). `suggested` and
   -- `active` SHOW the texture while the state holds; the other three flash it for a second and a
   -- half, which is why the three ADR-0009 keeps off a full-screen flash are fine here.
+  local unknown = buffUnknown(key)
   for i, event in ipairs(textureList("EVENTS")) do
+    -- AT9-D3 (owner): "When its buff appears" and "When it's about to expire" are the two that
+    -- read the aura, so they are not on the page at all for an ability nothing has ever seen buff
+    -- you. The muted line at the foot of the tab is what says so, once.
+    local buffOnly = BUFF_EVENTS[event] == true
     args[event] = {
       type = "toggle", order = 9 + i, width = "full", name = L[EVENT_LABELS[event] or event],
       disabled = off,
+      hidden = buffOnly and unknown or nil,
       -- AT8-D4, verbatim (owner's wording): explains what the moment actually shows, not just how
       -- long -- "active" in particular says which abilities it applies to at all.
       desc = L[TEXTURE_EVENT_DESC[event]],
@@ -831,11 +876,22 @@ local function textureArgs(key)
       set = function(_, v) put(key, "texture", event, v) end,
     }
   end
-  -- AT8-D2, right after "When its buff is about to run out": greyed until that checkbox is
-  -- actually ticked -- a threshold nothing uses is not a live control.
+  -- AT8-D2/AT9-D4, right under "When it's about to expire": there only while that checkbox is
+  -- actually ticked -- a threshold nothing uses is not a control, it is furniture.
   expiringArgs(key, args, 14.5, function()
-    return off() or effective(key, "texture").expiring ~= true
-  end)
+    return unknown() or effective(key, "texture").expiring ~= true
+  end, off)
+  -- AT9-D4. ON by default, so a buff texture counts down out of the box. Deliberately NOT one of
+  -- the controls the buff flag hides (owner enumerated the four it does): it is an appearance
+  -- choice about the texture rather than a moment, and it has to be reachable on any ability.
+  args.seconds = {
+    type = "toggle", order = 15.5, width = "full", name = L["Show seconds left"], disabled = off,
+    desc = L["Draws the whole seconds left of the buff in the middle of the texture, while it is on "
+          .. "screen for \"when its buff appears\" or \"when it's about to expire\". The "
+          .. "toolbar and this tab show 30 as a sample."],
+    get = function() return effective(key, "texture").seconds == true end,
+    set = function(_, v) put(key, "texture", "seconds", v) end,
+  }
   -- AT5-D1/D2 (owner, seeing the swipe draw a PowerAuras-style dark box: "not clockwise or
   -- anything -- start being visible or getting invisible"). Below the five moments now, because
   -- what it pairs with only makes sense once you have read them: an opacity that follows a STATE
@@ -887,13 +943,27 @@ local function textureArgs(key)
       restyle()
     end,
   }
+  -- AT9-D3 (owner), and the whole of what a hidden control is allowed to cost the player: ONE muted
+  -- line, at the foot of the tab, for an ability nothing has ever seen buff you. Without it the two
+  -- buff moments are simply absent and the player has no way to know they exist, let alone what
+  -- would bring them back. Gone the moment the ability is learned to buff you -- which is the same
+  -- moment the controls themselves appear.
+  args.noBuff = {
+    type = "description", order = 24, width = "full", fontSize = "medium",
+    hidden = function() return not unknown() end,
+    name = ns.Colors.wrap(ns.Colors.MUTED,
+      L["Buff options appear once Elmira has seen this ability put a buff on you."]),
+  }
   args.silent = {
     type = "description", order = 23, width = "full", fontSize = "medium",
     hidden = function()
       local e = effective(key, "texture")
       if not (A and A.channelOn(key, "texture")) then return true end
       for _, event in ipairs(textureList("EVENTS")) do
-        if e[event] then return true end
+        -- AT9-D3: a buff moment that is ticked on an ability nothing has ever seen buff you is a
+        -- moment that cannot happen AND a control that is not on the page -- counting it would
+        -- silence this warning for exactly the ability that most needs it.
+        if e[event] and not (BUFF_EVENTS[event] and unknown()) then return true end
       end
       return false
     end,

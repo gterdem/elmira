@@ -57,7 +57,17 @@ ns.RegisterBuiltinPack("PALADIN", function()
     CONSECRATION        = { id = 20924,  src = "https://www.wowhead.com/classic/spell=20924", cost = { mana = 565 }, cooldown = 8 },  -- rank max; use max-rank id
 
     -- Seals (castable) — used by `seal`/`no_seal` conditions via the active-seal buff
-    SEAL_OF_MARTYRDOM   = { id = 407798, src = "https://www.wowhead.com/classic/spell=407798", seal = true },
+    --
+    -- AT9-D3: `buff = true` says this ability puts a buff ON THE PLAYER, which is what opens its
+    -- buff-only cues ("when its buff appears", "when it's about to expire" and the warning
+    -- seconds) before anyone has cast it. It is NOT an id and not a
+    -- fact this file had to fetch: it is the same statement the seal/blessing/cooldown pages make
+    -- in their first line. Only spells that buff the paladin themselves carry it — Exorcism,
+    -- Judgement and Consecration deliberately do not, and SEAL_OF_MARTYRDOM_HIT is the seal's
+    -- melee damage component rather than a buff. Without it the runtime still learns the answer
+    -- the first time it sees the buff up (Core/AbilitySettings.buffSource); the flag is what makes
+    -- the controls work before that.
+    SEAL_OF_MARTYRDOM   = { id = 407798, src = "https://www.wowhead.com/classic/spell=407798", seal = true, buff = true },
     -- 407798 and 407799 are BOTH named "Seal of Martyrdom" with the same icon (135961) on Wowhead,
     -- which is why id verification came back ambiguous. The live client separates them and Wowhead
     -- cannot: GetSpellInfo maxRange is 0 for 407798 (self-cast -- the seal you press) and 100 for
@@ -68,7 +78,7 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- follow the suggestion?" comparison. No build references it; it exists so the cast log can name
     -- it. Client dumped 2026-09-02 (docs/07); Wowhead src satisfies the docs/03 sourcing rule.
     SEAL_OF_MARTYRDOM_HIT = { id = 407799, src = "https://www.wowhead.com/classic/spell=407799", triggered = true },
-    SEAL_OF_COMMAND     = { id = 20920,  src = "https://www.wowhead.com/classic/spell=20920",  seal = true },
+    SEAL_OF_COMMAND     = { id = 20920,  src = "https://www.wowhead.com/classic/spell=20920",  seal = true, buff = true },
 
     -- Auras / procs (buff IDs differ from ability IDs — verify via the skill)
     -- (No ART_OF_WAR_BUFF: the rune is a passive CD/mana reduction on Exorcism, not a proc aura. Verified in M2.)
@@ -110,10 +120,10 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- Cooldowns as printed on the pages ("Cooldown: 3 minutes" / "Cooldown: 2 minutes", read 2026-09-03).
     -- Fallbacks only -- the client's answer wins at runtime -- but without them the headless preview
     -- treated both as one-GCD spells and every fixture had to hand in a `baseCooldown` stand-in.
-    AVENGING_WRATH       = { id = 407788, src = "https://www.wowhead.com/classic/spell=407788", cooldown = 180 },
+    AVENGING_WRATH       = { id = 407788, src = "https://www.wowhead.com/classic/spell=407788", cooldown = 180, buff = true },
     AURA_MASTERY         = { id = 407624, src = "https://www.wowhead.com/classic/spell=407624", cooldown = 120 },
     REBUKE               = { id = 425609, src = "https://www.wowhead.com/classic/spell=425609" },
-    HORN_OF_LORDAERON    = { id = 425600, src = "https://www.wowhead.com/classic/spell=425600" },
+    HORN_OF_LORDAERON    = { id = 425600, src = "https://www.wowhead.com/classic/spell=425600", buff = true },
     VENGEANCE_BUFF       = { id = 20049,  src = "https://www.wowhead.com/classic/spell=20049", proc = true },
     VINDICATION_DEBUFF   = { id = 26021,  src = "https://www.wowhead.com/classic/spell=26021", aura = true },
     THE_ART_OF_WAR       = { id = 426157, src = "https://www.wowhead.com/classic/spell=426157",
@@ -163,8 +173,8 @@ ns.RegisterBuiltinPack("PALADIN", function()
     -- No `cost`: Wowhead states "26% of base mana", and a percentage is not a usable fallback.
     AVENGERS_SHIELD         = { id = 407669, src = "https://www.wowhead.com/classic/spell=407669/avengers-shield", cooldown = 15 }, -- "Cooldown: 15 seconds" on the page
     HAMMER_OF_THE_RIGHTEOUS = { id = 407632, src = "https://www.wowhead.com/classic/spell=407632/hammer-of-the-righteous", cooldown = 6 }, -- "6% of base mana": no cost
-    HOLY_SHIELD             = { id = 20928,  src = "https://www.wowhead.com/classic/spell=20928/holy-shield", cost = { mana = 150 }, cooldown = 10 }, -- max rank; the self-buff is gated by this key
-    RIGHTEOUS_FURY          = { id = 25780,  src = "https://www.wowhead.com/classic/spell=25780/righteous-fury" },
+    HOLY_SHIELD             = { id = 20928,  src = "https://www.wowhead.com/classic/spell=20928/holy-shield", cost = { mana = 150 }, cooldown = 10, buff = true }, -- max rank; the self-buff is gated by this key
+    RIGHTEOUS_FURY          = { id = 25780,  src = "https://www.wowhead.com/classic/spell=25780/righteous-fury", buff = true },
     -- Protection runes (ability ids, see the rule above). Slots per Wowhead's P8 tank Talents & Runes page.
     -- No HAND_OF_RECKONING or DIVINE_PROTECTION ability records: the queue cannot see threat or the
     -- player's health, so no entry names them (see the Prot build's notes), and a record nothing reads
@@ -183,7 +193,7 @@ ns.RegisterBuiltinPack("PALADIN", function()
     RUNE_MALLEABLE_PROTECTION    = { id = 458318, src = "https://www.wowhead.com/classic/spell=458318/malleable-protection", rune = "waist" },
     RUNE_IMPROVED_SANCTUARY      = { id = 429133, src = "https://www.wowhead.com/classic/spell=429133/improved-sanctuary", rune = "head" },
     -- Shockadin (M5, theorycraft build -- ADR-0013 §6). Verified 2026-09-03, docs/staging/data/m5-shockadin-ids.lua.
-    SEAL_OF_RIGHTEOUSNESS   = { id = 20289,  src = "https://www.wowhead.com/classic/spell=20289/seal-of-righteousness", seal = true, cost = { mana = 90 } }, -- Shockadin's seal
+    SEAL_OF_RIGHTEOUSNESS   = { id = 20289,  src = "https://www.wowhead.com/classic/spell=20289/seal-of-righteousness", seal = true, cost = { mana = 90 }, buff = true }, -- Shockadin's seal
     HOLY_SHOCK              = { id = 20473,  src = "https://www.wowhead.com/classic/spell=20473/holy-shock", cost = { mana = 225 }, cooldown = 30 }, -- Holy talent, not a rune
     -- Back slot: shares it with RUNE_RIGHTEOUS_VENGEANCE (every Ret build) and RUNE_SHIELD_OF_RIGHTEOUSNESS (Prot).
     -- Client-verified 2026-09-03: GetRuneForEquipmentSlot(15).learnedAbilitySpellIDs = { 462834 }.

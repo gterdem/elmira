@@ -497,7 +497,17 @@ function Display.tick(now)
   if ns.Track then
     local fired, memory = ns.Track.tick(ns.API and ns.API.GetState(), Display.watchedKeys(), trackPrev)
     trackPrev = memory
-    for _, e in ipairs(fired) do Display.abilityEvent(e.key, e.event) end
+    for _, e in ipairs(fired) do
+      -- AT9-D3: the tracker just saw a buff of this ability's own name on the player, which is the
+      -- whole of the question "does it buff you" -- recorded once, per character, so the buff-only
+      -- controls on its tabs open for an ability no class pack has ever heard of. Deliberately
+      -- OUTSIDE `abilityEvent`: what was seen is a fact, and passing it through the "Only in
+      -- combat" gate would mean an ability you only ever buff up with before a pull is never
+      -- learned. Cheap by construction -- `learnBuff` writes (and bumps the settings version)
+      -- exactly once per ability, ever.
+      if e.event == "active" and ns.AbilitySettings then ns.AbilitySettings.learnBuff(e.key) end
+      Display.abilityEvent(e.key, e.event)
+    end
   end
   -- AB3-D1: the other half of a texture shown "while the state holds". Display.abilityEvent above
   -- put it on screen the instant the state began; this is the only thing that ever notices the

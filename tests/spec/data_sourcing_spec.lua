@@ -189,6 +189,29 @@ describe("Data sourcing policy (docs/03)", function()
     assert.same({ "DIVINE_STORM", "EXORCISM" }, on)
   end)
 
+  -- AT9-D3: which paladin abilities the pack says put a buff ON YOU. By NAME, because that flag is
+  -- what decides whether an ability's buff moments and its warning seconds are on the page at all
+  -- before the player has cast it -- "some ability is flagged" would stay green if the wrong one
+  -- were. Everything else learns the answer at runtime instead.
+  it("flags the paladin's buff-giving abilities, and nothing else", function()
+    local flagged = {}
+    for key, spell in pairs(helper.classPack("Paladin").spells) do
+      if spell.buff then flagged[#flagged + 1] = key end
+    end
+    table.sort(flagged)
+    assert.same({ "AVENGING_WRATH", "HOLY_SHIELD", "HORN_OF_LORDAERON", "RIGHTEOUS_FURY",
+                  "SEAL_OF_COMMAND", "SEAL_OF_MARTYRDOM", "SEAL_OF_RIGHTEOUSNESS" }, flagged)
+  end)
+
+  -- ...and the flag is schema-checked wherever it is written, the same way the per-ability defaults
+  -- above are: a malformed one is inert, and only a test can notice before a player does.
+  it("ships a buff flag every class pack's schema accepts", function()
+    local Schema = helper.load("Elmira/Core/Schema.lua")
+    for _, entry in ipairs(shippedPacks()) do
+      assert.same({}, Schema.spellBuffErrors(entry.data.spells), entry.class)
+    end
+  end)
+
   -- Bonus sources name their set or soul by STRING and nothing dereferences the record at evaluation
   -- time (`state.bonus()` compares keys), so a mistyped `soul = "SOUL_OF_THE_JUSTICAR"` would grant
   -- nothing, forever, with every spec green -- and the soul record itself is reachable only through

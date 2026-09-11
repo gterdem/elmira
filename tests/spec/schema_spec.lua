@@ -991,4 +991,25 @@ describe("Core.Schema (docs/02-CONDITION-SCHEMA.md, ADR-0002)", function()
     end)
   end)
 
+  -- AT9-D3: `buff = true` on a spell entry is a class pack saying "this ability puts a buff on the
+  -- player", which is what puts its two buff moments and the warning seconds on the page before
+  -- anyone has cast it. A malformed one is INERT -- the controls stay hidden and nothing says why.
+  describe("Schema.spellBuffErrors (the buff flag)", function()
+    it("accepts a spell table with no flag, and the one shape it does accept", function()
+      assert.same({}, Schema.spellBuffErrors({ EXORCISM = { id = 1 } }))
+      assert.same({}, Schema.spellBuffErrors({ SEAL = { id = 1, buff = true } }))
+      assert.same({}, Schema.spellBuffErrors(nil))
+    end)
+
+    it("names every entry whose flag is anything but true", function()
+      local out = Schema.spellBuffErrors({
+        SEAL = { buff = "yes" },
+        EXORCISM = { buff = false },
+      })
+      assert.equal(2, #out, table.concat(out, " | "))
+      assert.equal("EXORCISM: buff must be true or absent, got false", out[1])
+      assert.equal("SEAL: buff must be true or absent, got yes", out[2])
+    end)
+  end)
+
 end)
