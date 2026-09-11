@@ -217,7 +217,7 @@ function Options.previewGlow(secondary, key)
     previewNote = L["No button to preview: the spell below is not on a bar Elmira can see."]
     return false
   end
-  local style = (ns.Glow and ns.Glow.styleFor(key)) or "PIXEL"
+  local style = (ns.Glow and ns.Glow.styleFor(key)) or "PROC"
   if not (ns.Glow and ns.Glow.Start(frame, style, secondary and true or false, key)) then
     previewNote = L["The glow library is not loaded, so Elmira cannot draw a glow at all."]
     return false

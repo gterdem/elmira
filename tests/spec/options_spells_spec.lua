@@ -844,7 +844,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
 
     it("stores style and colour per ability, and repaints", function()
       local args = tab("*", "glow")
-      assert.equal("PIXEL", args.style.get())
+      assert.equal("PROC", args.style.get())
       args.style.set(nil, "BUTTON")
       assert.equal("BUTTON", A.effective("*", "glow").style)
       local r, g, b = tab("*", "glow").color.get()
@@ -897,6 +897,11 @@ describe("Options/Spells (the Abilities page, AB1)", function()
 
     -- A row the style cannot use would let the user move a slider and watch nothing happen.
     it("hides the rows the chosen style has no use for", function()
+      -- PROC ships as the default: only speed applies until a style is chosen.
+      assert.is_true(tab("*", "glow").particles.hidden())
+      assert.is_true(tab("*", "glow").thickness.hidden())
+      assert.is_false(tab("*", "glow").speed.hidden())
+      A.set("*", "glow", "style", "PIXEL")
       assert.is_false(tab("*", "glow").particles.hidden())
       assert.is_false(tab("*", "glow").thickness.hidden())
       assert.is_true(tab("*", "glow").speed.hidden())

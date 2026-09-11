@@ -1,5 +1,6 @@
 # Changelog
 ## Unreleased
+- **Changed: the default glow style is Proc, the game's own proc glow.**
 - **New: an ability's glow has its own "Show the glow" schedule** (Always / in combat or when you
   have a target / in combat only), on the Glow tab, independent of the queue strip -- a hidden strip
   no longer silences a glow set to Always, and a visible strip no longer forces one set to In combat

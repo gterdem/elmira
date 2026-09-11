@@ -131,9 +131,9 @@ describe("Display.Glow", function()
       end
     end)
 
-    it("an unknown style falls back to PIXEL rather than calling nothing", function()
+    it("an unknown style falls back to PROC rather than calling nothing", function()
       assert.is_true(Glow.Start(frame(), "NOPE"))
-      assert.equal("PixelGlow_Start", calls[1].fn)
+      assert.equal("ProcGlow_Start", calls[1].fn)
     end)
   end)
 
@@ -314,6 +314,7 @@ describe("Display.Glow", function()
     end)
 
     it("uses the chosen dimness when it lights the hint", function()
+      setGlow("style", "PIXEL")
       ns.db.profile.glow.secondary = true
       ns.db.profile.glow.secondaryAlpha = 0.7
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
@@ -329,13 +330,13 @@ describe("Display.Glow", function()
     -- style, a global override here would silently replace what the player set for that ability --
     -- so brightness is the only difference the second glow is allowed to make.
     it("draws the next-cast glow in the SAME style as the main one", function()
-      assert.equal("PIXEL", Glow.styleFor())
+      assert.equal("PROC", Glow.styleFor())
       setGlow("style", "AUTOCAST")
       assert.equal("AUTOCAST", Glow.styleFor())
       -- One answer for both glows: there is no argument to ask for the second one's shape, so a
       -- future override cannot be smuggled back in without this line failing.
       setGlow("style", "NONSENSE")
-      assert.equal("PIXEL", Glow.styleFor(), "an unknown style falls back rather than drawing nothing")
+      assert.equal("PROC", Glow.styleFor(), "an unknown style falls back rather than drawing nothing")
       setGlow("style", "PIXEL")
     end)
 
@@ -351,6 +352,7 @@ describe("Display.Glow", function()
     end)
 
     it("lights the second button under its own key, dimmed", function()
+      setGlow("style", "PIXEL")
       ns.db.profile.glow.secondary = true
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
       assert.equal(2, Glow.activeCount())
@@ -364,6 +366,7 @@ describe("Display.Glow", function()
 
     -- Two glows on one button is not more information, it is a flicker.
     it("gives a spell that is both now and next only the bright glow", function()
+      setGlow("style", "PIXEL")
       ns.db.profile.glow.secondary = true
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "NOW" })
       assert.equal(1, Glow.activeCount())
@@ -375,6 +378,7 @@ describe("Display.Glow", function()
     end)
 
     it("releases the dim glow when the second suggestion changes", function()
+      setGlow("style", "PIXEL")
       ns.db.profile.glow.secondary = true
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
       calls = {}
@@ -385,6 +389,7 @@ describe("Display.Glow", function()
     end)
 
     it("promotes the dim button to bright when it becomes the answer", function()
+      setGlow("style", "PIXEL")
       ns.db.profile.glow.secondary = true
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
       calls = {}
@@ -467,6 +472,7 @@ describe("Display.Glow", function()
       A.set("NOW", "glow", "style", "BUTTON")
       A.setInherit("LATER", "glow", false)
       A.set("LATER", "glow", "color", { r = 0, g = 0, b = 1 })
+      A.set("LATER", "glow", "style", "PIXEL")
       ns.db.profile.glow.secondary = true
       Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
       local first, second
@@ -510,7 +516,7 @@ describe("Display.Glow", function()
     it("falls back to glowing everything with no settings store loaded", function()
       ns.AbilitySettings = nil
       assert.is_true(Glow.enabledFor("NOW"))
-      assert.equal("PIXEL", Glow.styleFor("NOW"))
+      assert.equal("PROC", Glow.styleFor("NOW"))
       Glow.SetNowSlot({ spell = "NOW" })
       assert.equal(1, Glow.activeCount())
     end)
@@ -673,8 +679,12 @@ describe("Glow.Render", function()
     } end
     helper.load("Elmira/Core/Colors.lua")
     helper.load("Elmira/Core/DB.lua")
+    helper.load("Elmira/Core/AbilitySettings.lua")
     Glow = helper.load("Elmira/Display/Glow.lua")
-    ns.db = { profile = { glow = { style = "PIXEL", barGlow = true } } }
+    ns.db = { profile = { glow = { style = "PIXEL", barGlow = true } }, char = { abilities = {} } }
+    -- PROC ships as the default now; these tests exercise the PIXEL positional argument path
+    -- against the bare fake library below, so the style is chosen explicitly.
+    ns.AbilitySettings.set(ns.AbilitySettings.ALL, "glow", "style", "PIXEL")
     -- The SAME frame every call, the way the real BarGlow.buttonsFor returns the same cached button
     -- for an unchanged key -- a fresh table per call would make two ticks in a row look, by
     -- identity, like the button changed underneath an unchanged suggestion.

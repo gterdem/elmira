@@ -363,7 +363,7 @@ local function glowDisabled(key)
 end
 
 local function styleOf(key)
-  return effective(key, "glow").style or "PIXEL"
+  return effective(key, "glow").style or "PROC"
 end
 
 -- The styles the loaded library can actually draw, named for humans. Only what is loadable: Proc

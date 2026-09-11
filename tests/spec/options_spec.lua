@@ -867,14 +867,14 @@ describe("Options (the settings pages)", function()
     describe("resetting the glow (Options.resetGlow)", function()
       it("puts the All abilities glow back to nothing chosen, and repaints", function()
         local A = ns.AbilitySettings
-        A.set(A.ALL, "glow", "style", "PROC")
+        A.set(A.ALL, "glow", "style", "PIXEL")
         A.set(A.ALL, "glow", "particles", 19)
         A.setInherit("EXORCISM", "glow", false)
         A.set("EXORCISM", "glow", "enabled", false)
         local stopped = 0
         ns.Glow.StopAll = function() stopped = stopped + 1 end
         assert.is_true(Options.resetGlow())
-        assert.equal("PIXEL", A.effective(A.ALL, "glow").style)
+        assert.equal("PROC", A.effective(A.ALL, "glow").style)
         assert.is_false(A.effective(A.ALL, "glow").particles)
         assert.same({}, ns.db.char.abilities[A.ALL], "the channel should be unset, not rewritten")
         assert.equal(1, stopped, "a running glow keeps its old look until it is torn down")

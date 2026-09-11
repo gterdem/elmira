@@ -41,7 +41,7 @@ local DEFAULTS = {
   -- not. Ships as the display's own default so nothing changes for a player who never opens this
   -- tab; a plain string literal rather than `ns.Visibility.DEFAULT`, because ability_settings_spec
   -- (and any other spec that loads this file alone) never loads Core/Visibility.lua first.
-  glow     = { enabled = true, style = "PIXEL", color = false, show = "combat_or_target",
+  glow     = { enabled = true, style = "PROC", color = false, show = "combat_or_target",
                particles = false, frequency = false, thickness = false, speed = false },
   -- AB3-D1. `source` picks between the ability's own spell icon, one of the shipped shapes
   -- (`Elmira/media/shape_*.tga`) and a path the player typed; `shape` and `path` are what those two

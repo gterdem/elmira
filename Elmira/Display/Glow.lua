@@ -124,7 +124,7 @@ end
 -- keep, and the call sites already say which glow they are starting.
 function Glow.styleFor(key)
   local g = glowFor(key)
-  return (g.style and STYLES[g.style]) and g.style or "PIXEL"
+  return (g.style and STYLES[g.style]) and g.style or "PROC"
 end
 
 -- The user's dimness, or the shipped default. Read through here so the render path and the preview
@@ -202,7 +202,7 @@ function Glow.Start(frame, style, secondary, key)
   if not frame then return false end
   local L = lib()
   if not L then return false end
-  style = (style and STYLES[style]) and style or "PIXEL"
+  style = (style and STYLES[style]) and style or "PROC"
   local glowKey = secondary and KEY_NEXT or KEY
   local held = active[frame]
   -- Already glowing this exact way; do not restart. Restarting is visible: the animation jumps

@@ -22,7 +22,7 @@ describe("Core.AbilitySettings", function()
     assert.equal("PROC", ns.db.char.abilities.EXORCISM.glow.style)
     -- Per CHARACTER: a second character's fresh store answers with the shipped defaults.
     ns.db.char = { abilities = {} }
-    assert.equal("PIXEL", A.effective("EXORCISM", "glow").style)
+    assert.equal("PROC", A.effective("EXORCISM", "glow").style)
   end)
 
   it("answers nothing at all before AceDB has handed a character table over", function()
@@ -33,7 +33,7 @@ describe("Core.AbilitySettings", function()
     assert.is_false(A.clear("EXORCISM"))
     assert.is_false(A.resetChannel("EXORCISM", "glow"))
     -- and reading still answers the shipped default rather than erroring
-    assert.equal("PIXEL", A.effective("EXORCISM", "glow").style)
+    assert.equal("PROC", A.effective("EXORCISM", "glow").style)
   end)
 
   -- `"*"` cannot collide with a registry key: Core/Spells.slug maps every non-alphanumeric to `_`.
@@ -76,7 +76,7 @@ describe("Core.AbilitySettings", function()
 
     it("leaves every glow number to the library, and colours to the brand", function()
       local g = A.effective("X", "glow")
-      assert.equal("PIXEL", g.style)
+      assert.equal("PROC", g.style)
       assert.is_false(g.color)
       assert.is_false(g.particles)
       assert.is_false(g.frequency)
@@ -149,12 +149,12 @@ describe("Core.AbilitySettings", function()
 
     it("ignores an ability's own appearance again the moment it is relinked", function()
       A.setInherit("EXORCISM", "glow", false)
-      A.set("EXORCISM", "glow", "style", "PROC")
+      A.set("EXORCISM", "glow", "style", "PIXEL")
       A.setInherit("EXORCISM", "glow", true)
-      assert.equal("PIXEL", A.effective("EXORCISM", "glow").style)
+      assert.equal("PROC", A.effective("EXORCISM", "glow").style)
       -- and remembers it for when the link is broken again -- unlinking must not lose the choice
       A.setInherit("EXORCISM", "glow", false)
-      assert.equal("PROC", A.effective("EXORCISM", "glow").style)
+      assert.equal("PIXEL", A.effective("EXORCISM", "glow").style)
     end)
 
     it("inherits per CHANNEL, not per ability", function()
@@ -291,20 +291,20 @@ describe("Core.AbilitySettings", function()
 
   describe("clearing", function()
     it("takes an ability's whole settings row away", function()
-      A.set("EXORCISM", "glow", "style", "PROC")
+      A.set("EXORCISM", "glow", "style", "PIXEL")
       A.set("EXORCISM", "announce", "enabled", true)
       assert.is_true(A.clear("EXORCISM"))
       assert.is_nil(ns.db.char.abilities.EXORCISM)
-      assert.equal("PIXEL", A.effective("EXORCISM", "glow").style)
+      assert.equal("PROC", A.effective("EXORCISM", "glow").style)
       assert.is_false(A.clear("EXORCISM"), "nothing left to clear")
     end)
 
     it("puts one channel back to never-chosen, leaving the rest of the row", function()
-      A.set(A.ALL, "glow", "style", "PROC")
+      A.set(A.ALL, "glow", "style", "PIXEL")
       A.set(A.ALL, "announce", "duration", true)
       assert.is_true(A.resetChannel(A.ALL, "glow"))
       assert.is_nil(ns.db.char.abilities[A.ALL].glow)
-      assert.equal("PIXEL", A.effective(A.ALL, "glow").style)
+      assert.equal("PROC", A.effective(A.ALL, "glow").style)
       assert.is_true(A.effective(A.ALL, "announce").duration)
     end)
 
@@ -345,8 +345,8 @@ describe("Core.AbilitySettings", function()
   it("never hands out the defaults table itself", function()
     local one = A.effective("EXORCISM", "glow")
     one.style = "MANGLED"
-    assert.equal("PIXEL", A.effective("JUDGEMENT", "glow").style)
-    assert.equal("PIXEL", A.DEFAULTS.glow.style)
+    assert.equal("PROC", A.effective("JUDGEMENT", "glow").style)
+    assert.equal("PROC", A.DEFAULTS.glow.style)
   end)
 
   -- AB2-D3: a class pack may say what an ability should do out of the box. The amendment to
