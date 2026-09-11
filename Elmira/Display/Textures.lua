@@ -342,6 +342,12 @@ end
 -- slider that does nothing.
 local function fadeRow(key)
   if key == previewKey then return nil end
+  -- A flash is an instant -- ready, used, about to run out -- and draws at the tab's full opacity.
+  -- The fade belongs to the HELD states only (suggested, buff appears): with "Fade with: Buff" the
+  -- about-to-run-out flash at 5 s left of a 30 s seal came out at 17 % and was never seen
+  -- (owner, in game, Seal of Martyrdom, 2026-09-11). A key that is both held and flashing keeps
+  -- fading: the flash then adds nothing on top of a texture already on screen.
+  if flashUntil[key] and not held[key] then return nil end
   return fillMemory and fillMemory[key]
 end
 
