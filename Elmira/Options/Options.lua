@@ -622,6 +622,11 @@ local function announceGroup()
 
   -- PE13-D1. Same keys as before, one level deeper: the rows keep their newest-first order INSIDE
   -- the panel, and the panel's own order is the fixed thing nothing can shift.
+  --
+  -- AT10-D2 (owner): the per-category coloured rows FX1 took out are back, above the copyable box --
+  -- one heading for both. The rows are what a player actually reads (the category tells them WHY a
+  -- line fired, in the colour ADR-0009's cues already use for that category); the box below stays for
+  -- copying into a bug report, where the same colour codes would just be noise in the pasted text.
   local logArgs = {}
   logArgs.logHeader = {
     type = "description", order = 1, fontSize = "medium",
@@ -635,9 +640,18 @@ local function announceGroup()
       name = ns.Colors.wrap(ns.Colors.MUTED, L["Nothing yet."]),
     }
   end
+  for i, row in ipairs(rows) do
+    local cat = A.category(row.category)
+    logArgs["log" .. i] = {
+      type = "description", fontSize = "medium", order = 1 + i,
+      name = ns.Colors.wrap(ns.Colors.MUTED, L[(cat and cat.label) or row.category]) .. "  " ..
+             ns.Colors.wrap((cat and ns.Colors[cat.color]) or ns.Colors.MUTED, A.plain(row.text)),
+    }
+  end
   if #rows > 0 then
     logArgs.lines = {
-      type = "input", multiline = LOG_BOX_LINES, width = "full", order = 2, name = L["Messages"],
+      type = "input", multiline = LOG_BOX_LINES, width = "full", order = 1 + #rows + 1,
+      name = L["Messages"],
       get = function() return Options.logText() end,
       -- Read-only. The box exists so the widget's own click-drag, Ctrl-A and Ctrl-C work on the
       -- text (FX1-D3, the owner: "I think I should be able to copy any lines I want"); storing
@@ -968,6 +982,42 @@ function Options.SaveWindow(widget)
   if not (status and db) then return false end
   db.width, db.height = status.width, status.height
   db.top, db.left = status.top or false, status.left or false
+  return true
+end
+
+-- AT10-D4. The full path the window is on right now, walked straight out of AceConfigDialog's own
+-- status tree (`GetStatusTable`, AceConfigDialog-3.0.lua:401-425 -- the same nested tables
+-- `SelectGroup` writes into and `FeedGroup` reads) rather than kept separately: whatever put the
+-- selection there -- a tree row, a tab, this file's own `SelectGroup` call -- agrees with what gets
+-- remembered, including a stale request that only got partway before `SelectGroup`'s own walk gave
+-- up (AceConfigDialog-3.0.lua:479-482) -- what comes back is where it actually landed, not where it
+-- was asked to go. Capped at a depth no page in this addon reaches (Abilities is the deepest, at
+-- four: list, ability, tab) so a status table that somehow looped back on itself still returns.
+local MAX_REMEMBERED_DEPTH = 8
+function Options.currentPath()
+  local dialog = Options.dialog
+  if not (dialog and dialog.GetStatusTable) then return nil end
+  local path = {}
+  for _ = 1, MAX_REMEMBERED_DEPTH do
+    local node = dialog:GetStatusTable("Elmira", path)
+    local key = node and node.groups and node.groups.selected
+    if not key then break end
+    path[#path + 1] = key
+  end
+  if #path == 0 then return nil end
+  return path
+end
+
+-- AT10-D4. windowDB().lastPath is what `Options.Open` reads when it is asked for no page at all, so
+-- the window reopens on the page (and, for Abilities, the list, ability and tab) it was last left
+-- on -- across a `/reload` and a `/logout`, the way `SaveWindow` already carries size and position.
+-- Written from the chained FeedGroup hook on every navigation, and once more from `Options.Open`
+-- itself and the close chain, so a dialog stand-in that answers neither still leaves the window
+-- reachable on its next Open.
+function Options.rememberPath(path)
+  local w = windowDB()
+  if not (w and path and #path > 0) then return false end
+  w.lastPath = path
   return true
 end
 
@@ -1795,6 +1845,11 @@ local function chainClose(dialog)
         L["could not remember the options window's size: %s"], tostring(savedErr))
       if ns.Announce then ns.Announce.emit("status", text) else ns.log("%s", text) end
     end
+    -- AT10-D4. Same discipline as the size just above: the FeedGroup hook already keeps
+    -- `windowDB().lastPath` current on every navigation, but this is the last moment the dialog's
+    -- own status tree -- memory-only, and wiped when the widget goes back to the pool -- can still be
+    -- read at all, so closing re-syncs it once more rather than trusting the last navigation caught it.
+    Options.rememberPath(Options.currentPath())
     -- BEFORE prior(): prior is AceConfigDialog's own FrameOnClose, which releases this widget back
     -- to AceGUI's pool for the next addon to acquire (D15). Undecorate has to run while the frame
     -- is still ours to put back the way we found it.
@@ -1861,6 +1916,21 @@ local function findTreeWidget(container)
     end
   end
   return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
+end
+
+-- AT10-D3. Depth-first, unlike `findTreeWidget` above: the Log box is nested two levels down (the
+-- Notifications page's own container holds the "log" inline group, which holds the input widget
+-- itself), wherever a ScrollFrame did or did not get interposed (AceConfigDialog-3.0.lua:1634-1644).
+local function findWidgetByType(container, widgetType)
+  if not container then return nil end
+  if container.type == widgetType then return container end
+  if container.children then
+    for _, child in ipairs(container.children) do
+      local found = findWidgetByType(child, widgetType)
+      if found then return found end
+    end
+  end
+  return nil
 end
 
 -- Never mutates AceConfigDialog.tooltip (the skill reference's own warning): that table is one
@@ -2008,6 +2078,19 @@ local function installTreeHook(dialog)
       -- that carry no tree at all (another page, another tab), which is exactly when the texture
       -- being previewed has to come off screen.
       Options.holdTexturePreview(path)
+      -- AT10-D4, also before the tree work: every navigation, tree row or tab alike, reaches this
+      -- hook, and by the time it fires the status tree already carries the FULL selection the click
+      -- just made (`SelectGroup` writes it synchronously; only the on-screen redraw is deferred) --
+      -- so re-reading it here, on every fire, is self-correcting rather than a race with the order
+      -- AT6-D5's own comment above describes.
+      Options.rememberPath(Options.currentPath())
+      -- AT10-D3: the Notifications Log's read-only box gets no Accept button -- AceGUI's own
+      -- MultiLineEditBox re-enables it on every OnAcquire (widgets are pooled across every Ace3
+      -- addon), so it has to be disabled again on every feed of this page, not just the first.
+      if path and path[1] == "notifications" then
+        local box = findWidgetByType(container, "MultiLineEditBox")
+        if box and box.DisableButton then box:DisableButton(true) end
+      end
       local tree = findTreeWidget(container)
       if not tree then return end
       -- The inner Abilities tree: its own hook, and emphatically NOT the outer one's -- silencing
@@ -2657,23 +2740,31 @@ function Options.Open(...)
     -- requested section without ever making it the window's root, so General, Queue, Rotation and
     -- the rest of the left menu stay on screen.
     --
-    -- D61e (2026-09-07 in-game round), comment corrected at D64: `/elm config` landed on Rotations,
-    -- not General, on a FRESH status table (first open of a session) -- Rotations registered at
-    -- `order = 0`, General at `order = 1`, and AceConfigDialog's tree selects the lowest-order group
-    -- when nothing has been selected yet. M1a (menu-order pass) renumbered every top-level group to
-    -- 1-8 in the owner's order, so General (`order = 1`) is now the lowest by itself and this
-    -- SelectGroup is redundant on a fresh status table -- but it is kept unconditionally anyway: it
-    -- is one line, and it pins "no path means General" against whatever a future reorder does to
-    -- who happens to sort first. From the second open onward, AceConfigDialog itself remembers and
-    -- re-applies the last selected group (`status.groups.selected`, AceConfigDialog-3.0.lua:1746),
-    -- so leaving this SelectGroup out would have fixed only the first open and then let whatever the
-    -- player last clicked win from then on. Called unconditionally instead: a caller that asks for
-    -- no path at all always means General, first open or the tenth.
+    -- D61e (2026-09-07 in-game round, amended by AT10-D4, 2026-09-11): `/elm config` used to land on
+    -- Rotations, not General, on a FRESH status table -- Rotations registered at `order = 0`,
+    -- General at `order = 1`, and AceConfigDialog's tree selects the lowest-order group when nothing
+    -- has been selected yet. M1a's reorder made General the lowest by itself, which made an
+    -- unconditional "no path means General" redundant every open but the very first -- and it also
+    -- meant "no path" could never mean anything else, so the window forgot where the player left it
+    -- on every `/reload`. AT10-D4: "no path" now means `windowDB().lastPath` -- the full path this
+    -- SAME chained FeedGroup hook keeps current on every navigation -- and only General when nothing
+    -- has ever been remembered (a fresh install, or a database from before this). A path WITH an
+    -- explicit page (`/elm config <page>`, an Edit button) still goes exactly where asked.
+    local path
     if select("#", ...) > 0 then
-      Options.dialog:SelectGroup("Elmira", ...)
+      path = { ... }
     else
-      Options.dialog:SelectGroup("Elmira", "general")
+      local w = windowDB()
+      path = (w and w.lastPath) or { "general" }
     end
+    Options.dialog:SelectGroup("Elmira", unpack(path))
+    -- Read back from the dialog's own status tree when one is available: `SelectGroup`'s own walk
+    -- is what makes a stale path (an ability since removed) land safely, stopping still selected at
+    -- the last segment that still exists (AceConfigDialog-3.0.lua:479-482) -- so what gets
+    -- remembered from here on is where it actually landed, not the broken path that was asked for.
+    -- Falls back to the requested path itself against a dialog stand-in that exposes no status
+    -- table at all, so the remembered path still advances rather than going stale forever.
+    Options.rememberPath(Options.currentPath() or path)
     if not hooked then
       -- No hooksecurefunc on this client (never true in-game; only reachable if the global is
       -- missing entirely): the hook above never got the chance to run, so decorate and chain the

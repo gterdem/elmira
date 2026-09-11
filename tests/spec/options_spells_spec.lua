@@ -1398,19 +1398,57 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     -- AT5-D1/D2: "Fill with" (the radial swipe) becomes "Fade with" (an opacity), and moves BELOW
     -- the five moments -- order 16 sits after `expiringSeconds` (14.5), the last of them.
     -- AT8-D3 shortens the three values to Nothing / Cooldown / Buff.
-    it("offers the three fades below the five moments", function()
-      local row = tab("EXORCISM", "texture").fill
+    --
+    -- AT10-D1 (owner): the row is hidden until "When it is suggested" or "When its buff appears" is
+    -- ticked -- the only two moments a fade follows -- and Buff is only offered once the ability is
+    -- known to buff anyone; a stored `buff` fill on a buffless ability reads back as Nothing.
+    it("offers the three fades below the five moments, once a fade has somewhere to follow", function()
+      local args = tab("EXORCISM", "texture")
+      local row = args.fill
       assert.equal("select", row.type)
       assert.equal(16, row.order, "below the five moments, not between them and the appearance controls")
       assert.equal("Fade with", row.name)
-      assert.same({ "none", "cooldown", "buff" }, row.sorting)
-      assert.equal("Nothing", row.values.none)
-      assert.equal("Cooldown", row.values.cooldown)
-      assert.equal("Buff", row.values.buff)
+      -- "suggested" AND "active" both ship ON (AbilitySettings.DEFAULTS) -- `active` on a control
+      -- the buff gate is hiding, but the STORED value still counts here -- so the row is visible
+      -- from the start, and hides only once both are explicitly off.
+      assert.is_false(row.hidden(), "suggested and active both ship on, either of which shows it")
+      args.suggested.set(nil, false)
+      A.set("EXORCISM", "texture", "active", false)
+      assert.is_true(row.hidden(), "neither suggested nor active is ticked now")
+      args.suggested.set(nil, true)
+      assert.is_false(row.hidden(), "suggested is one of the two moments a fade follows")
+
+      -- Not known to buff anyone yet: Buff is not on the menu, and cannot even be reached, since
+      -- `active` (the other moment that shows the row) is itself hidden for the same reason.
+      assert.same({ "none", "cooldown" }, row.sorting())
+      assert.equal("Nothing", row.values().none)
+      assert.equal("Cooldown", row.values().cooldown)
+      assert.is_nil(row.values().buff)
       assert.equal("none", row.get())
       row.set(nil, "cooldown")
       assert.equal("cooldown", A.effective("EXORCISM", "texture").fill)
       assert.equal("cooldown", tab("EXORCISM", "texture").fill.get())
+
+      -- Once Elmira has seen it buff the player, Buff joins the other two, and a fill already
+      -- stored as "buff" (a pack default, or from before the buff was lost) is offered rather than
+      -- silently downgraded -- only a buffless ability's stored value hides behind Nothing.
+      A.learnBuff("EXORCISM")
+      row.set(nil, "buff")
+      assert.same({ "none", "cooldown", "buff" }, tab("EXORCISM", "texture").fill.sorting())
+      assert.equal("Buff", tab("EXORCISM", "texture").fill.values().buff)
+      assert.equal("buff", tab("EXORCISM", "texture").fill.get())
+    end)
+
+    -- The "reads as Nothing" half of AT10-D1, isolated: a `buff` fill stored while the ability WAS
+    -- known to buff, read back after that flag is gone (a pack that stopped shipping it, or --
+    -- today -- a value hand-written into the SavedVariables).
+    it("reads a stored buff fill as Nothing once the ability is not known to buff anyone", function()
+      local args = tab("EXORCISM", "texture")
+      args.suggested.set(nil, true)
+      A.learnBuff("EXORCISM")
+      args.fill.set(nil, "buff")
+      A.set("EXORCISM", "general", "hasBuff", false)
+      assert.equal("none", tab("EXORCISM", "texture").fill.get())
     end)
 
     -- AT8-D3's tooltip, verbatim (owner's wording): which pairing makes sense.

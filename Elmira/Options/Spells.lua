@@ -881,11 +881,13 @@ local function textureArgs(key)
   expiringArgs(key, args, 14.5, function()
     return unknown() or effective(key, "texture").expiring ~= true
   end, off)
-  -- AT9-D4. ON by default, so a buff texture counts down out of the box. Deliberately NOT one of
-  -- the controls the buff flag hides (owner enumerated the four it does): it is an appearance
-  -- choice about the texture rather than a moment, and it has to be reachable on any ability.
+  -- AT9-D4. ON by default, so a buff texture counts down out of the box. AT10-D1 (owner): HIDDEN
+  -- rather than shown-but-dead now -- the countdown only ever draws while a buff moment is holding
+  -- the texture (`active`/`expiring`), so on an ability nothing has ever seen buff you it is the
+  -- same dead control the two buff moments themselves already are, and gets the same `hasBuff` gate.
   args.seconds = {
     type = "toggle", order = 15.5, width = "full", name = L["Show seconds left"], disabled = off,
+    hidden = unknown,
     desc = L["Draws the whole seconds left of the buff in the middle of the texture, while it is on "
           .. "screen for \"when its buff appears\" or \"when it's about to expire\". The "
           .. "toolbar and this tab show 30 as a sample."],
@@ -896,15 +898,41 @@ local function textureArgs(key)
   -- anything -- start being visible or getting invisible"). Below the five moments now, because
   -- what it pairs with only makes sense once you have read them: an opacity that follows a STATE
   -- (`suggested`/`active`) is visible long enough to fade, an INSTANT flash is not.
+  --
+  -- AT10-D1 (owner): the row itself is hidden unless "When it is suggested" or "When its buff
+  -- appears" is ticked -- the only two moments a fade has anything to follow -- and the Buff choice
+  -- is offered only once the ability is known to buff you: `active` cannot even be ticked before
+  -- then, so a Buff fade could never fire either. A `buff` fill stored before the ability lost its
+  -- buff flag (or shipped that way in a pack) reads back as Nothing rather than as a choice the menu
+  -- no longer offers -- the same "never lied to" rule the pack fallback everywhere else follows.
+  local function fillCanShow()
+    local e = effective(key, "texture")
+    return e.suggested == true or e.active == true
+  end
   args.fill = {
     type = "select", order = 16, name = L["Fade with"], disabled = off,
-    values = labelled(textureList("FILLS"), FILL_LABELS),
-    sorting = textureList("FILLS"),
+    hidden = function() return not fillCanShow() end,
+    values = function()
+      local vals = labelled(textureList("FILLS"), FILL_LABELS)
+      if unknown() then vals.buff = nil end
+      return vals
+    end,
+    sorting = function()
+      local out = {}
+      for _, v in ipairs(textureList("FILLS")) do
+        if v ~= "buff" or not unknown() then out[#out + 1] = v end
+      end
+      return out
+    end,
     -- AT8-D3, verbatim (owner's wording).
     desc = L["Cooldown: faint after the cast, brightening as it recovers — pairs with "
           .. "\"when it is suggested\". Buff: full when the buff appears, fading as it runs out "
           .. "— pairs with \"when its buff appears\"."],
-    get = function() return (ns.Textures and ns.Textures.fillOf(effective(key, "texture"))) or "none" end,
+    get = function()
+      local f = (ns.Textures and ns.Textures.fillOf(effective(key, "texture"))) or "none"
+      if f == "buff" and unknown() then return "none" end
+      return f
+    end,
     set = function(_, v) put(key, "texture", "fill", v) end,
   }
   -- AT6-D4 took the Position dropdown with the indicator row: a texture starts at the centre of

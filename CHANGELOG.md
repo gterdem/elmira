@@ -1,5 +1,14 @@
 # Changelog
 ## Unreleased
+- **Changed: the options window reopens on the page (and, for Abilities, the ability and tab) you
+  last had open**, across a `/reload` and a `/logout` -- not always back on General.
+- **Changed: the Notifications Log shows a coloured line per message again**, newest first, above
+  the read-only box you can still select and copy text out of.
+- **Fixed: the Notifications Log's copy box no longer shows an Accept button**, which never did
+  anything on a read-only box.
+- **Changed: "Show seconds left" and "Fade with" on the Texture tab follow the same buff rule as the
+  other buff-only controls** -- "Show seconds left" is hidden for an ability that does not buff you,
+  and "Fade with" only offers Buff once Elmira knows it does.
 - **Changed: a texture's expiry warning stays on screen until the buff is gone.** "When it's about
   to expire" no longer flashes for a second and a half and disappears -- it holds, the way "when its
   buff appears" does, and goes when the buff runs out or you refresh it. Sounds and screen-edge

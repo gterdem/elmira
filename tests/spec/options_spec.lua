@@ -1092,15 +1092,36 @@ describe("Options (the settings pages)", function()
     -- `description` rows, which no widget lets you select -- the only way to quote one into a bug
     -- report was to retype it. One read-only multiline box in their place: newest first, plain
     -- text, and it scrolls rather than growing the page.
+    -- AT10-D2 (owner): the pre-FX1 coloured rows are back above the box, newest first, one per
+    -- message -- so the box's own order has to make room for them rather than sitting fixed at 2.
+    describe("the coloured rows above the box (AT10-D2)", function()
+      it("shows one row per message, newest first, in the category's own colour", function()
+        ns.Announce.emit("status", "first")
+        ns.Announce.emit("warning", "second")
+        local la = logArgs()
+        -- log1 is the newest (warning/second), log2 the older (status/first): the box's own
+        -- "shown[1] is newest" ordering, one level up.
+        assert.equal(2, la.log1.order)
+        assert.is_truthy(la.log1.name:find(ns.Colors.WARN.hex, 1, true), "not in the warning colour")
+        assert.is_truthy(la.log1.name:find("second", 1, true))
+        assert.equal(3, la.log2.order)
+        assert.is_truthy(la.log2.name:find(ns.Colors.MUTED.hex, 1, true), "not in the status colour")
+        assert.is_truthy(la.log2.name:find("first", 1, true))
+        -- One heading for both the rows and the box (D2): still just logHeader, nothing per-row.
+        assert.is_truthy(la.logHeader.name:find("newest first", 1, true))
+      end)
+    end)
+
     describe("copying the log out", function()
-      it("puts every line in a box the player can select and copy", function()
+      it("puts every line in a box the player can select and copy, below the coloured rows", function()
         ns.Announce.emit("status", "first")
         ns.Announce.emit("warning", "second")
         local box = logArgs().lines
         assert.equal("input", box.type)
         assert.is_true(box.multiline > 1, "a single-line box cannot show a log")
         assert.equal("full", box.width)
-        assert.equal(2, box.order)
+        -- AT10-D2: below the two coloured rows (order 2 and 3) this message count puts above it.
+        assert.equal(4, box.order)
         assert.is_true(box.order < logArgs().logClear.order)
 
         local text = box.get()
@@ -1639,10 +1660,12 @@ describe("Options (the settings pages)", function()
       assert.same({ "Elmira", "rotation" }, selected)
     end)
 
-    -- D61e (2026-09-07 in-game round): AceConfigDialog selects the LOWEST-order group when nothing
-    -- has been selected yet, which is Rotations (order 0) -- so `/elm config` landed there instead
-    -- of General (order 1). `Options.Open()` with no path now selects General explicitly.
-    it("opens with no path at all, which is what /elm config wants, and lands on General", function()
+    -- D61e (2026-09-07 in-game round, amended by AT10-D4): AceConfigDialog selects the LOWEST-order
+    -- group when nothing has been selected yet, which is Rotations (order 0) -- so `/elm config`
+    -- landed there instead of General (order 1). `Options.Open()` with no path lands on General only
+    -- when nothing has ever been remembered; see AT10-D4 below for the remembered-path case.
+    it("opens with no path at all, which is what /elm config wants, and lands on General when "
+       .. "nothing is remembered", function()
       local got, selected = nil, nil
       ns.Announcers = { StopMoving = function() end }
       Options.dialog = {
@@ -1652,6 +1675,40 @@ describe("Options (the settings pages)", function()
       assert.is_true(Options.Open())
       assert.same({ "Elmira" }, got, "Open must carry no path, or it becomes the window's root")
       assert.same({ "Elmira", "general" }, selected)
+    end)
+
+    -- AT10-D4 (owner): no path no longer means General unconditionally -- it means wherever the
+    -- window was last left, across a `/reload` or a `/logout`, read back from `windowDB().lastPath`.
+    it("opens with no path and lands on the remembered path when one is stored", function()
+      local selected = nil
+      ns.Announcers = { StopMoving = function() end }
+      ns.db.global = { window = { lastPath = { "spells", "list", "EXORCISM", "texture" } } }
+      Options.dialog = {
+        Open = function() end,
+        SelectGroup = function(_, app, ...) selected = { app, ... } end,
+      }
+      assert.is_true(Options.Open())
+      assert.same({ "Elmira", "spells", "list", "EXORCISM", "texture" }, selected)
+    end)
+
+    -- The other half: asking for an explicit page (`/elm config <page>`, an Edit button) still goes
+    -- exactly where asked, whatever was remembered before -- and THAT becomes the new remembered path.
+    it("remembers the explicit path an Open call asked for, overwriting whatever came before", function()
+      ns.Announcers = { StopMoving = function() end }
+      ns.db.global = { window = { lastPath = { "queue" } } }
+      Options.dialog = { Open = function() end, SelectGroup = function() end }
+      assert.is_true(Options.Open("rotation", "builder"))
+      assert.same({ "rotation", "builder" }, ns.db.global.window.lastPath)
+    end)
+
+    -- And a no-path Open remembers the fallback it actually used, so a fresh install's very first
+    -- Open leaves "general" behind for the next one rather than staying unset forever.
+    it("remembers General as the fallback the first time nothing has ever been stored", function()
+      ns.Announcers = { StopMoving = function() end }
+      ns.db.global = { window = {} }
+      Options.dialog = { Open = function() end, SelectGroup = function() end }
+      assert.is_true(Options.Open())
+      assert.same({ "general" }, ns.db.global.window.lastPath)
     end)
 
     it("opens without erroring on a dialog that exposes no frames", function()

@@ -1229,6 +1229,117 @@ describe("Options window", function()
     end)
   end)
 
+  -- AT10-D3. The Notifications Log's box is AceGUI's own MultiLineEditBox, and its "Accept" button
+  -- (AceGUIWidget-MultiLineEditBox.lua:239 `DisableButton`) is meaningless on a read-only box.
+  describe("AT10-D3: the Log box gets no Accept button", function()
+    local function feed(container, path)
+      Options.dialog.FeedGroup(Options.dialog, "Elmira", {}, container, {}, path or {})
+    end
+
+    local function fakeBox()
+      local box = { type = "MultiLineEditBox", disableCalls = 0 }
+      function box:DisableButton(v) self.disabled = v; self.disableCalls = self.disableCalls + 1 end
+      return box
+    end
+
+    -- Nested two levels down, the way AceConfigDialog actually builds it: the page's own container
+    -- holds the "Notifications Log" InlineGroup, which holds the box itself.
+    local function notificationsPage(box)
+      return { type = "SimpleGroup", children = { { type = "InlineGroup", children = { box } } } }
+    end
+
+    it("disables the Accept button on the Notifications page's log box", function()
+      open()
+      local box = fakeBox()
+      feed(notificationsPage(box), { "notifications" })
+      assert.is_true(box.disabled)
+      assert.equal(1, box.disableCalls)
+    end)
+
+    -- OnAcquire re-enables it (AceGUIWidget-MultiLineEditBox.lua:187), and widgets are pooled --
+    -- across every Ace3 addon, not only reused by Elmira -- so a fresh instance handed back to this
+    -- page on a later feed starts enabled again and has to be disabled once more.
+    it("re-applies it on every feed of the page, not only the first", function()
+      open()
+      local box = fakeBox()
+      local page = notificationsPage(box)
+      feed(page, { "notifications" })
+      box.disabled = false  -- what OnAcquire does to a widget handed back out of the pool
+      feed(page, { "notifications" })
+      assert.is_true(box.disabled)
+      assert.equal(2, box.disableCalls)
+    end)
+
+    it("leaves a MultiLineEditBox on another page alone", function()
+      open()
+      local box = fakeBox()
+      feed(notificationsPage(box), { "general" })
+      assert.is_nil(box.disabled)
+      assert.equal(0, box.disableCalls)
+    end)
+
+    it("does nothing, without erroring, when the page carries no such box at all", function()
+      open()
+      assert.has_no.errors(function()
+        feed({ type = "SimpleGroup", children = {} }, { "notifications" })
+      end)
+    end)
+  end)
+
+  -- AT10-D4. `windowDB().lastPath` is what `Options.Open` reads when asked for no page at all, so
+  -- the window reopens where it was left across a `/reload`. Kept current by re-reading the dialog's
+  -- own status tree -- the same nested tables `SelectGroup` writes -- on every navigation this hook
+  -- sees, whatever depth fired it.
+  describe("AT10-D4: remembering the path on every navigation", function()
+    local function feed(container, path)
+      Options.dialog.FeedGroup(Options.dialog, "Elmira", {}, container, {}, path or {})
+    end
+
+    -- Written the way `SelectGroup` itself writes it (AceConfigDialog-3.0.lua:452-488): one
+    -- `.groups.selected` per path depth, each in the node `GetStatusTable` hands back for the path
+    -- so far.
+    local function selectAt(path, key)
+      Options.dialog:GetStatusTable("Elmira", path).groups = { selected = key }
+    end
+
+    it("writes the full path from the dialog's status tree, however deep it goes", function()
+      open()
+      selectAt({}, "spells")
+      selectAt({ "spells" }, "list")
+      selectAt({ "spells", "list" }, "EXORCISM")
+      selectAt({ "spells", "list", "EXORCISM" }, "texture")
+
+      feed({ type = "SimpleGroup" }, { "spells", "list", "EXORCISM", "texture" })
+      assert.same({ "spells", "list", "EXORCISM", "texture" }, ns.db.global.window.lastPath)
+    end)
+
+    it("updates again on the next navigation, replacing what was remembered before", function()
+      open()
+      selectAt({}, "queue")
+      feed({ type = "SimpleGroup" }, { "queue" })
+      assert.same({ "queue" }, ns.db.global.window.lastPath)
+
+      selectAt({}, "notifications")
+      feed({ type = "SimpleGroup" }, { "notifications" })
+      assert.same({ "notifications" }, ns.db.global.window.lastPath)
+    end)
+
+    it("leaves the remembered path alone when nothing is selected yet, without erroring", function()
+      open()
+      local before = ns.db.global.window.lastPath
+      assert.has_no.errors(function() feed({ type = "SimpleGroup" }, {}) end)
+      assert.same(before, ns.db.global.window.lastPath)
+    end)
+
+    it("does nothing for another addon's FeedGroup call", function()
+      open()
+      ns.db.global.window.lastPath = { "general" }
+      selectAt({}, "queue")
+      Options.dialog.FeedGroup(Options.dialog, "ElvUI", {}, { type = "SimpleGroup" }, {}, { "queue" })
+      assert.same({ "general" }, ns.db.global.window.lastPath)
+    end)
+  end)
+
   -- AT6-D5. The Texture tab's texture stands on screen for as long as that tab is the one being
   -- read. Nothing in the fight is holding it, so nothing in the fight will take it away either --
   -- every test here is about the RELEASE, because a preview that outlives its tab is a texture in
