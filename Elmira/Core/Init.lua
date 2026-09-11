@@ -331,6 +331,13 @@ function NA:OnGearOrCharacterChanged()
   -- exists to answer. Dropped before anything reads `known` again, or the palette and the gates
   -- would go on reporting the ability you just trained as not learned.
   if ns.Adapter and ns.Adapter.forgetSpellbook then ns.Adapter.forgetSpellbook() end
+  -- AT7-D2: the same event, extended -- not a second RegisterEvent, which would silently replace
+  -- this handler (the comment on the loop below records what that cost last time). A registry
+  -- entry's stored id follows whatever the spellbook now answers for its name, so a texture, glow or
+  -- announcement configured on it keeps working past the rank that was on the bar when it was set up.
+  if ns.Spells and ns.Spells.refreshRanks and ns.Adapter and ns.Adapter.spellIDByName then
+    ns.Spells.refreshRanks(ns.Spells.store(), ns.Adapter.spellIDByName)
+  end
   if ns.Display then ns.Display.invalidate() end
   if self._equipTimer then self:CancelTimer(self._equipTimer, true) end
   self._equipTimer = self:ScheduleTimer(function()

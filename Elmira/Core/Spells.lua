@@ -44,13 +44,33 @@ local function slug(name, taken)
   return base .. "_" .. n
 end
 
--- The key of an existing entry carrying this id, or nil. Dedup is by ID, never by name: two
--- spellings of one spell (a rank suffix, different capitalisation) must not become two rows.
+-- The key of an existing entry carrying this id, or nil.
 local function keyById(s, id)
   for key, entry in pairs(s or {}) do
     if entry.id == id then return key end
   end
   return nil -- mutants: equivalent Lua returns nil implicitly at the end of a function
+end
+
+-- "Exorcism" / "EXORCISM (Rank 5)" -> "exorcism": case-insensitive, and a rank suffix (which
+-- Adapter.spellNameByID/spellIDByName never append on this client, but a hand-typed or pasted name
+-- might carry one) does not make two spellings of one ability read as two different spells.
+local function normalizeName(name)
+  local n = tostring(name or ""):lower()
+  n = n:gsub("%s*%(rank%s*%d+%)%s*$", "")
+  return n
+end
+
+-- The key of an existing entry whose NAME matches (AT7-D1), or nil. The second half of the dedup:
+-- an ability is a NAME, not a rank (owner, 2026-09-11) -- a different rank of a spell already on
+-- this list, added by id or picked from the spellbook, must land on that same row.
+local function keyByName(s, name)
+  local target = normalizeName(name)
+  if target == "" then return nil end
+  for key, entry in pairs(s or {}) do
+    if normalizeName(entry.name) == target then return key end
+  end
+  return nil
 end
 
 -- Spells.merged(pack) -> ctx.spells
@@ -95,12 +115,22 @@ function Spells.registerPack(s, key, id, name)
   return key
 end
 
--- Spells.add(s, resolved) -> key | nil, reason
+-- Spells.add(s, resolved, resolve) -> key | nil, reason
 --
 -- resolved = { id =, name =, source = "id"|"name"|"spellbook" }. D54's "an entry that already
 -- exists is not duplicated; adding it again selects its page" is the id-dedup above: adding the same
 -- spell twice, from two different rows, returns the SAME key both times rather than a second entry.
-function Spells.add(s, resolved)
+--
+-- AT7-D1: a NAME match dedupes too. An ability is a name, not a rank (owner, 2026-09-11) -- a rank
+-- of a spell already registered under a DIFFERENT id (typed by id, or picked from the spellbook)
+-- selects that same row instead of slugging a fresh "..._2" entry, which is how "HOLY_LIGHT_2" could
+-- otherwise be born from nothing but a rank. `resolve` is `Adapter.spellIDByName`, wired in by the
+-- caller so this file stays pure (hard rule 3): it is the ARBITER of which of the two ids is the
+-- higher rank, since Classic ids do not promise to rise with rank. Never moves a PACK entry's id --
+-- a shipped pack ships the max rank on purpose (hard rule 2) -- and with no resolver at all the
+-- match still dedupes; the stored id simply stays put until something (AT7-D2's `refreshRanks`)
+-- says otherwise.
+function Spells.add(s, resolved, resolve)
   if not s then return nil, "no character data yet" end
   if type(resolved) ~= "table" or type(resolved.id) ~= "number" or resolved.id <= 0
       or type(resolved.name) ~= "string" or resolved.name == "" then
@@ -108,9 +138,43 @@ function Spells.add(s, resolved)
   end
   local already = keyById(s, resolved.id)
   if already then return already end
+  local byName = keyByName(s, resolved.name)
+  if byName then
+    local entry = s[byName]
+    if entry.source ~= "pack" and entry.id ~= resolved.id and type(resolve) == "function" then
+      local highest = resolve(entry.name)
+      if highest == resolved.id then entry.id = resolved.id end
+    end
+    return byName
+  end
   local key = slug(resolved.name, s)
   s[key] = { key = key, id = resolved.id, name = resolved.name, source = resolved.source or "id" }
   return key
+end
+
+-- Spells.refreshRanks(s, resolve) -> how many entries changed
+--
+-- AT7-D2: the spellbook, not any add path, is the standing authority on which rank an ability IS.
+-- Called from Core/Init's SPELLS_CHANGED handler (chained onto the handler already registered there
+-- -- Ace registries replace, never add), through `resolve = Adapter.spellIDByName` so this file never
+-- names a WoW global itself (hard rule 3).
+--
+-- Skips every `source == "pack"` entry: a shipped pack ships the max-rank id on purpose (hard rule
+-- 2), and a level-20 alt who has only learned rank 3 of it must not downgrade that id -- the pack
+-- entry already resolves correctly the moment the character catches up (Adapters/Vanilla.knownById).
+function Spells.refreshRanks(s, resolve)
+  local changed = 0
+  if not (s and type(resolve) == "function") then return changed end
+  for _, entry in pairs(s) do
+    if entry.source ~= "pack" then
+      local id = resolve(entry.name)
+      if type(id) == "number" and id > 0 and id ~= entry.id then
+        entry.id = id
+        changed = changed + 1
+      end
+    end
+  end
+  return changed
 end
 
 -- Spells.adopt(s, key, id, name) -> key | nil

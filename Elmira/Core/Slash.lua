@@ -370,6 +370,24 @@ local function knownLines(lines)
   return lines
 end
 
+-- AT7-D5: name -> stored id -> the id the spellbook answers RIGHT NOW, so a rank mismatch (a
+-- registry entry whose stored id no longer matches what this character's spellbook currently
+-- resolves for that name) is visible from one command instead of opening every ability's own tab.
+-- Empty (no header at all) with no registry, or with nothing registered yet -- both normal states.
+local function abilityRankLines()
+  local store = ns.Spells and ns.Spells.store and ns.Spells.store()
+  local rows = store and ns.Spells.list(store) or {}
+  if #rows == 0 then return {} end
+  local lines = { "abilities (name: stored id -> spellbook now):" }
+  for _, entry in ipairs(rows) do
+    local now = ns.Adapter and ns.Adapter.spellIDByName and ns.Adapter.spellIDByName(entry.name)
+    local mismatch = (now and now ~= entry.id) and "  <- MISMATCH" or ""
+    lines[#lines + 1] = string.format("  %s: %s -> %s%s", entry.name, tostring(entry.id),
+      tostring(now), mismatch)
+  end
+  return lines
+end
+
 Slash.register{
   key = "debug", args = "state|bars|swing|cues|textures|perf|libs|memory|alloc|dump|queue|gates",
   desc = ns.L["Diagnostics"], order = 10,
@@ -389,13 +407,15 @@ Slash.register{
       -- text, so "the header lost its version and I can only drag it from the middle" is a thing
       -- this command answers rather than a thing that needs a screenshot.
       local chrome = ns.Options and ns.Options.chromeState and ns.Options.chromeState()
-      return {
+      local lines = {
         string.format("project=%s version=%s interface=%s", tostring(d.project), tostring(d.version), tostring(d.interface)),
         "capabilities: " .. table.concat(caps, " "),
         "state: " .. tostring(d.state),
         "moving: " .. tostring(moving or "nothing"),
         "window chrome: " .. tostring(chrome or "no window open"),
       }
+      for _, line in ipairs(abilityRankLines()) do lines[#lines + 1] = line end
+      return lines
     elseif sub == "gates" then
       -- Which rows of the active build cannot fire for this character, and why. The same answer
       -- the announcement gives at the moment it changes, on demand and in full.

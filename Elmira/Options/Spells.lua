@@ -173,7 +173,9 @@ end
 
 local function addResolvedTyped()
   if not (resolvedID and resolvedName) then return end -- mutants: equivalent nothing to add yet
-  local key = ns.Spells.add(store(), { id = resolvedID, name = resolvedName, source = resolvedSource })
+  -- AT7-D1: same arbiter as the spellbook Add above, for the same reason.
+  local key = ns.Spells.add(store(), { id = resolvedID, name = resolvedName, source = resolvedSource },
+    ns.Adapter and ns.Adapter.spellIDByName)
   clearTyped()
   if key then navigateToSpell(key) end
 end
@@ -202,7 +204,10 @@ local function addArgs(order)
             if entry.id == id then name = entry.name; break end
           end
           if not (id and name) then return end -- mutants: equivalent Spells.add's own id/name check refuses just as silently
-          local key = ns.Spells.add(store(), { id = id, name = name, source = "spellbook" })
+          -- AT7-D1: the arbiter for a name-dedup's rank update, so picking a rank of an ability
+          -- already registered under a different id raises the stored id rather than sitting stale.
+          local key = ns.Spells.add(store(), { id = id, name = name, source = "spellbook" },
+            ns.Adapter and ns.Adapter.spellIDByName)
           if key then pickSpellbookId = nil; navigateToSpell(key) end
         end,
       },

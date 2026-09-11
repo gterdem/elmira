@@ -1,5 +1,10 @@
 # Changelog
 ## Unreleased
+- **Fixed: an ability's settings follow every rank of the spell.** Adding a rank of an ability
+  already on the Abilities list -- by id, by name, or from the spellbook -- selects that same row
+  instead of creating a second one, and its stored id follows the highest rank you have learned as
+  you level. `/elm debug state` now lists every ability's name, stored id and current spellbook id,
+  so a mismatch is visible at a glance.
 - **Changed: Choose… opens the texture picker on a clear screen.** Pressing Choose… on an ability's
   Texture tab now does what "Move This Texture" does as well -- the configuration window steps
   aside, the Move toolbar appears and the texture itself is left on screen -- and opens the picker

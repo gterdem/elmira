@@ -675,6 +675,51 @@ describe("Core.Slash", function()
     end)
   end)
 
+  -- AT7-D5: a rank mismatch -- a registry entry whose stored id no longer matches what this
+  -- character's spellbook currently resolves for its name -- has to be visible from one command.
+  describe("'debug state' lists ability ranks (AT7-D5)", function()
+    before_each(function()
+      _G.__ELM_NS.Adapter = { describe = function()
+        return { project = 2, version = "1.15.7", interface = 11509, caps = {}, state = "ready" }
+      end }
+      helper.load("Elmira/Core/Spells.lua")
+    end)
+
+    it("adds nothing at all with no registry entries", function()
+      _G.__ELM_NS.db = { char = { spells = {} } }
+      assert.is_false(hasLineMatching(Slash.run("debug state"), "^abilities"))
+    end)
+
+    it("names every entry, its stored id and what the spellbook answers now", function()
+      _G.__ELM_NS.db = { char = { spells = {
+        EXORCISM = { key = "EXORCISM", id = 415072, name = "Exorcism", source = "id" },
+      } } }
+      _G.__ELM_NS.Adapter.spellIDByName = function(name) return name == "Exorcism" and 415073 or nil end
+      local lines = Slash.run("debug state")
+      assert.is_true(hasLineMatching(lines, "^abilities %(name: stored id %-> spellbook now%):$"))
+      assert.is_true(hasLineMatching(lines, "Exorcism: 415072 %-> 415073  <%- MISMATCH$"))
+    end)
+
+    it("flags nothing when the stored id already matches the spellbook", function()
+      _G.__ELM_NS.db = { char = { spells = {
+        EXORCISM = { key = "EXORCISM", id = 415073, name = "Exorcism", source = "id" },
+      } } }
+      _G.__ELM_NS.Adapter.spellIDByName = function() return 415073 end
+      local lines = Slash.run("debug state")
+      assert.is_true(hasLineMatching(lines, "Exorcism: 415073 %-> 415073$"))
+      assert.is_false(hasLineMatching(lines, "MISMATCH"))
+    end)
+
+    it("copes with no spellbook answer at all, without erroring", function()
+      _G.__ELM_NS.db = { char = { spells = {
+        EXORCISM = { key = "EXORCISM", id = 415073, name = "Exorcism", source = "id" },
+      } } }
+      local lines
+      assert.has_no.errors(function() lines = Slash.run("debug state") end)
+      assert.is_true(hasLineMatching(lines, "Exorcism: 415073 %-> nil$"))
+    end)
+  end)
+
   it("verb matching is case-insensitive", function()
     local lower = table.concat(Slash.run("debug state"), "\n")
     local upper = table.concat(Slash.run("DEBUG state"), "\n")

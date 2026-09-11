@@ -359,6 +359,33 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       for _ in pairs(ns.db.char.spells) do count = count + 1 end
       assert.equal(1, count)
     end)
+
+    -- AT7-D1, through the real add path: a different RANK of an ability already registered under a
+    -- different id selects that same row -- never a fresh "..._2" entry -- and raises the stored id
+    -- to whatever the client now says is the higher rank.
+    it("typing a different rank of an already-registered ability selects it and raises the id", function()
+      Spells.add(ns.db.char.spells, { id = 415072, name = "Exorcism", source = "id" })
+      local args = addArgs()
+      args.typed.set(nil, "415073")
+      args.addTyped.func()
+      assert.same({ "Elmira", "spells", "list", "EXORCISM" }, ns.selected)
+      assert.equal(415073, ns.db.char.spells.EXORCISM.id)
+      local count = 0
+      for _ in pairs(ns.db.char.spells) do count = count + 1 end
+      assert.equal(1, count, "no HOLY_LIGHT_2-style duplicate was created")
+    end)
+
+    it("the spellbook Add dedupes by name too", function()
+      Spells.add(ns.db.char.spells, { id = 415072, name = "Exorcism", source = "id" })
+      ns.Adapter.spellbookEntries = function() return { { id = 415073, name = "Exorcism" } } end
+      local args = addArgs()
+      args.pick.set(nil, "415073")
+      args.addPick.func()
+      assert.equal(415073, ns.db.char.spells.EXORCISM.id)
+      local count = 0
+      for _ in pairs(ns.db.char.spells) do count = count + 1 end
+      assert.equal(1, count)
+    end)
   end)
 
   -- ------------------------------------------------------------------ AB1-D4/D9: the tree itself

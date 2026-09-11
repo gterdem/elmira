@@ -202,6 +202,93 @@ describe("Core/Spells (the registry)", function()
       assert.is_nil(key)
       assert.equal("no character data yet", reason)
     end)
+
+    -- AT7-D1: an ability is a NAME, not a rank. A different id resolving to the SAME name must land
+    -- on the row that is already there, or "HOLY_LIGHT_2" is born from nothing but a rank change.
+    describe("AT7-D1: dedup by name too", function()
+      it("selects the existing entry when a different id resolves to the same name", function()
+        local s = {}
+        local first = Spells.add(s, { id = 415072, name = "Exorcism", source = "id" })
+        local second = Spells.add(s, { id = 415073, name = "Exorcism", source = "id" })
+        assert.equal(first, second)
+        local count = 0
+        for _ in pairs(s) do count = count + 1 end
+        assert.equal(1, count)
+      end)
+
+      it("matches the name case-insensitively and ignores a rank suffix", function()
+        local s = {}
+        local first = Spells.add(s, { id = 1, name = "Holy Light", source = "id" })
+        local second = Spells.add(s, { id = 2, name = "HOLY LIGHT (Rank 3)", source = "id" })
+        assert.equal(first, second)
+      end)
+
+      -- The client's own answer for the name is the arbiter, never a raw id comparison: Classic
+      -- does not promise a spell's ranks are assigned rising ids.
+      it("raises the stored id when the arbiter says the newly added one is the higher rank", function()
+        local s = {}
+        local key = Spells.add(s, { id = 415072, name = "Exorcism", source = "id" })
+        Spells.add(s, { id = 415073, name = "Exorcism", source = "id" },
+          function(name) return name == "Exorcism" and 415073 or nil end)
+        assert.equal(415073, s[key].id)
+      end)
+
+      it("leaves the stored id alone when the arbiter still prefers it", function()
+        local s = {}
+        local key = Spells.add(s, { id = 415073, name = "Exorcism", source = "id" })
+        Spells.add(s, { id = 415072, name = "Exorcism", source = "id" },
+          function(name) return name == "Exorcism" and 415073 or nil end)
+        assert.equal(415073, s[key].id)
+      end)
+
+      it("never rewrites a PACK entry's id, even with a higher-rank arbiter answer", function()
+        local s = {}
+        Spells.registerPack(s, "EXORCISM", 415073, "Exorcism")
+        Spells.add(s, { id = 415074, name = "Exorcism", source = "id" },
+          function(name) return name == "Exorcism" and 415074 or nil end)
+        assert.equal(415073, s.EXORCISM.id, "hard rule 2: a shipped pack's id is never overwritten")
+        local count = 0
+        for _ in pairs(s) do count = count + 1 end
+        assert.equal(1, count, "no _2-style duplicate was created either")
+      end)
+
+      it("still dedupes with no resolver at all; the stored id simply stays put", function()
+        local s = {}
+        local key = Spells.add(s, { id = 415072, name = "Exorcism", source = "id" })
+        local second = Spells.add(s, { id = 415073, name = "Exorcism", source = "id" })
+        assert.equal(key, second)
+        assert.equal(415072, s[key].id)
+      end)
+    end)
+  end)
+
+  describe("refreshRanks() -- AT7-D2", function()
+    it("moves a registry entry's id to whatever the resolver now answers for its name", function()
+      local s = { EXORCISM = { key = "EXORCISM", id = 415072, name = "Exorcism", source = "id" } }
+      local changed = Spells.refreshRanks(s, function(name) return name == "Exorcism" and 415073 or nil end)
+      assert.equal(1, changed)
+      assert.equal(415073, s.EXORCISM.id)
+    end)
+
+    it("never touches a PACK entry, whatever the resolver answers", function()
+      local s = { EXORCISM = { key = "EXORCISM", id = 415073, name = "Exorcism", source = "pack" } }
+      local changed = Spells.refreshRanks(s, function() return 999999 end)
+      assert.equal(0, changed)
+      assert.equal(415073, s.EXORCISM.id)
+    end)
+
+    it("leaves an entry alone when the resolver answers the same id, or nothing at all", function()
+      local s = { EXORCISM = { key = "EXORCISM", id = 415073, name = "Exorcism", source = "id" } }
+      Spells.refreshRanks(s, function() return 415073 end)
+      assert.equal(415073, s.EXORCISM.id)
+      Spells.refreshRanks(s, function() return nil end)
+      assert.equal(415073, s.EXORCISM.id)
+    end)
+
+    it("answers 0 and never errors with no store or no resolver function", function()
+      assert.equal(0, Spells.refreshRanks(nil, function() return 1 end))
+      assert.equal(0, Spells.refreshRanks({ X = { id = 1, name = "X" } }, nil))
+    end)
   end)
 
   describe("list()", function()

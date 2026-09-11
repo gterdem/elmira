@@ -569,6 +569,47 @@ describe("Core.Init", function()
       NA:OnGearOrCharacterChanged()
     end)
 
+    -- AT7-D2: the SAME event, chained onto the handler already registered above -- never a second
+    -- RegisterEvent, which would silently replace it (this file's own comment on the loop above
+    -- records what that cost last time). A rank learned moves the registry entry's stored id, so a
+    -- texture/glow/sound/announcement configured on it keeps working past the rank it was set up on.
+    it("moves a registry entry's stored id to what the spellbook now answers for its name", function()
+      withAnnounce()
+      helper.load("Elmira/Core/Spells.lua")
+      ns.Adapter.forgetSpellbook = function() end
+      ns.Adapter.spellIDByName = function(name) return name == "Exorcism" and 415073 or nil end
+      NA.ScheduleTimer = function(_, fn) return "t" end
+      NA.CancelTimer = function() end
+      NA:OnInitialize()
+      ns.db.char.spells.EXORCISM = { key = "EXORCISM", id = 415072, name = "Exorcism", source = "id" }
+      NA:OnGearOrCharacterChanged()
+      assert.equal(415073, ns.db.char.spells.EXORCISM.id)
+    end)
+
+    -- A pack's own id must never be moved by this: hard rule 2, and refreshRanks' own guard.
+    it("never moves a PACK entry's stored id on the same event", function()
+      withAnnounce()
+      helper.load("Elmira/Core/Spells.lua")
+      ns.Adapter.forgetSpellbook = function() end
+      ns.Adapter.spellIDByName = function() return 999999 end
+      NA.ScheduleTimer = function(_, fn) return "t" end
+      NA.CancelTimer = function() end
+      NA:OnInitialize()
+      ns.db.char.spells.EXORCISM = { key = "EXORCISM", id = 415073, name = "Exorcism", source = "pack" }
+      NA:OnGearOrCharacterChanged()
+      assert.equal(415073, ns.db.char.spells.EXORCISM.id)
+    end)
+
+    it("copes with no Spells module loaded at all", function()
+      withAnnounce()
+      ns.Adapter.forgetSpellbook = function() end
+      ns.Adapter.spellIDByName = function() return 999999 end
+      NA.ScheduleTimer = function(_, fn) return "t" end
+      NA.CancelTimer = function() end
+      NA:OnInitialize()
+      assert.has_no.errors(function() NA:OnGearOrCharacterChanged() end)
+    end)
+
     -- Combat is the worst moment to be left with a mouse-enabled frame across screen centre.
     it("leaves move mode when a fight starts", function()
       withAnnounce()
