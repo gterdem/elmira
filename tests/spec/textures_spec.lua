@@ -108,11 +108,29 @@ describe("Display.Textures", function()
   -- ------------------------------------------------------------------ values that arrive from data
 
   describe("sizeOf / texturePath", function()
+    -- AT8-D5: the two sources share one field but a different default -- 48 for the shipped icon,
+    -- 200 for a picked file -- and the slider's own range is now 16-512.
     it("clamps a size to the slider's own range", function()
       assert.equal(48, Textures.sizeOf({}))
+      assert.equal(48, Textures.sizeOf({ source = "icon" }))
+      assert.equal(200, Textures.sizeOf({ source = "path" }))
       assert.equal(16, Textures.sizeOf({ size = 4 }))
-      assert.equal(256, Textures.sizeOf({ size = 4000 }))
+      assert.equal(512, Textures.sizeOf({ size = 4000 }))
       assert.equal(96, Textures.sizeOf({ size = 96 }))
+    end)
+
+    -- AT8-D5: switching source only touches `size` while it still holds the source it is leaving's
+    -- default -- never a size the player actually chose.
+    it("flips the size default only when the ability is still sitting on the old one", function()
+      assert.is_false(Textures.flipSize("EXORCISM", "icon", "icon"), "same source is a no-op")
+      assert.is_true(Textures.flipSize("EXORCISM", "icon", "path"))
+      assert.equal(200, A.effective("EXORCISM", "texture").size)
+      assert.is_true(Textures.flipSize("EXORCISM", "path", "icon"))
+      assert.equal(48, A.effective("EXORCISM", "texture").size)
+      -- A size the player chose is left alone.
+      A.set("JUDGEMENT", "texture", "size", 64)
+      assert.is_false(Textures.flipSize("JUDGEMENT", "icon", "path"))
+      assert.equal(64, A.effective("JUDGEMENT", "texture").size)
     end)
 
     -- AT4-D2: there is no `shape` source any more -- the shipped shapes are eight files in the

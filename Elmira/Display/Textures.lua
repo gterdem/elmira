@@ -87,17 +87,41 @@ local fillMemory = nil
 
 -- ---------------------------------------------------------------- the pure part (AB3-D2)
 
--- A size the client can actually draw, from a number that may have arrived in an import or a class
--- pack's defaults rather than from the slider (AB2-D3 opened both doors). The slider's own range,
--- so a value it cannot produce is clamped rather than trusted.
-function Textures.sizeOf(e)
-  local size = tonumber(e and e.size) or 48
-  return math.max(16, math.min(256, size))
-end
-
 local function oneOf(list, value)
   for _, v in ipairs(list) do if v == value then return true end end
   return false -- mutants: equivalent — nil is falsy and every caller uses this only as a condition
+end
+
+-- AT8-D5: the two sources share one `size` field, but a spell icon and a picked texture read very
+-- differently at the same pixel count -- 48 is what a shipped icon has always defaulted to, and
+-- 200 is a size a shape or aura texture actually reads as on screen instead of a speck.
+Textures.DEFAULT_SIZE = { icon = 48, path = 200 }
+
+-- A size the client can actually draw, from a number that may have arrived in an import or a class
+-- pack's defaults rather than from the slider (AB2-D3 opened both doors). Falls back to the SOURCE's
+-- own default -- not a single constant -- and the slider's own range (AT8-D5: 16-512) clamps
+-- whatever a value it cannot produce.
+function Textures.sizeOf(e)
+  local source = (e and oneOf(Textures.SOURCES, e.source) and e.source) or "icon"
+  local fallback = Textures.DEFAULT_SIZE[source] or Textures.DEFAULT_SIZE.icon
+  local size = tonumber(e and e.size) or fallback
+  return math.max(16, math.min(512, size))
+end
+
+-- Textures.flipSize(key, from, to) -> did it change the stored size
+--
+-- AT8-D5: switching source only touches `size` when it still holds the OTHER source's default --
+-- so a size the player actually chose (through the tab's slider or the Move toolbar's) is never
+-- overwritten, but an untouched ability picks up the new source's own sensible default instead of
+-- carrying the old one's across.
+function Textures.flipSize(key, from, to)
+  local A = ns.AbilitySettings
+  if not (A and from ~= to) then return false end
+  local fromDefault, toDefault = Textures.DEFAULT_SIZE[from], Textures.DEFAULT_SIZE[to]
+  if not (fromDefault and toDefault) then return false end
+  local current = tonumber(A.effective(key, "texture").size) or fromDefault
+  if current ~= fromDefault then return false end
+  return A.set(key, "texture", "size", toDefault)
 end
 
 -- What the fade measures. Same shape as `placementOf`, and for the same reason: a value that

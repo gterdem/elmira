@@ -1215,9 +1215,14 @@ describe("Display.Driver", function()
         assert.same({ "EXORCISM", "JUDGEMENT" }, keysOf(Display.watchedKeys()))
       end)
 
+      -- AT8-D1: never inherited any more -- writing All abilities' own row (still legal to read
+      -- back through `effective`, just never handed down) proves nothing changes for a linked
+      -- ability; only the ability's own value does.
       it("carries each ability's own expiring threshold", function()
         A.set("EXORCISM", "edge", "enabled", true)
         A.set(A.ALL, "general", "expiringSeconds", 7)
+        assert.equal(3, Display.watchedKeys()[1].expiring, "All abilities' copy must not be inherited")
+        A.set("EXORCISM", "general", "expiringSeconds", 7)
         assert.equal(7, Display.watchedKeys()[1].expiring)
       end)
 

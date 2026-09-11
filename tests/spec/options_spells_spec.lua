@@ -597,23 +597,20 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_false(A.effective("SLICE_AND_DICE", "general").onlyInCombat)
     end)
 
-    -- AT1-D1: the seconds slider leaves the per-ability General tab. All abilities keeps its own
-    -- copy here, as the inherited default; each ability's own copies live on its Sound and Texture
-    -- tabs instead, right next to the moment they gate.
-    it("keeps the expiring threshold, as a 1-15 second slider defaulting to 3, on All abilities only", function()
-      local row = tab("*", "general").expiring
-      assert.equal("range", row.type)
-      assert.equal(1, row.min)
-      assert.equal(15, row.max)
-      assert.equal(1, row.step)
-      assert.equal(3, row.get())
-      assert.equal("Warn me about to expire", row.name)
-      assert.is_truthy(row.desc:find("buff", 1, true))
-      row.set(nil, 8)
-      -- Same field everywhere: EXORCISM (still linked) reads the same 8 back.
-      assert.equal(8, A.effective("EXORCISM", "general").expiringSeconds)
-      assert.is_nil(tab("EXORCISM", "general").expiring,
-        "each ability's own copy lives on Sound and Texture instead")
+    -- AT8-D1: the threshold is per ability and never inherited any more, so All abilities has
+    -- nothing left to show for it -- its General tab keeps only "Only in combat"; each ability's
+    -- own copy lives on its Sound and Texture tabs instead, right next to the moment it gates.
+    it("has no expiring-seconds control on All abilities' General tab any more", function()
+      assert.is_nil(tab("*", "general").expiring)
+      assert.is_nil(tab("*", "general").expiringSeconds)
+      assert.is_nil(tab("EXORCISM", "general").expiring)
+      assert.is_nil(tab("EXORCISM", "general").expiringSeconds)
+      local args = tab("*", "general")
+      local names = {}
+      for k in pairs(args) do names[#names + 1] = k end
+      table.sort(names)
+      assert.same({ "head", "onlyInCombat" }, names,
+        "General for All abilities is exactly one sentence plus one toggle now")
     end)
 
     -- AB1-D6 as AB2-D2/D3 leave it: which rotations use it and what they need, plus the pack's own
@@ -1039,12 +1036,17 @@ describe("Options/Spells (the Abilities page, AB1)", function()
                     "When its buff appears", "When its buff is about to run out" },
                   { args.suggested.name, args.ready.name, args.used.name, args.active.name,
                     args.expiring.name })
+      -- AT8-D4, verbatim: "a flash" becomes "a sound", and the persistence sentence drops --
+      -- a sound plays once.
+      assert.equal("A sound when you cast it.", args.used.desc)
+      assert.is_falsy(args.suggested.desc:find("Stays", 1, true), "a sound never \"stays\"")
+      assert.is_truthy(args.active.desc:find("Avenging Wrath", 1, true))
     end)
 
-    -- AT1-D1: right after "When its buff is about to run out", greyed until a sound is actually
-    -- picked for that moment AND the ability is unlinked from All abilities on General (the field
-    -- still inherits exactly as before -- nothing else about it moved).
-    it("offers the warning threshold right after the expiring event, greyed until both are ready", function()
+    -- AT8-D1/D2: right after "When its buff is about to run out", greyed only until a sound is
+    -- actually picked for that moment -- no General-linkage gate left, since the field is per
+    -- ability and never inherited any more. Indented under its checkbox: a bare gap shares its row.
+    it("offers the warning threshold right after the expiring event, greyed until a sound is picked", function()
       local row = tab("EXORCISM", "sound").expiringSeconds
       assert.equal("range", row.type)
       assert.equal(7.5, row.order, "immediately after the expiring event select at order 7")
@@ -1052,11 +1054,17 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal(3, row.get())
       assert.is_true(row.disabled(), "no sound picked for expiring yet")
       tab("EXORCISM", "sound").expiring.set(nil, "Chime")
-      assert.is_true(tab("EXORCISM", "sound").expiringSeconds.disabled(), "still linked on General")
-      tab("EXORCISM", "general").inherit.set(nil, false)
-      assert.is_false(tab("EXORCISM", "sound").expiringSeconds.disabled())
+      assert.is_false(tab("EXORCISM", "sound").expiringSeconds.disabled(), "a sound is now picked")
       tab("EXORCISM", "sound").expiringSeconds.set(nil, 11)
       assert.equal(11, A.effective("EXORCISM", "general").expiringSeconds)
+      -- The gap that indents the slider under its checkbox: no label of its own, sharing the row.
+      local gap = tab("EXORCISM", "sound").expiringGap
+      assert.equal("description", gap.type)
+      assert.equal(7.49, gap.order, "immediately before the slider, same row")
+      assert.equal("", gap.name)
+      assert.equal("relative", gap.width)
+      assert.equal("relative", row.width)
+      assert.is_true(gap.relWidth + row.relWidth == 1, "the two sum to a full row")
     end)
 
     it("plays the sound the moment it is picked, having stored it first", function()
@@ -1272,13 +1280,14 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(tab("EXORCISM", "texture").missing.hidden())
     end)
 
-    it("sizes between 16 and 256 in steps of 8, starting at 48", function()
+    -- AT8-D5: 16-512 now, one step throughout (AceConfig's range widget takes a single step).
+    it("sizes between 16 and 512 in steps of 8, starting at 48", function()
       local row = tab("EXORCISM", "texture").size
       assert.equal("range", row.type)
       assert.equal(7, row.order)
       assert.equal("Size", row.name)
       assert.is_truthy(row.desc:find("in pixels", 1, true))
-      assert.same({ 16, 256, 8 }, { row.min, row.max, row.step })
+      assert.same({ 16, 512, 8 }, { row.min, row.max, row.step })
       assert.equal(48, row.get())
       row.set(nil, 120)
       assert.equal(120, row.get())
@@ -1322,17 +1331,18 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_false(args.ready.get())
       assert.is_false(args.used.get())
       assert.is_false(args.expiring.get())
-      -- and the two kinds say which they are
-      assert.is_truthy(args.suggested.desc:find("Stays on screen", 1, true))
-      assert.is_truthy(args.used.desc:find("second and a half", 1, true))
+      -- AT8-D4, verbatim: the two kinds say which they are, and `active` says which abilities it
+      -- can ever apply to.
+      assert.is_truthy(args.suggested.desc:find("Stays as long as that holds", 1, true))
+      assert.is_truthy(args.ready.desc:find("second and a half", 1, true))
+      assert.is_truthy(args.active.desc:find("Avenging Wrath", 1, true))
       args.ready.set(nil, true)
       assert.is_true(A.effective("EXORCISM", "texture").ready)
     end)
 
-    -- AT1-D1: the warning threshold's per-ability copy, right after the "about to run out" checkbox,
-    -- greyed until that checkbox is ticked -- AND while General still says "Same as All abilities",
-    -- since general.expiringSeconds inherits exactly as before and a write while linked would
-    -- silently vanish into what All abilities holds.
+    -- AT8-D1/D2: the warning threshold's per-ability copy, right after the "about to run out"
+    -- checkbox -- no General-linkage gate left, only the two gates this tab itself owns (switched
+    -- on, and the moment ticked).
     it("offers the warning threshold right after the about-to-run-out checkbox, greyed until both are ready",
       function()
         local args = tab("EXORCISM", "texture")
@@ -1345,24 +1355,29 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         assert.equal(1, row.step)
         assert.equal(3, row.get())
         assert.is_true(row.disabled(), "the texture is switched off by default")
-        -- AT6-D1: off means off, so the switch at the top of the tab is the first of the three
+        -- AT6-D1: off means off, so the switch at the top of the tab is the first of the two
         -- gates this control sits behind.
         args.enabled.set(nil, true)
         assert.is_true(tab("EXORCISM", "texture").expiringSeconds.disabled(),
           "the expiring checkbox is off by default")
         tab("EXORCISM", "texture").expiring.set(nil, true)
-        assert.is_true(tab("EXORCISM", "texture").expiringSeconds.disabled(),
-          "still linked to All abilities on General")
-        tab("EXORCISM", "general").inherit.set(nil, false)
-        assert.is_false(tab("EXORCISM", "texture").expiringSeconds.disabled())
+        assert.is_false(tab("EXORCISM", "texture").expiringSeconds.disabled(), "both gates are clear")
         tab("EXORCISM", "texture").expiringSeconds.set(nil, 9)
         assert.equal(9, A.effective("EXORCISM", "general").expiringSeconds)
         -- The same field the Sound tab reads and writes, for the same ability.
         assert.equal(9, tab("EXORCISM", "sound").expiringSeconds.get())
+        -- AT8-D2: the gap that indents it under its checkbox, sharing the row.
+        local gap = tab("EXORCISM", "texture").expiringGap
+        assert.equal("description", gap.type)
+        assert.equal(14.49, gap.order, "immediately before the slider, same row")
+        assert.equal("relative", gap.width)
+        assert.equal("relative", row.width)
+        assert.is_true(gap.relWidth + row.relWidth == 1, "the two sum to a full row")
       end)
 
     -- AT5-D1/D2: "Fill with" (the radial swipe) becomes "Fade with" (an opacity), and moves BELOW
     -- the five moments -- order 16 sits after `expiringSeconds` (14.5), the last of them.
+    -- AT8-D3 shortens the three values to Nothing / Cooldown / Buff.
     it("offers the three fades below the five moments", function()
       local row = tab("EXORCISM", "texture").fill
       assert.equal("select", row.type)
@@ -1370,20 +1385,21 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("Fade with", row.name)
       assert.same({ "none", "cooldown", "buff" }, row.sorting)
       assert.equal("Nothing", row.values.none)
-      assert.equal("How much cooldown is left", row.values.cooldown)
-      assert.equal("How much of its buff is left", row.values.buff)
+      assert.equal("Cooldown", row.values.cooldown)
+      assert.equal("Buff", row.values.buff)
       assert.equal("none", row.get())
       row.set(nil, "cooldown")
       assert.equal("cooldown", A.effective("EXORCISM", "texture").fill)
       assert.equal("cooldown", tab("EXORCISM", "texture").fill.get())
     end)
 
-    -- AT5-D2's tooltip, verbatim: which pairing makes sense, and why an instant moment does not.
+    -- AT8-D3's tooltip, verbatim (owner's wording): which pairing makes sense.
     it("names the pairs that make sense in the tooltip", function()
       local row = tab("EXORCISM", "texture").fill
       assert.equal(
-        "Buff remaining pairs with \"when its buff appears\"; Cooldown recovering pairs with "
-          .. "\"when it is suggested\". An instant moment flashes for 1.5 s, too short to see a fade.",
+        "Cooldown: faint after the cast, brightening as it recovers \226\128\148 pairs with "
+          .. "\"when it is suggested\". Buff: full when the buff appears, fading as it runs out "
+          .. "\226\128\148 pairs with \"when its buff appears\".",
         row.desc)
     end)
 
@@ -1412,7 +1428,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         args.enabled.set(nil, true)
         local on = tab("EXORCISM", "texture")
         for _, field in ipairs(greyed) do
-          if field ~= "expiringSeconds" then   -- two more gates of its own, tested above
+          if field ~= "expiringSeconds" then   -- one more gate of its own (AT8-D2), tested above
             assert.is_false(on[field].disabled(), field .. " stayed greyed with the texture on")
           end
         end
@@ -1460,10 +1476,13 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_nil(entry("*").args.texture)
     end)
 
-    it("offers Move This Texture always, and drives the mode", function()
+    -- AT8-D6: renamed "Move texture" and moved to the top of the tab, directly under the switch and
+    -- before the own-icon toggle -- left-aligned, alone on its own row.
+    it("offers Move texture at the top of the tab, and drives the mode", function()
       local args = tab("EXORCISM", "texture")
       assert.equal("execute", args.move.type)
-      assert.equal(20, args.move.order)
+      assert.equal(2.5, args.move.order, "directly under the switch (2), before own-icon (3)")
+      assert.is_nil(args.move.width, "left-aligned: no relative width sharing its row with anything")
       assert.is_nil(args.move.hidden, "the button used to appear only for a custom placement")
       assert.is_truthy(args.move.desc:find("offset from the centre of the screen", 1, true))
 
@@ -1471,7 +1490,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       ns.Textures.movingKey = function() return key end
       ns.Textures.StartMove = function(k) calls[#calls + 1] = "start"; key = k; return true end
       ns.Textures.StopMoveMode = function() calls[#calls + 1] = "stop"; key = nil; return true end
-      assert.equal("Move This Texture", tab("EXORCISM", "texture").move.name())
+      assert.equal("Move texture", tab("EXORCISM", "texture").move.name())
       tab("EXORCISM", "texture").move.func()
       assert.same({ "start" }, calls)
       assert.equal("Done Moving", tab("EXORCISM", "texture").move.name())
@@ -1484,19 +1503,19 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(pcall(function() tab("EXORCISM", "texture").move.func() end))
     end)
 
-    -- AT6-D6: right-aligned on the Move row. Only a Button fills its cell in AceGUI's Flow layout,
-    -- so a row that ends flush right has to END with the button and be padded in front of it --
-    -- and the three relative widths have to sum to exactly 1.0 or the row wraps.
-    it("puts Reset at the right-hand end of the Move row", function()
+    -- AT8-D6: Reset stays at the bottom, on its own row now that Move has moved to the top -- padded
+    -- from the left so it still lands flush right, the same "only a Button fills its cell" trick.
+    it("puts Reset at the right-hand end of its own row, at the bottom", function()
       local args = tab("EXORCISM", "texture")
-      assert.equal("relative", args.move.width)
-      assert.equal("description", args.moveGap.type)
-      assert.equal("", args.moveGap.name)
+      assert.equal("description", args.resetGap.type)
+      assert.equal("", args.resetGap.name)
       assert.equal("execute", args.reset.type)
       assert.equal("Reset", args.reset.name)
-      assert.same({ 20, 21, 22 }, { args.move.order, args.moveGap.order, args.reset.order })
-      assert.equal(1.0, args.move.relWidth + args.moveGap.relWidth + args.reset.relWidth)
-      assert.is_true(args.reset.relWidth < args.move.relWidth)
+      assert.equal("relative", args.resetGap.width)
+      assert.equal("relative", args.reset.width)
+      assert.same({ 21, 22 }, { args.resetGap.order, args.reset.order })
+      assert.equal(1.0, args.resetGap.relWidth + args.reset.relWidth)
+      assert.is_true(args.reset.relWidth < args.resetGap.relWidth, "reset is the narrower of the two")
     end)
 
     -- AT6-D6, confirm-gated like All abilities > Glow's reset: this throws away everything the
@@ -1627,6 +1646,15 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_false(tab("EXORCISM", "edge").ready.get())
       tab("EXORCISM", "edge").ready.set(nil, true)
       assert.is_true(A.effective("EXORCISM", "edge").ready)
+    end)
+
+    -- AT8-D4, verbatim: "a flash" becomes "a screen-edge flash", and the persistence sentence
+    -- drops -- a screen flash is always an instant.
+    it("names the two boxes with the owner's wording", function()
+      local args = tab("EXORCISM", "edge")
+      assert.equal("A screen-edge flash of a second and a half when its cooldown finishes.",
+        args.ready.desc)
+      assert.is_falsy(args.suggested.desc:find("Stays", 1, true), "a flash never \"stays\"")
     end)
 
     -- AB1-D4/ADR-0009/AT1-D2: the ON switch is per ability and is never inherited, so All abilities

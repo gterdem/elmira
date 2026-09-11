@@ -180,6 +180,20 @@ describe("Core.AbilitySettings", function()
       assert.is_true(A.inherits("EXORCISM", "glow"))
     end)
 
+    -- AT8-D1: the warning threshold joins OWN for the general channel specifically -- General still
+    -- inherits `onlyInCombat` from All abilities (the channel-level `inherits` above stays true),
+    -- but this one field never does, even while linked.
+    it("never inherits the expiring-seconds threshold, though General still inherits everything else", function()
+      A.set(A.ALL, "general", "expiringSeconds", 9)
+      assert.equal(3, A.effective("EXORCISM", "general").expiringSeconds,
+        "still the shipped default, not All abilities' own copy")
+      A.set(A.ALL, "general", "onlyInCombat", true)
+      assert.is_true(A.effective("EXORCISM", "general").onlyInCombat, "onlyInCombat still inherits")
+      A.set("EXORCISM", "general", "expiringSeconds", 11)
+      assert.equal(11, A.effective("EXORCISM", "general").expiringSeconds)
+      assert.equal(3, A.effective("JUDGEMENT", "general").expiringSeconds, "neighbour untouched")
+    end)
+
     -- ADR-0009's reason: a cue that fires on everything strobes. This is the assertion the decision
     -- asks for by name -- an ability cannot be switched on by the All abilities entry.
     it("never lets All abilities switch a screen-edge, sound, texture or announcement ON", function()

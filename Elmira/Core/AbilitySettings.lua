@@ -95,7 +95,14 @@ AbilitySettings.DEFAULTS = DEFAULTS
 -- AT1-D2 removes even the appearance inheritance for these four: nothing in `OWN` matters for them
 -- any more since `AbilitySettings.inherits` now refuses to inherit ANY field of a CUE_CHANNEL. The
 -- table stays as the record of what was per-ability even while the rest of a channel still inherited.
-local OWN = { texture = { enabled = true, x = true, y = true }, edge = { enabled = true },
+--
+-- AT8-D1: `general.expiringSeconds` joins this table too. General still inherits everything else
+-- (`onlyInCombat`) from All abilities, but the warning threshold is a fact about one ability's own
+-- Sound and Texture tabs and must never vanish into what All abilities holds -- the exact silent
+-- failure this project keeps refusing to ship. All abilities no longer offers a control for it at
+-- all (Options/Spells.lua), so nothing can even write to the layer this bypasses any more.
+local OWN = { general = { expiringSeconds = true },
+              texture = { enabled = true, x = true, y = true }, edge = { enabled = true },
               sound = { enabled = true }, announce = { enabled = true } }
 
 AbilitySettings.CHANNELS = { "general", "glow", "texture", "edge", "sound", "announce" }

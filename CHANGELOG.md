@@ -1,5 +1,18 @@
 # Changelog
 ## Unreleased
+- **Changed: the "about to run out" warning is per ability now, never inherited.** Its slider sits
+  directly under the checkbox it gates, on the Texture tab and the Sound tab. All abilities' own
+  copy is gone, so its General tab is just "Only in combat".
+- **Changed: clearer tooltips for the five moments** (suggested, ready, used, active, about to
+  expire) on the Texture, Sound and Screen-edge tabs, saying what each one actually shows.
+- **Changed: "Fade with" reads Nothing / Cooldown / Buff**, with the explanation moved into its
+  tooltip.
+- **Changed: Size on the Texture tab now runs 16-512**, and defaults to 48 with your own icon or
+  200 with a picked texture -- switching between them only moves a size you have not touched
+  yourself.
+- **Changed: "Move This Texture" is now "Move texture"**, moved to the top of the Texture tab,
+  directly under the switch, so you can judge a texture at its real size before touching anything
+  else about it.
 - **New: a Blend mode on the Texture tab**, Opaque or Glow, the same two WeakAuras offers. Glow adds
   the texture's light to what is behind it, which is what aura art is drawn for. Default Opaque.
 - **Fixed: an ability's settings follow every rank of the spell.** Adding a rank of an ability

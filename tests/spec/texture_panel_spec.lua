@@ -15,7 +15,7 @@ local ace3 = require("tests.ace3")
 -- is or is not shown, the path the ability draws. "SetCustomData was called" is not evidence that
 -- anything was drawn.
 describe("the texture picker window", function()
-  local ns, Panel, A, refreshes, fired
+  local ns, Panel, A, refreshes, fired, flips
 
   -- Every cell the grid is currently showing, in order -- the widget pools them, so a cell that was
   -- used for a previous category and hidden must not count.
@@ -54,6 +54,7 @@ describe("the texture picker window", function()
     refreshes, fired = 0, {}
     -- Display/Textures itself is exercised by its own spec; what this window needs from it is the
     -- category list, the repaint and the test-fire -- the three things a click is supposed to reach.
+    flips = {}
     ns.Textures = {
       DEFAULT_PATH = "Interface\\AddOns\\Elmira\\media\\shape_ring",
       libraryGroups = function()
@@ -62,6 +63,9 @@ describe("the texture picker window", function()
       Refresh = function() refreshes = refreshes + 1 end,
       TestFire = function(key) fired[#fired + 1] = key end,
       movingKey = function() return nil end,
+      -- AT8-D5: the real implementation lives in Display/Textures, its own spec; what this window
+      -- needs to prove is that it is ASKED, and asked with the source the ability was actually on.
+      flipSize = function(key, from, to) flips[#flips + 1] = { key, from, to } end,
     }
     ns.Display = { spellName = function(key) return "Name of " .. key end }
 
@@ -125,6 +129,19 @@ describe("the texture picker window", function()
       -- something for the case the picker is most used in.
       assert.same({ "EXORCISM" }, fired)
       assert.same({ "Interface\\AddOns\\Elmira\\media\\shape_diamond" }, selectedPaths())
+      -- AT8-D5: picking a texture out of the icon default is a source change, asked of Textures
+      -- the same way the tab's own toggle is.
+      assert.same({ { "EXORCISM", "icon", "path" } }, flips)
+    end)
+
+    -- AT8-D5: browsing between two files the ability is already drawing one of is not a source
+    -- change -- the ability was on `path` before the click and is on `path` after it.
+    it("asks for no size flip when the ability was already on a path", function()
+      A.set("EXORCISM", "texture", "source", "path")
+      A.set("EXORCISM", "texture", "path", "165558")
+      Panel.Open("EXORCISM")
+      cells()[4]:Click()
+      assert.same({ { "EXORCISM", "path", "path" } }, flips)
     end)
 
     it("does not flash a texture that is already on screen being dragged", function()

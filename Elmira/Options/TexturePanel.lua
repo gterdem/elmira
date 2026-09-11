@@ -94,7 +94,13 @@ end
 local function applyPath(path)
   local A = AS()
   if not (A and activeKey) then return false end
+  -- AT8-D5: the other trigger the decision names for the size-default swap, alongside the tab's own
+  -- icon toggle -- picking a texture out of the icon default is exactly as much a source change as
+  -- unticking the box is, and `flipSize` is a no-op the moment the ability is already on a path (the
+  -- common case of browsing between two files).
+  local from = (A.effective(activeKey, "texture").source == "icon") and "icon" or "path"
   A.set(activeKey, "texture", "source", "path")
+  if ns.Textures and ns.Textures.flipSize then ns.Textures.flipSize(activeKey, from, "path") end
   A.set(activeKey, "texture", "path", path)
   local T = ns.Textures
   if not T then return true end

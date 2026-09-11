@@ -1611,7 +1611,9 @@ local function moveBarFrame()
   end)
   f.elmiraChoose = choose
 
-  local size = toolSlider(f, "ElmiraMoveBarSize", L["Size"], 16, 256, 8, "%s: %d", "size")
+  -- AT8-D5: the same 16-512 range the Texture tab's own slider offers, so dragging the toolbar's
+  -- can never write a size that tab would clamp back down the next time it is opened.
+  local size = toolSlider(f, "ElmiraMoveBarSize", L["Size"], 16, 512, 8, "%s: %d", "size")
   size:SetPoint("LEFT", choose, "RIGHT", 20, 0)
   f.elmiraSize = size
 

@@ -364,26 +364,29 @@ local function effective(key, channel)
   return (A and A.effective(key, channel)) or {}
 end
 
--- AT1-D1: the "about to run out" warning threshold. One field (`general.expiringSeconds`, which
--- still inherits from All abilities exactly as every other General field does -- nothing about
--- that moved), shown on the Sound tab and the Texture tab -- the two that actually have an "about
--- to run out" moment -- immediately after that moment's own control, and (as the inherited
--- default) on All abilities' General tab. Same field everywhere, so changing it on one shows on
--- the other. A per-ability copy is greyed while that ability is still linked to All abilities on
--- General -- exactly like "Only in combat" beside it -- AND while its own tab's moment is not live;
--- writing while linked would silently vanish into what All abilities holds, which is the one
--- failure shape this project keeps refusing to ship again.
-local function expiringArgs(key, order, extraDisabled)
-  return {
+-- AT8-D1: the "about to run out" warning threshold is per ability now and never inherited --
+-- `general.expiringSeconds` joined `AbilitySettings`'s `OWN` table, so it is always this ability's
+-- own value regardless of what "Same as All abilities" says on its General tab. One field, read and
+-- written by both the Sound tab and the Texture tab -- the two that actually have an "about to run
+-- out" moment -- so changing it on one shows on the other. All abilities no longer carries a copy
+-- of its own (there is nothing left for a per-ability copy to inherit).
+--
+-- AT8-D2: the slider is enabled exactly when the tab's own "about to run out" moment is live -- no
+-- other gate -- and sits directly under that moment's own control, indented: a bare gap (`args`'
+-- other new key) shares its row, relWidth 0.06 then 0.94, so the checkbox above and the slider read
+-- as one control without the label text itself carrying any indent marks.
+local EXPIRING_GAP_WIDTH, EXPIRING_SLIDER_WIDTH = 0.06, 0.94
+
+local function expiringArgs(key, args, order, disabled)
+  args.expiringGap = { type = "description", order = order - 0.01, width = "relative",
+                       relWidth = EXPIRING_GAP_WIDTH, name = "" }
+  args.expiringSeconds = {
     type = "range", order = order, name = L["Warn me about to expire"],
+    width = "relative", relWidth = EXPIRING_SLIDER_WIDTH,
     min = 1, max = 15, step = 1,
     desc = L["Only fires for an ability whose buff is actually on you -- one that never has a buff "
           .. "of its own, like Exorcism or Judgement, never sees it."],
-    disabled = function()
-      local A = AS()
-      if A and A.inherits(key, "general") then return true end
-      return extraDisabled ~= nil and extraDisabled() or false
-    end,
+    disabled = disabled,
     get = function() return effective(key, "general").expiringSeconds or 3 end,
     set = function(_, v) put(key, "general", "expiringSeconds", v) end,
   }
@@ -522,6 +525,18 @@ local EVENT_LABELS = { suggested = "When it is suggested", ready = "When it come
                        used = "When you use it", active = "When its buff appears",
                        expiring = "When its buff is about to run out" }
 
+-- AT8-D4, verbatim (owner's wording). The Texture tab's own copy sits with its toggles below;
+-- Sound's reads "a sound" where Texture reads "a flash", and drops the persistence sentence -- a
+-- sound plays once, it never "stays".
+local SOUND_EVENT_DESC = {
+  suggested = "While the rotation has this ability in the first slot.",
+  ready = "A sound when its cooldown finishes.",
+  used = "A sound when you cast it.",
+  active = "While the buff it puts on you is up. Only for abilities that give you a buff: seals, "
+        .. "blessings, Avenging Wrath, Holy Shield.",
+  expiring = "A sound when that buff has only a few seconds left. The number below says how many.",
+}
+
 local function soundArgs(key)
   -- AT1-D2: per ability only -- never built for `*`, and nothing left here to inherit.
   local args = {}
@@ -537,6 +552,7 @@ local function soundArgs(key)
   for i, event in ipairs((A and A.EVENTS) or {}) do
     args[event] = {
       type = "select", order = 2 + i, name = L[EVENT_LABELS[event] or event],
+      desc = L[SOUND_EVENT_DESC[event]],
       values = function() return (ns.Sounds and ns.Sounds.list()) or { None = "None" } end,
       get = function() return effective(key, "sound")[event] or "None" end,
       set = function(_, v)
@@ -547,9 +563,9 @@ local function soundArgs(key)
       end,
     }
   end
-  -- AT1-D1, right after "When its buff is about to run out": greyed until a sound is actually
+  -- AT8-D2, right after "When its buff is about to run out": greyed until a sound is actually
   -- picked for that moment -- switching a threshold nothing plays at is not a live control.
-  args.expiringSeconds = expiringArgs(key, 7.5, function()
+  expiringArgs(key, args, 7.5, function()
     return (effective(key, "sound").expiring or "None") == "None"
   end)
   return args
@@ -584,10 +600,21 @@ end
 -- draw them -- so adding one there cannot leave an unnamed entry here. AT4-D2 took the Source and
 -- Shape dropdowns off this tab entirely: the question is now a tick box ("its own icon?") and, when
 -- that is off, one file path with a Choose… button beside it.
--- AT5-D1. Worded as what the fade MEASURES, not as what it looks like: "radial progress" tells a
--- player nothing about which of their two timers they are about to see.
-local FILL_LABELS = { none = "Nothing", cooldown = "How much cooldown is left",
-                      buff = "How much of its buff is left" }
+-- AT8-D3: short values now -- Nothing / Cooldown / Buff. The tooltip on the control itself (below)
+-- keeps the explanation AT5-D1 put here about what each one measures.
+local FILL_LABELS = { none = "Nothing", cooldown = "Cooldown", buff = "Buff" }
+
+-- AT8-D4, verbatim (owner's wording): what each moment actually shows and, for `active`, which
+-- abilities it can ever fire for at all -- said here because on this tab a texture flash or hold is
+-- the whole of what the moment means.
+local TEXTURE_EVENT_DESC = {
+  suggested = "While the rotation has this ability in the first slot. Stays as long as that holds.",
+  ready = "A flash of a second and a half when its cooldown finishes.",
+  used = "A flash when you cast it.",
+  active = "While the buff it puts on you is up. Stays as long as the buff lasts. Only for abilities "
+        .. "that give you a buff: seals, blessings, Avenging Wrath, Holy Shield.",
+  expiring = "A flash when that buff has only a few seconds left. The number below says how many.",
+}
 
 local function labelled(list, labels)
   local out = {}
@@ -622,10 +649,11 @@ local function textureOff(key)
   return function() return not (A and A.channelOn(key, "texture")) end
 end
 
--- How wide the Reset button at the right end of the Move row is (AT6-D6), and the gap that pushes
--- it there. `width = "relative"` with relWidths summing to 1.0 is the only shape AceGUI's Flow
--- layout scales to the row; only a Button fills its cell, which is why the filler is a description.
-local TEXTURE_MOVE_WIDTH, TEXTURE_GAP_WIDTH, TEXTURE_RESET_WIDTH = 0.35, 0.4, 0.25
+-- How wide the Reset button at the right end of its own row is (AT6-D6, AT8-D6), and the gap that
+-- pushes it there. `width = "relative"` with relWidths summing to 1.0 is the only shape AceGUI's
+-- Flow layout scales to the row; only a Button fills its cell, which is why the filler is a
+-- description.
+local TEXTURE_RESET_WIDTH = 0.25
 
 local function textureArgs(key)
   -- AT1-D2: per ability only -- never built for `*`, and nothing left here to inherit.
@@ -639,6 +667,22 @@ local function textureArgs(key)
     get = function() return effective(key, "texture").enabled == true end,
     set = function(_, v) put(key, "texture", "enabled", v) end,
   }
+  -- AT8-D6 (owner): moved to the top, directly under the switch and before the own-icon toggle --
+  -- where a player looks for it first, since judging a texture only makes sense once it is on
+  -- screen at its real size. Left-aligned: alone on its row, unlike Reset below, nothing needs a
+  -- relative width to push it anywhere.
+  args.move = {
+    type = "execute", order = 2.5, disabled = off,
+    name = function()
+      return movingTexture(key) and L["Done Moving"] or L["Move texture"]
+    end,
+    desc = L["Puts this texture on screen on its own and lets you drag it. Where you drop it is "
+          .. "remembered as an offset from the centre of the screen."],
+    func = function()
+      if not ns.Textures then return end
+      if movingTexture(key) then ns.Textures.StopMoveMode() else ns.Textures.StartMove(key) end
+    end,
+  }
   -- AT4-D2, and the whole of the source question: the ability's own spell icon, or a file. Ships
   -- ticked, because the spell icon is what a texture has always defaulted to and is what almost
   -- everybody wants -- the file field below only appears for the people who do not.
@@ -649,17 +693,28 @@ local function textureArgs(key)
           .. "Blizzard's own art, or any texture file you have."],
     get = function() return sourceOf(key) == "icon" end,
     set = function(_, v)
+      -- AT8-D5: the two sources share one `size` field but read differently at the same number --
+      -- an icon at 200px swallows the button it sits on, a shape at 48px is a speck next to the
+      -- ring drawn at its intended size. Flipping the source swaps the default too, but ONLY while
+      -- `size` still holds the source it is leaving's default: a size the player actually chose is
+      -- never overwritten. `restyle` runs once at the end -- not through `put` alone -- so the held
+      -- preview (AT6-D5) repaints at the flipped size instead of one tick behind it.
+      local from = sourceOf(key)
       if v then
         put(key, "texture", "source", "icon")
-        return
+        if ns.Textures and ns.Textures.flipSize then ns.Textures.flipSize(key, from, "icon") end
+      else
+        put(key, "texture", "source", "path")
+        if ns.Textures and ns.Textures.flipSize then ns.Textures.flipSize(key, from, "path") end
+        -- The ring, so unticking the box draws something recognisable straight away instead of
+        -- leaving an empty field and a texture that looks broken. Only when nothing was chosen
+        -- before: a player who picked a file, ticked the box and changed their mind gets theirs
+        -- back.
+        if (effective(key, "texture").path or "") == "" then
+          put(key, "texture", "path", (ns.Textures and ns.Textures.DEFAULT_PATH) or "")
+        end
       end
-      put(key, "texture", "source", "path")
-      -- The ring, so unticking the box draws something recognisable straight away instead of
-      -- leaving an empty field and a texture that looks broken. Only when nothing was chosen
-      -- before: a player who picked a file, ticked the box and changed their mind gets theirs back.
-      if (effective(key, "texture").path or "") == "" then
-        put(key, "texture", "path", (ns.Textures and ns.Textures.DEFAULT_PATH) or "")
-      end
+      restyle()
     end,
   }
   args.path = {
@@ -725,8 +780,11 @@ local function textureArgs(key)
     name = ns.Colors.wrap(ns.Colors.WARN,
       L["Nothing to draw -- Elmira falls back to the ring. Check the file, or pick another."]),
   }
+  -- AT8-D5: 16-512 now (a path texture wants room an icon never did), one step throughout --
+  -- AceConfig's range widget takes a single step for its whole span, so 8 is what the decision's own
+  -- fallback allows rather than a custom widget for a cosmetic slider.
   args.size = {
-    type = "range", order = 7, name = L["Size"], min = 16, max = 256, step = 8, disabled = off,
+    type = "range", order = 7, name = L["Size"], min = 16, max = 512, step = 8, disabled = off,
     desc = L["How big the texture is, in pixels."],
     get = function() return (ns.Textures and ns.Textures.sizeOf(effective(key, "texture"))) or 48 end,
     set = function(_, v) put(key, "texture", "size", v) end,
@@ -766,16 +824,16 @@ local function textureArgs(key)
     args[event] = {
       type = "toggle", order = 9 + i, width = "full", name = L[EVENT_LABELS[event] or event],
       disabled = off,
-      desc = (ns.Textures and ns.Textures.HELD[event])
-        and L["Stays on screen for as long as this is true."]
-        or L["Appears for a second and a half."],
+      -- AT8-D4, verbatim (owner's wording): explains what the moment actually shows, not just how
+      -- long -- "active" in particular says which abilities it applies to at all.
+      desc = L[TEXTURE_EVENT_DESC[event]],
       get = function() return effective(key, "texture")[event] == true end,
       set = function(_, v) put(key, "texture", event, v) end,
     }
   end
-  -- AT1-D1, right after "When its buff is about to run out": greyed until that checkbox is
+  -- AT8-D2, right after "When its buff is about to run out": greyed until that checkbox is
   -- actually ticked -- a threshold nothing uses is not a live control.
-  args.expiringSeconds = expiringArgs(key, 14.5, function()
+  expiringArgs(key, args, 14.5, function()
     return off() or effective(key, "texture").expiring ~= true
   end)
   -- AT5-D1/D2 (owner, seeing the swipe draw a PowerAuras-style dark box: "not clockwise or
@@ -786,34 +844,24 @@ local function textureArgs(key)
     type = "select", order = 16, name = L["Fade with"], disabled = off,
     values = labelled(textureList("FILLS"), FILL_LABELS),
     sorting = textureList("FILLS"),
-    desc = L["Buff remaining pairs with \"when its buff appears\"; Cooldown recovering pairs with "
-          .. "\"when it is suggested\". An instant moment flashes for 1.5 s, too short to see a "
-          .. "fade."],
+    -- AT8-D3, verbatim (owner's wording).
+    desc = L["Cooldown: faint after the cast, brightening as it recovers — pairs with "
+          .. "\"when it is suggested\". Buff: full when the buff appears, fading as it runs out "
+          .. "— pairs with \"when its buff appears\"."],
     get = function() return (ns.Textures and ns.Textures.fillOf(effective(key, "texture"))) or "none" end,
     set = function(_, v) put(key, "texture", "fill", v) end,
   }
   -- AT6-D4 took the Position dropdown with the indicator row: a texture starts at the centre of
-  -- the screen and this button is the only thing that moves it, so there is no longer a setting
-  -- that can disagree with where it was dropped. AT6-D5 took the Preview button: the texture is on
-  -- screen for as long as this tab is, so there is nothing left to ask for.
-  args.move = {
-    type = "execute", order = 20, width = "relative", relWidth = TEXTURE_MOVE_WIDTH,
-    disabled = off,
-    name = function()
-      return movingTexture(key) and L["Done Moving"] or L["Move This Texture"]
-    end,
-    desc = L["Puts this texture on screen on its own and lets you drag it. Where you drop it is "
-          .. "remembered as an offset from the centre of the screen."],
-    func = function()
-      if not ns.Textures then return end
-      if movingTexture(key) then ns.Textures.StopMoveMode() else ns.Textures.StartMove(key) end
-    end,
-  }
-  -- Nothing but the room that pushes Reset to the right-hand end of the Move row: a toggle or a
-  -- label hugs the left of its cell, and only a Button fills one, so a row that ends flush right
-  -- has to end with the button and be padded in front of it.
-  args.moveGap = {
-    type = "description", order = 21, width = "relative", relWidth = TEXTURE_GAP_WIDTH, name = "",
+  -- the screen and Move (now at the top of the tab, AT8-D6) is the only thing that moves it, so
+  -- there is no longer a setting that can disagree with where it was dropped. AT6-D5 took the
+  -- Preview button: the texture is on screen for as long as this tab is, so there is nothing left
+  -- to ask for.
+  --
+  -- AT8-D6: Reset stays down here on its own now that Move has moved to the top -- padded from the
+  -- left so it still lands flush right, the same "only a Button fills its cell" trick the row used
+  -- while it shared it with Move.
+  args.resetGap = {
+    type = "description", order = 21, width = "relative", relWidth = 1 - TEXTURE_RESET_WIDTH, name = "",
   }
   -- AT6-D6, confirm-gated like All abilities > Glow's own reset and implemented the same way:
   -- DELETING the stored channel rather than writing the defaults into it, so "never chosen" is the
@@ -871,6 +919,14 @@ end
 -- Texture tab is for (AB3).
 local EDGE_EVENT_LABELS = { suggested = "When it is suggested", ready = "When it comes off cooldown" }
 
+-- AT8-D4, verbatim (owner's wording), rewritten for this channel exactly as the decision names:
+-- "a flash" becomes "a screen-edge flash", and the persistence sentence drops -- a screen flash is
+-- always an instant, never a held state.
+local EDGE_EVENT_DESC = {
+  suggested = "While the rotation has this ability in the first slot.",
+  ready = "A screen-edge flash of a second and a half when its cooldown finishes.",
+}
+
 local function edgeArgs(key)
   -- AT1-D2: per ability only -- never built for `*`, and nothing left here to inherit.
   local args = {}
@@ -909,6 +965,7 @@ local function edgeArgs(key)
   for i, event in ipairs((ns.Overlay and ns.Overlay.EVENTS) or {}) do
     args[event] = {
       type = "toggle", order = 5 + i, width = "full", name = L[EDGE_EVENT_LABELS[event] or event],
+      desc = L[EDGE_EVENT_DESC[event]],
       get = function() return effective(key, "edge")[event] == true end,
       set = function(_, v) put(key, "edge", event, v) end,
     }
@@ -1090,14 +1147,9 @@ local function generalArgs(key, entry, rotations, p)
     get = function() return effective(key, "general").onlyInCombat == true end,
     set = function(_, v) put(key, "general", "onlyInCombat", v) end,
   }
-  -- AT1-D1: All abilities keeps ITS OWN copy of the warning threshold here, as the inherited
-  -- default -- the per-ability copies live on the Sound and Texture tabs instead, right next to the
-  -- moment they gate. "Position the Indicators" used to sit beside it; AT6-D4 removed the indicator
-  -- row it positioned, so each texture is now dragged from its own tab and there is nothing shared
-  -- left to place.
-  if key == ALL then
-    args.expiring = expiringArgs(key, 6)
-  end
+  -- AT8-D1: the warning threshold is per ability and never inherited now, so All abilities has
+  -- nothing left to offer here -- its General tab keeps only "Only in combat". The per-ability
+  -- copies live on the Sound and Texture tabs, right next to the moment they gate.
   return args
 end
 

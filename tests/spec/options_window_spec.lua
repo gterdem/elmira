@@ -1642,7 +1642,8 @@ describe("Options window", function()
         assert.equal(96, b.elmiraSize.value)
         assert.equal(0.4, b.elmiraAlpha.value)
         assert.same({ 0.2, 0.4, 0.9, 1 }, b.elmiraSwatch.elmiraFill.colorTexture)
-        assert.same({ 16, 256 }, b.elmiraSize.range)
+        -- AT8-D5: the toolbar's own slider follows the tab's new 16-512 range.
+        assert.same({ 16, 512 }, b.elmiraSize.range)
         assert.same({ 0.05, 1 }, b.elmiraAlpha.range)
         for _, region in ipairs(b.elmiraTools) do
           assert.is_false(region.hidden, "a toolbar control was left off the bar")
