@@ -710,13 +710,25 @@ describe("Core.Slash", function()
       assert.is_false(hasLineMatching(lines, "MISMATCH"))
     end)
 
+    it("calls a pack entry on another rank expected, not a mismatch, and says when a spell is not known", function()
+      _G.__ELM_NS.db = { char = { spells = {
+        HOLY_SHOCK = { key = "HOLY_SHOCK", id = 20473, name = "Holy Shock", source = "pack" },
+        HOLY_SHIELD = { key = "HOLY_SHIELD", id = 20928, name = "Holy Shield", source = "pack" },
+      } } }
+      _G.__ELM_NS.Adapter.spellIDByName = function(name) return name == "Holy Shock" and 20930 or nil end
+      local lines = Slash.run("debug state")
+      assert.is_true(hasLineMatching(lines, "Holy Shock: 20473 %-> 20930  %(another rank; the pack id is kept, matched by name%)$"))
+      assert.is_true(hasLineMatching(lines, "Holy Shield: 20928 %-> nil  %(not known on this character%)$"))
+      assert.is_false(hasLineMatching(lines, "MISMATCH"))
+    end)
+
     it("copes with no spellbook answer at all, without erroring", function()
       _G.__ELM_NS.db = { char = { spells = {
         EXORCISM = { key = "EXORCISM", id = 415073, name = "Exorcism", source = "id" },
       } } }
       local lines
       assert.has_no.errors(function() lines = Slash.run("debug state") end)
-      assert.is_true(hasLineMatching(lines, "Exorcism: 415073 %-> nil$"))
+      assert.is_true(hasLineMatching(lines, "Exorcism: 415073 %-> nil  %(not known on this character%)$"))
     end)
   end)
 

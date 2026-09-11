@@ -381,9 +381,18 @@ local function abilityRankLines()
   local lines = { "abilities (name: stored id -> spellbook now):" }
   for _, entry in ipairs(rows) do
     local now = ns.Adapter and ns.Adapter.spellIDByName and ns.Adapter.spellIDByName(entry.name)
-    local mismatch = (now and now ~= entry.id) and "  <- MISMATCH" or ""
+    -- A pack entry keeps the pack's id on purpose (AT7-D2) and everything resolves by name, so a
+    -- different rank in the spellbook is expected there, not a fault; only a player-added entry
+    -- that refreshRanks should have moved counts as a mismatch. "not known" reads better than nil.
+    local note = ""
+    if not now then
+      note = "  (not known on this character)"
+    elseif now ~= entry.id then
+      note = (entry.source == "pack") and "  (another rank; the pack id is kept, matched by name)"
+        or "  <- MISMATCH"
+    end
     lines[#lines + 1] = string.format("  %s: %s -> %s%s", entry.name, tostring(entry.id),
-      tostring(now), mismatch)
+      tostring(now), note)
   end
   return lines
 end
