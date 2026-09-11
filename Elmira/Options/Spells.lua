@@ -115,6 +115,8 @@ local pickSpellbookId, typedText, resolvedID, resolvedName, resolvedSource =
 -- I1a: item rows are 17px (`AceGUIWidget-DropDown-Items.lua:161`); 14 is the ceiling that still
 -- sits inside the row against `GameFontNormalSmall`.
 local SPELLBOOK_ICON_SIZE = 14
+-- The longest label that still fits the dropdown's row at its widest (relWidth 0.47 of the page).
+local SPELLBOOK_LABEL_MAX = 40
 
 -- I1: `values` (id-as-string -> label) and `sorting` (id-as-string, ordered by NAME) for the
 -- spellbook select. Both come from here so they can never disagree. Without an explicit `sorting`
@@ -133,6 +135,14 @@ local function spellbookChoices()
       -- id is the only thing on the row that tells the player which one they are about to add.
       -- The SORT still goes by name alone (below), so adding it does not reshuffle the list.
       local label = string.format("%s (%d)", entry.name, entry.id)
+      -- AceGUI's pullout rows are 17px with a word-wrapping label anchored top-to-bottom
+      -- (AceGUIWidget-DropDown-Items.lua:161-168): a label wider than the row wraps to a second,
+      -- clipped line and the first line -- icon included -- rides up (owner, in game: "Greater
+      -- Blessing of Salvation" sat higher than its neighbours). Shorten the NAME, never the id.
+      if #label > SPELLBOOK_LABEL_MAX then
+        local room = SPELLBOOK_LABEL_MAX - #string.format(" (%d)", entry.id) - 1
+        label = string.format("%s\226\128\166 (%d)", entry.name:sub(1, math.max(room, 8)), entry.id)
+      end
       out[key] = icon and string.format("|T%s:%d|t %s", icon, SPELLBOOK_ICON_SIZE, label) or label
       rows[#rows + 1] = { key = key, name = entry.name }
     end
@@ -189,13 +199,13 @@ local function addArgs(order)
       -- the only shape AceGUI's Flow scales (AceGUI-3.0.lua:709-711). Panels cannot share a row;
       -- controls can, which is why this is one inline group rather than the three it replaces.
       pick = {
-        type = "select", order = 1, width = "relative", relWidth = 0.35,
+        type = "select", order = 1, width = "relative", relWidth = 0.47,
         name = L["From your spellbook"], values = values, sorting = sorting,
         get = function() return pickSpellbookId end,
         set = function(_, v) pickSpellbookId = v end,
       },
       addPick = {
-        type = "execute", order = 2, width = "relative", relWidth = 0.15, name = L["Add"],
+        type = "execute", order = 2, width = "relative", relWidth = 0.11, name = L["Add"],
         desc = L["Registers the selected spell, or selects it if it is already registered."],
         func = function()
           local id = tonumber(pickSpellbookId)
@@ -214,7 +224,7 @@ local function addArgs(order)
       -- AT5-D3: WeakAuras' own trigger-field shape. An icon slot to the LEFT of the box, empty
       -- until something resolves -- an AceConfig `description` takes `image` for exactly this.
       icon = {
-        type = "description", order = 3, width = "relative", relWidth = 0.08, name = "",
+        type = "description", order = 3, width = "relative", relWidth = 0.06, name = "",
         image = function()
           if not resolvedID then return "" end
           return (ns.Display and ns.Display.spellIconByID and ns.Display.spellIconByID(resolvedID)) or ""
@@ -222,7 +232,7 @@ local function addArgs(order)
         imageWidth = 20, imageHeight = 20,
       },
       typed = {
-        type = "input", order = 4, width = "relative", relWidth = 0.27, name = L["Spell ID or name"],
+        type = "input", order = 4, width = "relative", relWidth = 0.24, name = L["Spell ID or name"],
         desc = L["Only resolves a name this character has learned or seen; anything else is refused, not stored."],
         get = function() return typedText end,
         -- An `input`'s `set` fires on Enter (AT5-D3). The FIRST Enter only resolves: the box is
@@ -245,7 +255,7 @@ local function addArgs(order)
         end,
       },
       addTyped = {
-        type = "execute", order = 5, width = "relative", relWidth = 0.15, name = L["Add"],
+        type = "execute", order = 5, width = "relative", relWidth = 0.12, name = L["Add"],
         desc = L["Registers the resolved spell, or selects it if it is already registered."],
         func = function() addResolvedTyped() end,
       },
