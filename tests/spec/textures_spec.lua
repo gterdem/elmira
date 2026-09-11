@@ -598,11 +598,10 @@ describe("Display.Textures", function()
       assert.equal(-70, e.y)
     end)
 
-    -- The offset is OWN, never inherited (AB1-D4's list, extended by AB3-D2): dragging a linked
-    -- ability's texture has to move that one and no other.
-    it("moves that texture alone, even while it inherits everything else", function()
-      -- Both abilities still say "Same as All abilities", and the All abilities row has an offset
-      -- of its own. Neither fact may reach the other ability: position is OWN.
+    -- The offset is OWN, and (AT1-D2) texture never inherits ANYTHING from All abilities any more:
+    -- dragging a linked ability's texture has to move that one and no other.
+    it("moves that texture alone, and never through what All abilities holds", function()
+      -- The All abilities row has an offset of its own; it must not reach EXORCISM at all.
       A.set(A.ALL, "texture", "place", "custom")
       A.set(A.ALL, "texture", "x", 999)
       Textures.StartMove("EXORCISM")
@@ -610,7 +609,7 @@ describe("Display.Textures", function()
       f.scripts.OnDragStart(f)
       f.centre = { 400, 400 }
       f.scripts.OnDragStop(f)
-      assert.is_true(A.inherits("EXORCISM", "texture"))
+      assert.is_false(A.inherits("EXORCISM", "texture"))
       assert.equal(-100, A.effective("EXORCISM", "texture").x)
       assert.equal("custom", A.effective("EXORCISM", "texture").place)
       assert.equal(0, A.effective("JUDGEMENT", "texture").x)
@@ -792,7 +791,7 @@ describe("Display.Textures", function()
     it("repaints what is already on screen, so a slider is not a slider that does nothing", function()
       switchOn("EXORCISM")
       Textures.Fire("EXORCISM", "suggested")
-      A.set(A.ALL, "texture", "size", 128)
+      A.set("EXORCISM", "texture", "size", 128)
       assert.same({ 48, 48 }, showing()[1].size)
       assert.is_true(Textures.Refresh())
       assert.same({ 128, 128 }, showing()[1].size)

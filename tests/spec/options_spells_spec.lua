@@ -362,7 +362,9 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       Spells.add(ns.db.char.spells, { id = 900, name = "Slice and Dice", source = "spellbook" })
     end)
 
-    it("opens with an All abilities row carrying the addon's own icon and the same six tabs", function()
+    -- AT1-D2: "I don't think anyone will want to set the same texture, screen edge, sound or
+    -- announcement for all the abilities" (owner) -- All abilities keeps only General and Glow.
+    it("opens with an All abilities row carrying the addon's own icon and only General and Glow", function()
       local all = entry("*")
       assert.equal("All abilities", all.name)
       assert.equal("Interface\\AddOns\\Elmira\\media\\icon", all.icon)
@@ -370,7 +372,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       local names = {}
       for key in pairs(all.args) do names[#names + 1] = key end
       table.sort(names)
-      assert.same({ "announce", "edge", "general", "glow", "sound", "texture" }, names)
+      assert.same({ "general", "glow" }, names)
     end)
 
     it("gives each ability its own six tabs, in the owner's order", function()
@@ -405,11 +407,10 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("Texture, Screen-edge, Sound, Announcement off", entry("EXORCISM").desc())
       A.set("EXORCISM", "edge", "enabled", true)
       A.set("EXORCISM", "sound", "enabled", true)
-      -- The picks are inherited appearance (AB1-D4), so the All abilities entry is what puts a
-      -- real sound behind the switch. Switched on with every event still None is a channel that
-      -- will never make a noise, and the tooltip must not claim otherwise.
+      -- AT1-D2: sound is per ability only now, so switched on with every event still None is a
+      -- channel that will never make a noise, and the tooltip must not claim otherwise.
       assert.equal("Screen-edge on · Texture, Sound, Announcement off", entry("EXORCISM").desc())
-      A.set("*", "sound", "used", "Chime")
+      A.set("EXORCISM", "sound", "used", "Chime")
       assert.equal("Screen-edge, Sound on · Texture, Announcement off", entry("EXORCISM").desc())
       A.set("EXORCISM", "edge", "enabled", false)
       A.set("EXORCISM", "sound", "enabled", false)
@@ -543,10 +544,14 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_nil(args.inherit, "All abilities is what everything else inherits FROM")
     end)
 
+    -- AT1-D3: the owner's wording, verbatim, on every General tab (All abilities and each ability).
     it("guards every channel with Only in combat, and stores it", function()
       local row = tab("EXORCISM", "general").onlyInCombat
       assert.equal("toggle", row.type)
       assert.equal("Only in combat", row.name)
+      assert.equal("Glow, Texture, Screen Edge, Sounds and Announcements will be only available in combat",
+        row.desc)
+      assert.equal(tab("*", "general").onlyInCombat.desc, row.desc, "the same tooltip everywhere")
       assert.is_false(row.get())
       -- Linked to All abilities by default, so the ability's own tab writes nothing visible until
       -- it is unlinked -- which is exactly what the greying says.
@@ -558,21 +563,23 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_false(A.effective("SLICE_AND_DICE", "general").onlyInCombat)
     end)
 
-    -- AB1-D5: the threshold the `expiring` event fires at.
-    it("offers the expiring threshold as a 1-15 second slider defaulting to 3", function()
+    -- AT1-D1: the seconds slider leaves the per-ability General tab. All abilities keeps its own
+    -- copy here, as the inherited default; each ability's own copies live on its Sound and Texture
+    -- tabs instead, right next to the moment they gate.
+    it("keeps the expiring threshold, as a 1-15 second slider defaulting to 3, on All abilities only", function()
       local row = tab("*", "general").expiring
       assert.equal("range", row.type)
       assert.equal(1, row.min)
       assert.equal(15, row.max)
       assert.equal(1, row.step)
       assert.equal(3, row.get())
-      assert.is_truthy(row.desc:find("about to run out", 1, true))
+      assert.equal("Warn me when its buff has N seconds left", row.name)
+      assert.is_truthy(row.desc:find("buff", 1, true))
       row.set(nil, 8)
+      -- Same field everywhere: EXORCISM (still linked) reads the same 8 back.
       assert.equal(8, A.effective("EXORCISM", "general").expiringSeconds)
-      -- Greyed with the rest of the tab while the ability is linked, and live once it is not.
-      assert.is_true(tab("EXORCISM", "general").expiring.disabled())
-      tab("EXORCISM", "general").inherit.set(nil, false)
-      assert.is_false(tab("EXORCISM", "general").expiring.disabled())
+      assert.is_nil(tab("EXORCISM", "general").expiring,
+        "each ability's own copy lives on Sound and Texture instead")
     end)
 
     -- AB1-D6 as AB2-D2/D3 leave it: which rotations use it and what they need, plus the pack's own
@@ -711,7 +718,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       local args = tab("SLICE_AND_DICE", "general")
       assert.equal(1, args.head.order)
       assert.equal(2, args.remove.order)
-      for _, name in ipairs({ "inherit", "onlyInCombat", "expiring" }) do
+      for _, name in ipairs({ "inherit", "onlyInCombat" }) do
         assert.is_true(args[name].order > args.remove.order, name .. " now sits above Remove")
       end
     end)
@@ -976,8 +983,25 @@ describe("Options/Spells (the Abilities page, AB1)", function()
                     args.expiring.name })
     end)
 
+    -- AT1-D1: right after "When its buff is about to run out", greyed until a sound is actually
+    -- picked for that moment AND the ability is unlinked from All abilities on General (the field
+    -- still inherits exactly as before -- nothing else about it moved).
+    it("offers the warning threshold right after the expiring event, greyed until both are ready", function()
+      local row = tab("EXORCISM", "sound").expiringSeconds
+      assert.equal("range", row.type)
+      assert.equal(7.5, row.order, "immediately after the expiring event select at order 7")
+      assert.equal("Warn me when its buff has N seconds left", row.name)
+      assert.equal(3, row.get())
+      assert.is_true(row.disabled(), "no sound picked for expiring yet")
+      tab("EXORCISM", "sound").expiring.set(nil, "Chime")
+      assert.is_true(tab("EXORCISM", "sound").expiringSeconds.disabled(), "still linked on General")
+      tab("EXORCISM", "general").inherit.set(nil, false)
+      assert.is_false(tab("EXORCISM", "sound").expiringSeconds.disabled())
+      tab("EXORCISM", "sound").expiringSeconds.set(nil, 11)
+      assert.equal(11, A.effective("EXORCISM", "general").expiringSeconds)
+    end)
+
     it("plays the sound the moment it is picked, having stored it first", function()
-      tab("EXORCISM", "sound").inherit.set(nil, false)
       tab("EXORCISM", "sound").ready.set(nil, "Chime")
       assert.equal("Chime", A.effective("EXORCISM", "sound").ready)
       assert.same({ "Chime" }, ns.played)
@@ -990,10 +1014,10 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.same({}, ns.played, "nothing to play through")
     end)
 
-    -- AB1-D4: the ON switch is per ability and is never inherited, which is what stops one setting
-    -- on All abilities making every spell in the rotation start making noise.
-    it("puts the on switch on the ability alone, never on All abilities", function()
-      assert.is_nil(tab("*", "sound").enabled, "All abilities must have no sound on/off")
+    -- AB1-D4/AT1-D2: the ON switch is per ability and is never inherited -- nor is anything else on
+    -- this tab any more, so there is no All abilities Sound tab at all to switch anything on from.
+    it("puts the on switch on the ability alone, and All abilities has no Sound tab at all", function()
+      assert.is_nil(entry("*").args.sound, "All abilities must have no Sound tab")
       local row = tab("EXORCISM", "sound").enabled
       assert.equal("toggle", row.type)
       assert.equal(2, row.order)
@@ -1005,13 +1029,11 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(A.effective("EXORCISM", "sound").enabled)
     end)
 
-    it("inherits the picks from All abilities while linked", function()
-      tab("*", "sound").used.set(nil, "Chime")
+    -- AT1-D2: nothing here inherits any more -- each ability's own picks are live from the start.
+    it("keeps each ability's own picks, live from the start", function()
+      tab("EXORCISM", "sound").used.set(nil, "Chime")
       assert.equal("Chime", tab("EXORCISM", "sound").used.get())
-      assert.is_true(tab("EXORCISM", "sound").used.disabled())
-      tab("EXORCISM", "sound").inherit.set(nil, false)
-      assert.equal("None", tab("EXORCISM", "sound").used.get())
-      assert.is_false(tab("EXORCISM", "sound").used.disabled())
+      assert.is_falsy(tab("EXORCISM", "sound").used.disabled)
     end)
 
     it("builds no rows at all without the settings store", function()
@@ -1039,26 +1061,17 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(A.effective("EXORCISM", "announce").enabled)
     end)
 
-    it("gives All abilities the wording but no on switch", function()
-      local args = tab("*", "announce")
-      assert.is_nil(args.enabled)
-      assert.is_nil(args.inherit, "All abilities is what everything else inherits FROM")
+    -- AT1-D2: All abilities has no Announcement tab at all any more -- the wording lives on each
+    -- ability alone, live from the start.
+    it("has no Announcement tab on All abilities, and keeps each ability's own wording live", function()
+      assert.is_nil(entry("*").args.announce, "All abilities must have no Announcement tab")
+      local args = tab("EXORCISM", "announce")
+      assert.is_nil(args.inherit)
       assert.equal("Include how long it lasts", args.duration.name)
+      assert.is_falsy(args.duration.disabled)
       assert.is_false(args.duration.get())
       args.duration.set(nil, true)
-      assert.is_true(A.effective("EXORCISM", "announce").duration, "wording inherits")
-      assert.is_false(A.effective("EXORCISM", "announce").enabled, "the on switch does not")
-    end)
-
-    -- The wording is appearance, so it is greyed while the ability is linked; the on switch is
-    -- the ability's own and stays live.
-    it("greys the wording, not the on switch, while the ability is linked", function()
-      local args = tab("EXORCISM", "announce")
-      assert.equal("Same as All abilities", args.inherit.name)
-      assert.is_true(args.duration.disabled())
-      assert.is_falsy(args.enabled.disabled)
-      args.inherit.set(nil, false)
-      assert.is_false(tab("EXORCISM", "announce").duration.disabled())
+      assert.is_true(A.effective("EXORCISM", "announce").duration)
     end)
   end)
 
@@ -1069,18 +1082,12 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       Spells.registerPack(ns.db.char.spells, "EXORCISM", 415073, "Exorcism")
     end)
 
-    -- Every APPEARANCE control on this tab is inherited until the ability is unlinked (AB1-D4) --
-    -- greyed in the panel, and a write that goes nowhere from a spec. The tests that drive a value
-    -- unlink first, exactly as a player has to.
-    local function unlink()
-      tab("EXORCISM", "texture").inherit.set(nil, false)
-    end
-
     it("no longer says the next pass fills it", function()
       assert.is_nil(tab("EXORCISM", "texture").soon)
     end)
 
-    -- The on switch, like every other channel's: per ability and never inherited (AB1-D4).
+    -- The on switch, like every other channel's: per ability and never inherited (AB1-D4). AT1-D2:
+    -- neither is anything else on this tab any more -- there is no All abilities Texture tab at all.
     it("switches the texture on per ability, and says it cannot be inherited", function()
       local row = tab("EXORCISM", "texture").enabled
       assert.equal("toggle", row.type)
@@ -1088,16 +1095,15 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       row.set(nil, true)
       assert.is_true(A.effective("EXORCISM", "texture").enabled)
       assert.is_truthy(row.desc:find("Never inherited", 1, true))
-      assert.is_nil(tab("*", "texture").enabled, "All abilities must not be able to switch it on")
+      assert.is_nil(entry("*").args.texture, "All abilities must have no Texture tab")
     end)
 
     it("offers the three sources, and stores the pick", function()
-      unlink()
       local row = tab("EXORCISM", "texture").source
       assert.equal("select", row.type)
       assert.equal(3, row.order)
       assert.equal("Show", row.name)
-      assert.is_false(row.disabled())
+      assert.is_falsy(row.disabled)
       assert.same({ "icon", "shape", "custom" }, row.sorting)
       assert.equal("This ability's icon", row.values.icon)
       assert.equal("icon", row.get())
@@ -1109,7 +1115,6 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     -- icon, it is irrelevant, and a greyed control invites the player to hunt for what unlocks it.
     it("shows the shape picker only for the shape source, and the path box only for a custom one",
       function()
-        unlink()
         local args = tab("EXORCISM", "texture")
         assert.is_true(args.shape.hidden())
         assert.is_true(args.path.hidden())
@@ -1122,12 +1127,11 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       end)
 
     it("lists the eight shipped shapes and stores the one picked", function()
-      unlink()
       local row = tab("EXORCISM", "texture").shape
       assert.equal("select", row.type)
       assert.equal(4, row.order)
       assert.equal("Shape", row.name)
-      assert.is_false(row.disabled())
+      assert.is_falsy(row.disabled)
       assert.same({ "ring", "disc", "square", "diamond", "arrow", "star", "bar", "chevron" },
         row.sorting)
       assert.equal("Diamond", row.values.diamond)
@@ -1137,13 +1141,12 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     end)
 
     it("stores a custom path", function()
-      unlink()
       local row = tab("EXORCISM", "texture").path
       assert.equal("input", row.type)
       assert.equal(5, row.order)
       assert.equal("Texture file", row.name)
       assert.equal("full", row.width)
-      assert.is_false(row.disabled())
+      assert.is_falsy(row.disabled)
       assert.equal("", row.get())
       row.set(nil, "Interface\\Icons\\Ability_Rogue_Ambush")
       assert.equal("Interface\\Icons\\Ability_Rogue_Ambush", A.effective("EXORCISM", "texture").path)
@@ -1152,7 +1155,6 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     -- The one silence a texture has that a screen edge does not, said where it happens: on screen a
     -- source that resolves to no file is indistinguishable from a working setting.
     it("warns when the source resolves to no file at all", function()
-      unlink()
       local args = tab("EXORCISM", "texture")
       -- the pack fake resolves no icon for any key, so the default source has nothing to draw
       assert.equal("description", args.missing.type)
@@ -1173,7 +1175,6 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     end)
 
     it("sizes between 16 and 256 in steps of 8, starting at 48", function()
-      unlink()
       local row = tab("EXORCISM", "texture").size
       assert.equal("range", row.type)
       assert.equal(7, row.order)
@@ -1186,14 +1187,13 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     end)
 
     it("stores a colour and an opacity", function()
-      unlink()
       local args = tab("EXORCISM", "texture")
       assert.equal("color", args.color.type)
       assert.equal(8, args.color.order)
       assert.equal("Colour", args.color.name)
       assert.is_false(args.color.hasAlpha, "a colour picker with its own alpha beside an Opacity "
         .. "slider is two controls for one number")
-      assert.is_false(args.color.disabled())
+      assert.is_falsy(args.color.disabled)
       args.color.set(nil, 0.1, 0.2, 0.3)
       assert.same({ r = 0.1, g = 0.2, b = 0.3 }, A.effective("EXORCISM", "texture").color)
       assert.same({ 0.1, 0.2, 0.3 }, { args.color.get() })
@@ -1203,7 +1203,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("Opacity", args.alpha.name)
       assert.same({ 0.05, 1.0, 0.05 }, { args.alpha.min, args.alpha.max, args.alpha.step })
       assert.is_true(args.alpha.isPercent, "a raw 0.45 means nothing to anyone")
-      assert.is_false(args.alpha.disabled())
+      assert.is_falsy(args.alpha.disabled)
       assert.equal(1, args.alpha.get())
       args.alpha.set(nil, 0.4)
       assert.equal(0.4, tab("EXORCISM", "texture").alpha.get())
@@ -1212,7 +1212,6 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     -- AB3-D1: all five, with `suggested` and `active` on by default -- a channel that is "on" and
     -- appears at no moment is the silent failure this project keeps shipping.
     it("offers all five moments, with suggested and active ticked", function()
-      unlink()
       local args = tab("EXORCISM", "texture")
       assert.equal("toggle", args.suggested.type)
       assert.equal("full", args.suggested.width)
@@ -1234,9 +1233,35 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(A.effective("EXORCISM", "texture").ready)
     end)
 
+    -- AT1-D1: the warning threshold's per-ability copy, right after the "about to run out" checkbox,
+    -- greyed until that checkbox is ticked -- AND while General still says "Same as All abilities",
+    -- since general.expiringSeconds inherits exactly as before and a write while linked would
+    -- silently vanish into what All abilities holds.
+    it("offers the warning threshold right after the about-to-run-out checkbox, greyed until both are ready",
+      function()
+        local args = tab("EXORCISM", "texture")
+        local row = args.expiringSeconds
+        assert.equal("range", row.type)
+        assert.equal(14.5, row.order, "immediately after the expiring checkbox at order 14")
+        assert.equal("Warn me when its buff has N seconds left", row.name)
+        assert.equal(1, row.min)
+        assert.equal(15, row.max)
+        assert.equal(1, row.step)
+        assert.equal(3, row.get())
+        assert.is_true(row.disabled(), "the expiring checkbox is off by default")
+        args.expiring.set(nil, true)
+        assert.is_true(tab("EXORCISM", "texture").expiringSeconds.disabled(),
+          "still linked to All abilities on General")
+        tab("EXORCISM", "general").inherit.set(nil, false)
+        assert.is_false(tab("EXORCISM", "texture").expiringSeconds.disabled())
+        tab("EXORCISM", "texture").expiringSeconds.set(nil, 9)
+        assert.equal(9, A.effective("EXORCISM", "general").expiringSeconds)
+        -- The same field the Sound tab reads and writes, for the same ability.
+        assert.equal(9, tab("EXORCISM", "sound").expiringSeconds.get())
+      end)
+
     -- AB4-D1, the owner's "growing textures".
     it("offers the three fills between the appearance controls and the moments", function()
-      unlink()
       local row = tab("EXORCISM", "texture").fill
       assert.equal("select", row.type)
       assert.equal(9.5, row.order, "the fill is how it is drawn, not another moment to appear at")
@@ -1251,21 +1276,14 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("cooldown", tab("EXORCISM", "texture").fill.get())
     end)
 
-    -- The threshold for "about to run out" is the General tab's, not a second one here (AB4-D1),
-    -- and the tooltip has to say so or the player goes looking for it on this tab.
-    it("sends the player to the General tab for the about-to-run-out moment", function()
+    -- The threshold for "about to run out" is right below on THIS tab now (AT1-D1), not the General
+    -- tab, and the tooltip has to say so or the player goes looking for it in the wrong place.
+    it("sends the player to the threshold right below for the about-to-run-out moment", function()
       local row = tab("EXORCISM", "texture").fill
-      assert.is_truthy(row.desc:find("General tab", 1, true))
       assert.is_truthy(row.desc:find("no cooldown or buff running", 1, true))
       -- ...and which way round each of the two goes, because the buff one is the surprising one:
       -- what is LIT is what is left, so the shape shrinks as the buff runs out.
       assert.is_truthy(row.desc:find("drains the other way", 1, true))
-    end)
-
-    it("greys the fill with the rest of the appearance while the ability is linked", function()
-      assert.is_true(tab("EXORCISM", "texture").fill.disabled())
-      tab("EXORCISM", "texture").inherit.set(nil, false)
-      assert.is_false(tab("EXORCISM", "texture").fill.disabled())
     end)
 
     -- The page has to build before Display/Textures exists (the panel can be opened at any time,
@@ -1275,14 +1293,14 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("none", tab("EXORCISM", "texture").fill.get())
     end)
 
-    it("greys the appearance while the ability is linked, but never the on switch", function()
+    -- AT1-D2: nothing on this tab is greyed by inheritance any more -- only the on switch was ever
+    -- exempt from that, and now every other control is too.
+    it("never greys the appearance -- only the missing/silent warnings still gate on state", function()
       local args = tab("EXORCISM", "texture")
-      assert.is_true(args.size.disabled())
-      assert.is_true(args.source.disabled())
-      assert.is_true(args.suggested.disabled())
+      assert.is_falsy(args.size.disabled)
+      assert.is_falsy(args.source.disabled)
+      assert.is_falsy(args.suggested.disabled)
       assert.is_falsy(args.enabled.disabled)
-      args.inherit.set(nil, false)
-      assert.is_false(tab("EXORCISM", "texture").size.disabled())
     end)
 
     it("says so when it is switched on and appears at no moment", function()
@@ -1294,7 +1312,6 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(args.silent.hidden(), "nothing to warn about while it is off")
       args.enabled.set(nil, true)
       assert.is_true(tab("EXORCISM", "texture").silent.hidden())
-      args.inherit.set(nil, false)
       tab("EXORCISM", "texture").suggested.set(nil, false)
       tab("EXORCISM", "texture").active.set(nil, false)
       assert.is_false(tab("EXORCISM", "texture").silent.hidden())
@@ -1338,8 +1355,8 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("row", row.get())
       row.set(nil, "centre")
       assert.equal("centre", A.effective("EXORCISM", "texture").place)
-      assert.is_nil(tab("*", "texture").place)
-      assert.is_nil(tab("*", "texture").move)
+      -- AT1-D2: All abilities has no Texture tab at all any more.
+      assert.is_nil(entry("*").args.texture)
     end)
 
     it("offers Move This Texture only once the placement is custom, and drives the mode", function()
@@ -1366,17 +1383,16 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_true(pcall(function() tab("EXORCISM", "texture").move.func() end))
     end)
 
-    -- One anchor for every texture flowing with the others, so its Move mode belongs to All
-    -- abilities rather than being repeated on forty identical tabs.
-    it("puts Position the Indicators on All abilities, and relabels it while it runs", function()
+    -- AT1-D2: with the Texture tab gone from All abilities, this one anchor for every texture
+    -- flowing with the others moved to All abilities > General.
+    it("puts Position the Indicators on All abilities' General tab, and relabels it while it runs", function()
       local calls, on = {}, false
       ns.Textures.isPositioning = function() return on end
       ns.Textures.StartPositioning = function() calls[#calls + 1] = "start"; on = true; return true end
       ns.Textures.StopMoveMode = function() calls[#calls + 1] = "stop"; on = false; return true end
 
-      local function row() return tab("*", "texture").anchor end
+      local function row() return tab("*", "general").anchor end
       assert.equal("execute", row().type)
-      assert.equal(20, row().order)
       assert.equal("Position the Indicators", row().name())
       row().func()
       assert.same({ "start" }, calls)
@@ -1386,14 +1402,14 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     end)
 
     it("promises the row follows the strip until it is placed", function()
-      local desc = tab("*", "texture").anchor.desc
+      local desc = tab("*", "general").anchor.desc
       assert.is_truthy(desc:find("follows it", 1, true))
       assert.is_truthy(desc:find("Press it again when it is in place", 1, true))
     end)
 
     it("places nothing, without erroring, when no renderer is loaded", function()
       ns.Textures = nil
-      assert.is_true(pcall(function() tab("*", "texture").anchor.func() end))
+      assert.is_true(pcall(function() tab("*", "general").anchor.func() end))
     end)
   end)
 
@@ -1438,7 +1454,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("color", args.color.type)
       assert.equal("range", args.intensity.type)
       assert.is_true(args.intensity.isPercent)
-      assert.is_true(args.intensity.disabled())
+      assert.is_falsy(args.intensity.disabled)
       assert.equal("toggle", args.suggested.type)
       assert.equal("toggle", args.ready.type)
       assert.equal("execute", args.preview.type)
@@ -1448,7 +1464,6 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     -- The point of the tab: what it writes is what the flash reads back.
     it("writes an edge, a colour and an intensity the renderer resolves", function()
       tab("EXORCISM", "edge").enabled.set(nil, true)
-      tab("EXORCISM", "edge").inherit.set(nil, false)
       tab("EXORCISM", "edge").edge.set(nil, "top")
       tab("EXORCISM", "edge").color.set(nil, 0.2, 0.4, 0.6)
       tab("EXORCISM", "edge").intensity.set(nil, 0.9)
@@ -1466,26 +1481,21 @@ describe("Options/Spells (the Abilities page, AB1)", function()
     it("ships suggested ticked and ready unticked, and writes both", function()
       assert.is_true(tab("EXORCISM", "edge").suggested.get())
       assert.is_false(tab("EXORCISM", "edge").ready.get())
-      tab("EXORCISM", "edge").inherit.set(nil, false)
       tab("EXORCISM", "edge").ready.set(nil, true)
       assert.is_true(A.effective("EXORCISM", "edge").ready)
     end)
 
-    -- AB1-D4/ADR-0009: the ON switch is per ability and is never inherited, so All abilities has
-    -- none at all -- one toggle there would flash the screen for every spell in the rotation.
-    it("gives All abilities the appearance but no on/off", function()
-      local args = tab("*", "edge")
-      assert.is_nil(args.enabled)
-      assert.is_nil(args.inherit)
-      assert.equal("select", args.edge.type)
+    -- AB1-D4/ADR-0009/AT1-D2: the ON switch is per ability and is never inherited, so All abilities
+    -- has no Screen-edge tab at all -- one toggle there would flash the screen for every spell in
+    -- the rotation, and there is nothing left on this channel for it to hold appearance for either.
+    it("has no Screen-edge tab on All abilities at all", function()
+      assert.is_nil(entry("*").args.edge, "All abilities must have no Screen-edge tab")
     end)
 
-    it("greys the appearance while the ability is linked, and frees it when it is not", function()
-      assert.is_true(tab("EXORCISM", "edge").edge.disabled())
-      assert.is_true(tab("EXORCISM", "edge").suggested.disabled())
+    it("never greys the appearance -- nothing on this tab inherits any more", function()
+      assert.is_falsy(tab("EXORCISM", "edge").edge.disabled)
+      assert.is_falsy(tab("EXORCISM", "edge").suggested.disabled)
       assert.is_falsy(tab("EXORCISM", "edge").enabled.disabled)
-      tab("EXORCISM", "edge").inherit.set(nil, false)
-      assert.is_false(tab("EXORCISM", "edge").edge.disabled())
     end)
 
     -- Preview goes through the SAME path the flash in play does, so a preview cannot look right
@@ -1496,7 +1506,6 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         fired[#fired + 1] = { edge = edge, color = color, intensity = intensity }
         return true
       end
-      tab("EXORCISM", "edge").inherit.set(nil, false)
       tab("EXORCISM", "edge").edge.set(nil, "bottom")
       tab("EXORCISM", "edge").preview.func()
       assert.equal(1, #fired)
@@ -1508,13 +1517,13 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("description", tab("EXORCISM", "edge").silent.type)
       assert.equal(10, tab("EXORCISM", "edge").silent.order)
       -- Off with nothing ticked is not a problem to report: the channel is simply off.
-      tab("*", "edge").suggested.set(nil, false)
+      tab("EXORCISM", "edge").suggested.set(nil, false)
       assert.is_true(tab("EXORCISM", "edge").silent.hidden())
-      tab("*", "edge").suggested.set(nil, true)
+      tab("EXORCISM", "edge").suggested.set(nil, true)
       assert.is_true(tab("EXORCISM", "edge").silent.hidden())
       tab("EXORCISM", "edge").enabled.set(nil, true)
       assert.is_true(tab("EXORCISM", "edge").silent.hidden(), "suggested is ticked by default")
-      tab("*", "edge").suggested.set(nil, false)
+      tab("EXORCISM", "edge").suggested.set(nil, false)
       assert.is_false(tab("EXORCISM", "edge").silent.hidden())
       assert.is_truthy(tab("EXORCISM", "edge").silent.name:find("fires on nothing", 1, true))
     end)

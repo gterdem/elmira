@@ -80,6 +80,10 @@ AbilitySettings.DEFAULTS = DEFAULTS
 -- every other linked one with it, or (worse) write to a row nothing reads and move nothing at all,
 -- which is this project's characteristic silent failure. Appearance still inherits; position does
 -- not.
+--
+-- AT1-D2 removes even the appearance inheritance for these four: nothing in `OWN` matters for them
+-- any more since `AbilitySettings.inherits` now refuses to inherit ANY field of a CUE_CHANNEL. The
+-- table stays as the record of what was per-ability even while the rest of a channel still inherited.
 local OWN = { texture = { enabled = true, place = true, x = true, y = true }, edge = { enabled = true },
               sound = { enabled = true }, announce = { enabled = true } }
 
@@ -125,8 +129,19 @@ end
 
 -- "Same as All abilities", the toggle every per-ability tab opens with. Default ON, and the All
 -- abilities entry itself can never inherit -- it is what everything else inherits FROM.
+--
+-- AT1-D2: Screen-edge, Sound, Texture and Announcement never inherit at all any more -- "I don't
+-- think anyone will want to set the same texture, screen edge, sound or announcement for all the
+-- abilities" (owner). Only General and Glow still fall back to the All abilities row.
+local function isCueChannel(channel)
+  for _, c in ipairs(AbilitySettings.CUE_CHANNELS) do
+    if c == channel then return true end
+  end
+  return false
+end
+
 function AbilitySettings.inherits(key, channel)
-  if key == ALL then return false end
+  if key == ALL or isCueChannel(channel) then return false end
   local t = stored(key, channel)
   return not (t and t.inherit == false)
 end
@@ -171,6 +186,9 @@ end
 -- one ability, while All abilities is a statement about everything, and the more specific of the
 -- two is the one a player means. Anything the player touches on the ability itself still wins over
 -- both. Nothing outside this file reads the raw table -- that is what keeps the rule in one place.
+--
+-- AT1-D2: for the four CUE_CHANNELS, `inherits` always answers false, so the "All abilities" layer
+-- below is skipped for them and the precedence collapses to shipped -> pack default -> own row.
 function AbilitySettings.effective(key, channel)
   local def = DEFAULTS[channel]
   if not def then return nil end

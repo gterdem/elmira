@@ -70,12 +70,11 @@ describe("Display.Overlay", function()
       assert.equal(1, #flared)
     end)
 
-    -- Which moments it fires on is a CHOICE, so it is inherited until the ability is unlinked
-    -- (AB1-D4); unticking it on All abilities silences every linked ability at once, which is the
-    -- one thing All abilities is allowed to do to a channel it cannot switch on.
+    -- AT1-D2: the edge channel is per-ability only now, All abilities included in what it no
+    -- longer reaches -- unticking the ability's OWN `suggested` is what goes quiet.
     it("goes quiet when `suggested` is unticked, without switching the channel off", function()
       A.set("EXORCISM", "edge", "enabled", true)
-      A.set(A.ALL, "edge", "suggested", false)
+      A.set("EXORCISM", "edge", "suggested", false)
       assert.is_false(Overlay.Fire("EXORCISM", "suggested"))
       assert.equal(0, #flared)
     end)
@@ -185,7 +184,7 @@ describe("Display.Overlay", function()
     it("reports an empty event list for an ability switched on with no moment ticked", function()
       stubPack({ EXORCISM = { id = 415073 } })
       A.set("EXORCISM", "edge", "enabled", true)
-      A.set(A.ALL, "edge", "suggested", false)
+      A.set("EXORCISM", "edge", "suggested", false)
       assert.same({}, Overlay.describe().abilities[1].events)
     end)
 

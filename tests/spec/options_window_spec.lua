@@ -1241,7 +1241,7 @@ describe("Options window", function()
         open()
         local A = ns.AbilitySettings
         A.set("EXORCISM", "sound", "enabled", true)
-        A.set(A.ALL, "sound", "used", "Chime")
+        A.set("EXORCISM", "sound", "used", "Chime")
         local tree = fakeTree()
         tree.buttons = { fakeButton("*"), fakeButton("EXORCISM"), fakeButton("QUIET") }
         feed(tree, { "spells", "list" })

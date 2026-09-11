@@ -324,6 +324,31 @@ local function effective(key, channel)
   return (A and A.effective(key, channel)) or {}
 end
 
+-- AT1-D1: the "about to run out" warning threshold. One field (`general.expiringSeconds`, which
+-- still inherits from All abilities exactly as every other General field does -- nothing about
+-- that moved), shown on the Sound tab and the Texture tab -- the two that actually have an "about
+-- to run out" moment -- immediately after that moment's own control, and (as the inherited
+-- default) on All abilities' General tab. Same field everywhere, so changing it on one shows on
+-- the other. A per-ability copy is greyed while that ability is still linked to All abilities on
+-- General -- exactly like "Only in combat" beside it -- AND while its own tab's moment is not live;
+-- writing while linked would silently vanish into what All abilities holds, which is the one
+-- failure shape this project keeps refusing to ship again.
+local function expiringArgs(key, order, extraDisabled)
+  return {
+    type = "range", order = order, name = L["Warn me when its buff has N seconds left"],
+    min = 1, max = 15, step = 1,
+    desc = L["Only fires for an ability whose buff is actually on you -- one that never has a buff "
+          .. "of its own, like Exorcism or Judgement, never sees it."],
+    disabled = function()
+      local A = AS()
+      if A and A.inherits(key, "general") then return true end
+      return extraDisabled ~= nil and extraDisabled() or false
+    end,
+    get = function() return effective(key, "general").expiringSeconds or 3 end,
+    set = function(_, v) put(key, "general", "expiringSeconds", v) end,
+  }
+end
+
 -- PE7-D1's single gate, read from this side: with the bars not glowing at all, every control on the
 -- Glow tab is dead, and a page that does not say so is where "I turned it on and nothing happened"
 -- starts.
@@ -433,23 +458,20 @@ local EVENT_LABELS = { suggested = "When it is suggested", ready = "When it come
                        expiring = "When its buff is about to run out" }
 
 local function soundArgs(key)
+  -- AT1-D2: per ability only -- never built for `*`, and nothing left here to inherit.
   local args = {}
-  args.inherit = inheritToggle(key, "sound", 1)
-  if key ~= ALL then
-    args.enabled = {
-      type = "toggle", order = 2, width = "full", name = L["Play sounds for this ability"],
-      -- ADR-0009 as amended by AB1-D4: the ON switch is per ability and is never inherited, so no
-      -- setting on All abilities can make every spell in the rotation start making noise.
-      desc = L["Never inherited: All abilities cannot switch sounds on for you."],
-      get = function() return effective(key, "sound").enabled == true end,
-      set = function(_, v) put(key, "sound", "enabled", v) end,
-    }
-  end
+  args.enabled = {
+    type = "toggle", order = 2, width = "full", name = L["Play sounds for this ability"],
+    -- ADR-0009 as amended by AB1-D4: the ON switch is per ability and is never inherited, so no
+    -- setting on All abilities can make every spell in the rotation start making noise.
+    desc = L["Never inherited: All abilities cannot switch sounds on for you."],
+    get = function() return effective(key, "sound").enabled == true end,
+    set = function(_, v) put(key, "sound", "enabled", v) end,
+  }
   local A = AS()
   for i, event in ipairs((A and A.EVENTS) or {}) do
     args[event] = {
       type = "select", order = 2 + i, name = L[EVENT_LABELS[event] or event],
-      disabled = linked(key, "sound"),
       values = function() return (ns.Sounds and ns.Sounds.list()) or { None = "None" } end,
       get = function() return effective(key, "sound")[event] or "None" end,
       set = function(_, v)
@@ -460,29 +482,31 @@ local function soundArgs(key)
       end,
     }
   end
+  -- AT1-D1, right after "When its buff is about to run out": greyed until a sound is actually
+  -- picked for that moment -- switching a threshold nothing plays at is not a live control.
+  args.expiringSeconds = expiringArgs(key, 7.5, function()
+    return (effective(key, "sound").expiring or "None") == "None"
+  end)
   return args
 end
 
 -- AB1-D10. OFF by default for every ability, long cooldowns included (owner, 2026-09-09: "keep them
 -- turned off by default"). The All abilities entry carries the WORDING only -- no on/off.
 local function announceArgs(key, entry)
+  -- AT1-D2: per ability only -- never built for `*`, and nothing left here to inherit.
   local args = {}
-  args.inherit = inheritToggle(key, "announce", 1)
-  if key ~= ALL then
-    args.enabled = {
-      type = "toggle", order = 2, width = "full",
-      name = string.format(L["Announce when I use %s"], (entry and entry.name) or key),
-      desc = L["Where the line goes -- chat, screen, party, raid -- is set under Notifications, "
-            .. "\"Long cooldowns used\"."],
-      get = function() return effective(key, "announce").enabled == true end,
-      set = function(_, v) put(key, "announce", "enabled", v) end,
-    }
-  end
+  args.enabled = {
+    type = "toggle", order = 2, width = "full",
+    name = string.format(L["Announce when I use %s"], (entry and entry.name) or key),
+    desc = L["Where the line goes -- chat, screen, party, raid -- is set under Notifications, "
+          .. "\"Long cooldowns used\"."],
+    get = function() return effective(key, "announce").enabled == true end,
+    set = function(_, v) put(key, "announce", "enabled", v) end,
+  }
   args.duration = {
     type = "toggle", order = 3, width = "full", name = L["Include how long it lasts"],
     desc = L["\"Divine Protection used -- 10s.\" Left out when this client cannot say how long the "
           .. "effect runs for."],
-    disabled = linked(key, "announce"),
     get = function() return effective(key, "announce").duration == true end,
     set = function(_, v) put(key, "announce", "duration", v) end,
   }
@@ -530,20 +554,19 @@ local function movingTexture(key)
 end
 
 local function textureArgs(key)
+  -- AT1-D2: per ability only -- never built for `*`, and nothing left here to inherit. "Position
+  -- the Indicators" moved to All abilities > General, since this tab no longer exists there.
   local A = AS()
   local args = {}
-  args.inherit = inheritToggle(key, "texture", 1)
-  if key ~= ALL then
-    args.enabled = {
-      type = "toggle", order = 2, width = "full", name = L["Show a texture for this ability"],
-      -- ADR-0009 as amended by AB1-D4: the ON switch is per ability and is never inherited.
-      desc = L["Never inherited: All abilities cannot switch textures on for you."],
-      get = function() return effective(key, "texture").enabled == true end,
-      set = function(_, v) put(key, "texture", "enabled", v) end,
-    }
-  end
+  args.enabled = {
+    type = "toggle", order = 2, width = "full", name = L["Show a texture for this ability"],
+    -- ADR-0009 as amended by AB1-D4: the ON switch is per ability and is never inherited.
+    desc = L["Never inherited: All abilities cannot switch textures on for you."],
+    get = function() return effective(key, "texture").enabled == true end,
+    set = function(_, v) put(key, "texture", "enabled", v) end,
+  }
   args.source = {
-    type = "select", order = 3, name = L["Show"], disabled = linked(key, "texture"),
+    type = "select", order = 3, name = L["Show"],
     values = labelled(textureList("SOURCES"), SOURCE_LABELS),
     sorting = textureList("SOURCES"),
     desc = L["The ability's own spell icon, one of the shapes that ship with Elmira, or any "
@@ -552,7 +575,7 @@ local function textureArgs(key)
     set = function(_, v) put(key, "texture", "source", v) end,
   }
   args.shape = {
-    type = "select", order = 4, name = L["Shape"], disabled = linked(key, "texture"),
+    type = "select", order = 4, name = L["Shape"],
     values = labelled(textureList("SHAPES"), SHAPE_LABELS),
     sorting = textureList("SHAPES"),
     -- Hidden rather than greyed: a shape picker is not "unavailable" while the source is the spell
@@ -566,7 +589,6 @@ local function textureArgs(key)
     desc = L["A path the client can load, e.g. Interface\\Icons\\Spell_Holy_Excorcism. Elmira "
           .. "cannot check it -- if nothing appears, the ring is drawn instead."],
     hidden = function() return sourceOf(key) ~= "custom" end,
-    disabled = linked(key, "texture"),
     get = function() return effective(key, "texture").path or "" end,
     set = function(_, v) put(key, "texture", "path", v or "") end,
   }
@@ -583,13 +605,12 @@ local function textureArgs(key)
   }
   args.size = {
     type = "range", order = 7, name = L["Size"], min = 16, max = 256, step = 8,
-    disabled = linked(key, "texture"),
     desc = L["How big the texture is, in pixels."],
     get = function() return (ns.Textures and ns.Textures.sizeOf(effective(key, "texture"))) or 48 end,
     set = function(_, v) put(key, "texture", "size", v) end,
   }
   args.color = {
-    type = "color", order = 8, name = L["Colour"], hasAlpha = false, disabled = linked(key, "texture"),
+    type = "color", order = 8, name = L["Colour"], hasAlpha = false,
     desc = L["The shipped shapes are white, so this tints them. A spell icon keeps its own art "
           .. "unless you tint it."],
     get = function()
@@ -600,20 +621,20 @@ local function textureArgs(key)
   }
   args.alpha = {
     type = "range", order = 9, name = L["Opacity"], min = 0.05, max = 1.0, step = 0.05,
-    isPercent = true, disabled = linked(key, "texture"),
+    isPercent = true,
     get = function() return effective(key, "texture").alpha or 1 end,
     set = function(_, v) put(key, "texture", "alpha", v) end,
   }
   -- AB4-D1. Between the appearance controls and the moments, because that is what it is: how the
   -- texture is drawn while it is up, not another moment for it to appear at.
   args.fill = {
-    type = "select", order = 9.5, name = L["Fill with"], disabled = linked(key, "texture"),
+    type = "select", order = 9.5, name = L["Fill with"],
     values = labelled(textureList("FILLS"), FILL_LABELS),
     sorting = textureList("FILLS"),
     desc = L["Sweeps the texture round like a cooldown while it is on screen. \"How much of its "
           .. "buff is left\" drains the other way, so what is lit is what is left. Nothing is "
           .. "drawn when there is no cooldown or buff running -- and the moment this ability "
-          .. "counts as about to run out is the one on its General tab."],
+          .. "counts as about to run out is the one right below."],
     get = function() return (ns.Textures and ns.Textures.fillOf(effective(key, "texture"))) or "none" end,
     set = function(_, v) put(key, "texture", "fill", v) end,
   }
@@ -623,7 +644,6 @@ local function textureArgs(key)
   for i, event in ipairs(textureList("EVENTS")) do
     args[event] = {
       type = "toggle", order = 9 + i, width = "full", name = L[EVENT_LABELS[event] or event],
-      disabled = linked(key, "texture"),
       desc = (ns.Textures and ns.Textures.HELD[event])
         and L["Stays on screen for as long as this is true."]
         or L["Appears for a second and a half."],
@@ -631,44 +651,32 @@ local function textureArgs(key)
       set = function(_, v) put(key, "texture", event, v) end,
     }
   end
-  if key == ALL then
-    -- The Indicators row is one anchor for every texture flowing with the others, so its Move mode
-    -- belongs to All abilities rather than being repeated on forty identical tabs.
-    args.anchor = {
-      type = "execute", order = 20, name = function()
-        return positioningIndicators() and L["Done Positioning"] or L["Position the Indicators"]
-      end,
-      desc = L["Puts a sample texture on screen and lets you drag the row wherever you want it. "
-            .. "Press it again when it is in place. Until you do this the row floats above the "
-            .. "queue strip and follows it."],
-      func = function()
-        if not ns.Textures then return end
-        if positioningIndicators() then ns.Textures.StopMoveMode() else ns.Textures.StartPositioning() end
-      end,
-    }
-  else
-    -- AB3-D2, and never inherited: dragging one ability's texture must move that one alone.
-    args.place = {
-      type = "select", order = 20, name = L["Position"],
-      values = labelled(textureList("PLACEMENTS"), PLACE_LABELS),
-      sorting = textureList("PLACEMENTS"),
-      desc = L["\"With the other indicators\" flows it into the row, so several never overlap."],
-      get = function() return effective(key, "texture").place or "row" end,
-      set = function(_, v) put(key, "texture", "place", v) end,
-    }
-    args.move = {
-      type = "execute", order = 21, name = function()
-        return movingTexture(key) and L["Done Moving"] or L["Move This Texture"]
-      end,
-      desc = L["Puts this texture on screen on its own and lets you drag it. Where you drop it is "
-            .. "remembered as an offset from the centre of the screen."],
-      hidden = function() return (effective(key, "texture").place or "row") ~= "custom" end,
-      func = function()
-        if not ns.Textures then return end
-        if movingTexture(key) then ns.Textures.StopMoveMode() else ns.Textures.StartMove(key) end
-      end,
-    }
-  end
+  -- AT1-D1, right after "When its buff is about to run out": greyed until that checkbox is
+  -- actually ticked -- a threshold nothing uses is not a live control.
+  args.expiringSeconds = expiringArgs(key, 14.5, function()
+    return effective(key, "texture").expiring ~= true
+  end)
+  -- AB3-D2, and never inherited: dragging one ability's texture must move that one alone.
+  args.place = {
+    type = "select", order = 20, name = L["Position"],
+    values = labelled(textureList("PLACEMENTS"), PLACE_LABELS),
+    sorting = textureList("PLACEMENTS"),
+    desc = L["\"With the other indicators\" flows it into the row, so several never overlap."],
+    get = function() return effective(key, "texture").place or "row" end,
+    set = function(_, v) put(key, "texture", "place", v) end,
+  }
+  args.move = {
+    type = "execute", order = 21, name = function()
+      return movingTexture(key) and L["Done Moving"] or L["Move This Texture"]
+    end,
+    desc = L["Puts this texture on screen on its own and lets you drag it. Where you drop it is "
+          .. "remembered as an offset from the centre of the screen."],
+    hidden = function() return (effective(key, "texture").place or "row") ~= "custom" end,
+    func = function()
+      if not ns.Textures then return end
+      if movingTexture(key) then ns.Textures.StopMoveMode() else ns.Textures.StartMove(key) end
+    end,
+  }
   args.preview = {
     type = "execute", order = 22, name = L["Preview Texture"],
     desc = L["Shows it for a second and a half with these settings, whether or not it is switched on."],
@@ -709,28 +717,25 @@ end
 local EDGE_EVENT_LABELS = { suggested = "When it is suggested", ready = "When it comes off cooldown" }
 
 local function edgeArgs(key)
+  -- AT1-D2: per ability only -- never built for `*`, and nothing left here to inherit.
   local args = {}
-  args.inherit = inheritToggle(key, "edge", 1)
-  if key ~= ALL then
-    args.enabled = {
-      type = "toggle", order = 2, width = "full", name = L["Flash the screen edge for this ability"],
-      -- ADR-0009 as amended by AB1-D4/AB2-D3: the ON switch is per ability and is never inherited.
-      -- A class pack may ship it on for one or two abilities; nothing else can.
-      desc = L["Never inherited: All abilities cannot switch screen flashes on for you."],
-      get = function() return effective(key, "edge").enabled == true end,
-      set = function(_, v) put(key, "edge", "enabled", v) end,
-    }
-  end
+  args.enabled = {
+    type = "toggle", order = 2, width = "full", name = L["Flash the screen edge for this ability"],
+    -- ADR-0009 as amended by AB1-D4/AB2-D3: the ON switch is per ability and is never inherited.
+    -- A class pack may ship it on for one or two abilities; nothing else can.
+    desc = L["Never inherited: All abilities cannot switch screen flashes on for you."],
+    get = function() return effective(key, "edge").enabled == true end,
+    set = function(_, v) put(key, "edge", "enabled", v) end,
+  }
   args.edge = {
     type = "select", order = 3, name = L["Edge"], values = edgeChoices(),
     sorting = (ns.Overlay and ns.Overlay.EDGES) or nil,
     desc = L["Which screen edge this ability flashes on."],
-    disabled = linked(key, "edge"),
     get = function() return effective(key, "edge").edge or "left" end,
     set = function(_, v) put(key, "edge", "edge", v) end,
   }
   args.color = {
-    type = "color", order = 4, name = L["Colour"], hasAlpha = false, disabled = linked(key, "edge"),
+    type = "color", order = 4, name = L["Colour"], hasAlpha = false,
     get = function()
       local c = effective(key, "edge").color or ns.Colors.HIGHLIGHT
       return c.r, c.g, c.b
@@ -739,7 +744,7 @@ local function edgeArgs(key)
   }
   args.intensity = {
     type = "range", order = 5, name = L["Intensity"], min = 0.05, max = 1.0, step = 0.05,
-    isPercent = true, disabled = linked(key, "edge"),
+    isPercent = true,
     desc = L["How bright the flash is. Reading a number tells you nothing about whether you will "
           .. "catch it out of the corner of your eye -- use Preview."],
     get = function() return effective(key, "edge").intensity or 0.5 end,
@@ -749,7 +754,6 @@ local function edgeArgs(key)
   for i, event in ipairs((ns.Overlay and ns.Overlay.EVENTS) or {}) do
     args[event] = {
       type = "toggle", order = 5 + i, width = "full", name = L[EDGE_EVENT_LABELS[event] or event],
-      disabled = linked(key, "edge"),
       get = function() return effective(key, "edge")[event] == true end,
       set = function(_, v) put(key, "edge", event, v) end,
     }
@@ -922,35 +926,54 @@ local function generalArgs(key, entry, rotations, p)
             .. " to \"Same as All abilities\" follows."] }
   end
   args.inherit = inheritToggle(key, "general", 4)
+  -- AT1-D3, verbatim (owner's wording): the same tooltip on every General tab, All abilities
+  -- included, since the toggle guards every channel the same way regardless of key.
   args.onlyInCombat = {
     type = "toggle", order = 5, width = "full", name = L["Only in combat"],
-    desc = L["Nothing this ability is set to do -- glow, sound, flash, announcement -- happens while "
-          .. "you are out of combat."],
+    desc = L["Glow, Texture, Screen Edge, Sounds and Announcements will be only available in combat"],
     disabled = linked(key, "general"),
     get = function() return effective(key, "general").onlyInCombat == true end,
     set = function(_, v) put(key, "general", "onlyInCombat", v) end,
   }
-  args.expiring = {
-    type = "range", order = 6, name = L["\"About to run out\" means"], min = 1, max = 15, step = 1,
-    desc = L["How many seconds are left on this ability's buff when the \"about to run out\" cue fires."],
-    disabled = linked(key, "general"),
-    get = function() return effective(key, "general").expiringSeconds or 3 end,
-    set = function(_, v) put(key, "general", "expiringSeconds", v) end,
-  }
+  -- AT1-D1: All abilities keeps ITS OWN copy of the warning threshold here, as the inherited
+  -- default -- the per-ability copies live on the Sound and Texture tabs instead, right next to the
+  -- moment they gate. AT1-D2 also moves "Position the Indicators" here, since the Texture tab it
+  -- used to live on no longer exists for All abilities.
+  if key == ALL then
+    args.expiring = expiringArgs(key, 6)
+    args.anchor = {
+      type = "execute", order = 7, name = function()
+        return positioningIndicators() and L["Done Positioning"] or L["Position the Indicators"]
+      end,
+      desc = L["Puts a sample texture on screen and lets you drag the row wherever you want it. "
+            .. "Press it again when it is in place. Until you do this the row floats above the "
+            .. "queue strip and follows it."],
+      func = function()
+        if not ns.Textures then return end
+        if positioningIndicators() then ns.Textures.StopMoveMode() else ns.Textures.StartPositioning() end
+      end,
+    }
+  end
   return args
 end
 
 -- ---------------------------------------------------------------- the entries
 
+-- AT1-D2: All abilities keeps only General and Glow -- "I don't think anyone will want to set the
+-- same texture, screen edge, sound or announcement for all the abilities" (owner). The other four
+-- are per-ability only and are simply never built for the `*` key.
 local function tabsFor(key, entry, rotations, p)
-  return {
-    general  = { type = "group", order = 1, name = L["General"], args = generalArgs(key, entry, rotations, p) },
-    glow     = { type = "group", order = 2, name = L["Glow"], args = glowArgs(key) },
-    texture  = { type = "group", order = 3, name = L["Texture"], args = textureArgs(key) },
-    edge     = { type = "group", order = 4, name = L["Screen-edge"], args = edgeArgs(key) },
-    sound    = { type = "group", order = 5, name = L["Sound"], args = soundArgs(key) },
-    announce = { type = "group", order = 6, name = L["Announcement"], args = announceArgs(key, entry) },
+  local args = {
+    general = { type = "group", order = 1, name = L["General"], args = generalArgs(key, entry, rotations, p) },
+    glow    = { type = "group", order = 2, name = L["Glow"], args = glowArgs(key) },
   }
+  if key ~= ALL then
+    args.texture  = { type = "group", order = 3, name = L["Texture"], args = textureArgs(key) }
+    args.edge     = { type = "group", order = 4, name = L["Screen-edge"], args = edgeArgs(key) }
+    args.sound    = { type = "group", order = 5, name = L["Sound"], args = soundArgs(key) }
+    args.announce = { type = "group", order = 6, name = L["Announcement"], args = announceArgs(key, entry) }
+  end
+  return args
 end
 
 local MEDIA_ICON = "Interface\\AddOns\\Elmira\\media\\icon"

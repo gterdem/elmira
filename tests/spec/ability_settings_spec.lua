@@ -157,7 +157,20 @@ describe("Core.AbilitySettings", function()
     it("inherits per CHANNEL, not per ability", function()
       assert.is_true(A.setInherit("EXORCISM", "glow", false))
       assert.is_false(A.inherits("EXORCISM", "glow"))
-      assert.is_true(A.inherits("EXORCISM", "sound"))
+      assert.is_true(A.inherits("EXORCISM", "general"))
+    end)
+
+    -- AT1-D2: "I don't think anyone will want to set the same texture, screen edge, sound or
+    -- announcement for all the abilities" (owner). These four never inherit ANY field any more --
+    -- not just the on/off switch AB2-D1/AB1-D4 already refused to inherit.
+    it("never inherits anything at all for texture, edge, sound or announce", function()
+      for _, channel in ipairs({ "edge", "sound", "texture", "announce" }) do
+        assert.is_false(A.inherits("EXORCISM", channel), channel .. " must never inherit")
+        assert.is_false(A.inherits(A.ALL, channel))
+      end
+      -- General and Glow are unaffected: they still fall back to All abilities.
+      assert.is_true(A.inherits("EXORCISM", "general"))
+      assert.is_true(A.inherits("EXORCISM", "glow"))
     end)
 
     -- ADR-0009's reason: a cue that fires on everything strobes. This is the assertion the decision
@@ -169,39 +182,41 @@ describe("Core.AbilitySettings", function()
       end
     end)
 
-    -- AB3-D2: WHERE one texture sits is a fact about that texture. An inherited offset would move
-    -- every linked ability's texture at once, or write to a row nothing reads and move nothing --
-    -- and "the custom Move mode drags that texture alone" is the decision's own wording.
-    it("never inherits a texture's placement or its offset", function()
+    -- AB3-D2 as AT1-D2 now makes true of the WHOLE channel: WHERE one texture sits, and everything
+    -- else about it, is a fact about that texture alone. An inherited offset would move every other
+    -- ability's texture at once, or write to a row nothing reads and move nothing -- and "the
+    -- custom Move mode drags that texture alone" is the decision's own wording.
+    it("never inherits a texture's placement, offset or appearance", function()
       A.set(A.ALL, "texture", "place", "custom")
       A.set(A.ALL, "texture", "x", 300)
       A.set(A.ALL, "texture", "y", -200)
+      A.set(A.ALL, "texture", "size", 96)
+      -- AB4-D1: the fill used to be treated as an appearance CHOICE that inherited; now nothing on
+      -- this channel does.
+      A.set(A.ALL, "texture", "fill", "cooldown")
       local t = A.effective("EXORCISM", "texture")
       assert.equal("row", t.place)
       assert.equal(0, t.x)
       assert.equal(0, t.y)
-      -- ...and an ability's own placement holds while it is still linked for everything else
+      assert.equal(48, t.size)
+      assert.equal("none", t.fill)
+      -- ...and an ability's own values hold regardless of what All abilities is set to
       A.set("EXORCISM", "texture", "place", "centre")
       A.set("EXORCISM", "texture", "x", 40)
-      assert.is_true(A.inherits("EXORCISM", "texture"))
+      A.set("EXORCISM", "texture", "size", 64)
       assert.equal("centre", A.effective("EXORCISM", "texture").place)
       assert.equal(40, A.effective("EXORCISM", "texture").x)
-      -- while the APPEARANCE beside it still comes from All abilities
-      A.set(A.ALL, "texture", "size", 96)
-      assert.equal(96, A.effective("EXORCISM", "texture").size)
-      -- AB4-D1: the fill is an appearance CHOICE, so it follows size and colour rather than
-      -- placement -- "every texture sweeps its cooldown" is a look, not a position.
-      A.set(A.ALL, "texture", "fill", "cooldown")
-      assert.equal("cooldown", A.effective("EXORCISM", "texture").fill)
+      assert.equal(64, A.effective("EXORCISM", "texture").size)
     end)
 
-    it("keeps an ability's own on/off for those four even while it is linked", function()
+    it("keeps an ability's own on/off for those four, and never its appearance from All abilities", function()
       A.set("EXORCISM", "edge", "enabled", true)
-      assert.is_true(A.inherits("EXORCISM", "edge"))
       assert.is_true(A.effective("EXORCISM", "edge").enabled)
-      -- ...while the appearance still comes from All abilities
+      -- All abilities' own edge colour never reaches it any more
       A.set(A.ALL, "edge", "edge", "right")
-      assert.equal("right", A.effective("EXORCISM", "edge").edge)
+      assert.equal("left", A.effective("EXORCISM", "edge").edge)
+      A.set("EXORCISM", "edge", "edge", "bottom")
+      assert.equal("bottom", A.effective("EXORCISM", "edge").edge)
     end)
 
     -- Glow is the exception, and the reason is written into the decision: a bar glow on everything
@@ -228,9 +243,9 @@ describe("Core.AbilitySettings", function()
     it("counts sound as on only when some event actually has one", function()
       A.set("EXORCISM", "sound", "enabled", true)
       assert.is_false(A.channelOn("EXORCISM", "sound"))
-      A.set(A.ALL, "sound", "expiring", "Chime")
+      A.set("EXORCISM", "sound", "expiring", "Chime")
       assert.is_true(A.channelOn("EXORCISM", "sound"))
-      A.set(A.ALL, "sound", "expiring", "None")
+      A.set("EXORCISM", "sound", "expiring", "None")
       assert.is_false(A.channelOn("EXORCISM", "sound"))
     end)
 
@@ -249,7 +264,7 @@ describe("Core.AbilitySettings", function()
     it("tracks exactly what it counts as configured", function()
       assert.equal(A.anyOn("EXORCISM"), A.tracked("EXORCISM"))
       A.set("EXORCISM", "sound", "enabled", true)
-      A.set(A.ALL, "sound", "ready", "Chime")
+      A.set("EXORCISM", "sound", "ready", "Chime")
       assert.is_true(A.tracked("EXORCISM"))
       assert.equal(A.anyOn("EXORCISM"), A.tracked("EXORCISM"))
     end)
@@ -353,15 +368,14 @@ describe("Core.AbilitySettings", function()
       assert.is_false(A.effective("JUDGEMENT", "edge").enabled)
     end)
 
-    -- The precedence AB2-D3 names, read from the bottom: shipped, then All abilities, then the
-    -- pack, then the player. The pack outranks All abilities because it is a statement about ONE
-    -- ability while All abilities is a statement about everything.
-    it("outranks the All abilities entry and loses to the ability's own choice", function()
+    -- The precedence AB2-D3 names, read from the bottom: shipped, then the pack, then the player.
+    -- AT1-D2 removes the All abilities layer from this channel entirely, so an unnamed ability
+    -- (JUDGEMENT here) simply gets the shipped default rather than anything set on All abilities.
+    it("outranks the shipped default and loses to the ability's own choice", function()
       packWith({ edge = { enabled = true, edge = "left" } })
       A.set(A.ALL, "edge", "edge", "top")
       assert.equal("left", A.effective("EXORCISM", "edge").edge)
-      assert.equal("top", A.effective("JUDGEMENT", "edge").edge, "unnamed abilities still inherit")
-      A.setInherit("EXORCISM", "edge", false)
+      assert.equal("left", A.effective("JUDGEMENT", "edge").edge, "unnamed abilities get the shipped default")
       A.set("EXORCISM", "edge", "edge", "bottom")
       assert.equal("bottom", A.effective("EXORCISM", "edge").edge)
       -- and the player can switch off what the pack switched on

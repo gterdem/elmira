@@ -1,5 +1,9 @@
 # Changelog
 ## Unreleased
+- **Changed: All abilities now sets only General and Glow.** Texture, Screen-edge, Sound and
+  Announcement are set per ability only; the "Warn me when its buff has N seconds left" slider moved
+  onto the Sound and Texture tabs, right after the moment it guards, and All abilities' own copy
+  stays on General as the shared default. "Position the Indicators" moved to All abilities › General.
 - **Fixed: the options window can no longer come back without its header.** Every time the window is
   put back on screen — after Position the Strip, Move This Texture or any other Move mode — its
   full-width drag bar and the version text on the left are re-applied, so a window that lost them
