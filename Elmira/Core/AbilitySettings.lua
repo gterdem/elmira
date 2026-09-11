@@ -63,7 +63,7 @@ local DEFAULTS = {
   -- because both of the other two are meaningless for an ability the tracker has no numbers for.
   -- An appearance CHOICE, so it inherits like size and colour.
   texture  = { enabled = false, source = "icon", path = "",
-               size = 48, color = false, alpha = 1, fill = "none",
+               size = 48, color = false, alpha = 1, fill = "none", blend = "blend",
                suggested = true, active = true, ready = false, used = false, expiring = false,
                x = 0, y = 0 },
   -- AB2-D1: `suggested` and `ready` are the two moments a screen edge can flash. `suggested` ships

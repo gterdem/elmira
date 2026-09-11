@@ -1,5 +1,7 @@
 # Changelog
 ## Unreleased
+- **New: a Blend mode on the Texture tab**, Opaque or Glow, the same two WeakAuras offers. Glow adds
+  the texture's light to what is behind it, which is what aura art is drawn for. Default Opaque.
 - **Fixed: an ability's settings follow every rank of the spell.** Adding a rank of an ability
   already on the Abilities list -- by id, by name, or from the spellbook -- selects that same row
   instead of creating a second one, and its stored id follows the highest rank you have learned as

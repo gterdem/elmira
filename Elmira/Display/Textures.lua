@@ -60,6 +60,11 @@ Textures.FLASH_SECONDS = 1.5
 -- AT5-D1, replacing AB4-D1's radial swipe: what the texture's OPACITY follows while it is on
 -- screen. Ordered for the dropdown, "none" first because it is the shipped answer.
 Textures.FILLS = { "none", "cooldown", "buff" }
+-- The two blend modes WeakAuras exposes for aura art, under its names: "blend" = the client's
+-- BLEND (normal, the texture's pixels replace what is behind them -- "Opaque") and "add" = ADD
+-- (additive: black vanishes, bright parts glow and overlap brightens -- "Glow", what the
+-- PowerAuras arcs were drawn for). Anything else falls back to "blend".
+Textures.BLENDS = { "blend", "add" }
 
 local frames = {}               -- ability key -> the frame currently showing it
 local pool = {}                 -- frames nothing is using
@@ -326,6 +331,9 @@ local function paint(f, key, e)
   -- required, so the indicator still paints on a load order where the library is absent.
   local file = Textures.texturePath(e, key) or (MEDIA .. "shape_ring")
   f.icon:SetTexture(ns.TextureLibrary and ns.TextureLibrary.drawable(file) or file)
+  if f.icon.SetBlendMode then
+    f.icon:SetBlendMode(e.blend == "add" and "ADD" or "BLEND")
+  end
   local c = e.color
   if type(c) == "table" then
     f.icon:SetVertexColor(c.r or 1, c.g or 1, c.b or 1)

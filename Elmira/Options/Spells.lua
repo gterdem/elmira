@@ -747,6 +747,18 @@ local function textureArgs(key)
     get = function() return effective(key, "texture").alpha or 1 end,
     set = function(_, v) put(key, "texture", "alpha", v) end,
   }
+  -- Owner, 2026-09-11, after asking what WeakAuras' "Glow / Opaque" means: the same two modes,
+  -- under the same names, default Opaque. Additive is what aura art is drawn for; on a bright
+  -- background it washes out, which the tooltip says.
+  args.blend = {
+    type = "select", order = 9.5, name = L["Blend mode"], disabled = off,
+    desc = L["Opaque draws the texture as it is. Glow adds its light to what is behind it: black"
+          .. " disappears and bright parts shine, which is what most aura art is made for -- and"
+          .. " what washes out on a bright background."],
+    values = { blend = L["Opaque"], add = L["Glow"] }, sorting = { "blend", "add" },
+    get = function() return effective(key, "texture").blend or "blend" end,
+    set = function(_, v) put(key, "texture", "blend", v) end,
+  }
   -- All five of Core/Track's events, unlike the screen edge's two (AB3-D1). `suggested` and
   -- `active` SHOW the texture while the state holds; the other three flash it for a second and a
   -- half, which is why the three ADR-0009 keeps off a full-screen flash are fine here.
