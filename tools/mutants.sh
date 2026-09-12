@@ -46,6 +46,9 @@ LUA="${LUA:-lua5.1}"
 # A mutation can turn a loop condition into an infinite loop; without this the gate hangs instead of
 # reporting.
 TIMEOUT="${MUTANT_TIMEOUT:-60}"
+# ADR-0016: pure UI declared exempt per file/scope with a reason. NOEXEMPT=1 ignores it (audits).
+EXEMPT_LIST="tools/mutants-exempt.txt"; NOEXEMPT="${NOEXEMPT:-}"
+FIELD_RE="^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(\"[^\"]*\"|'[^']*'|-?[0-9]+(\\.[0-9]+)?|true|false|nil|L\\[[^]]*\\])[[:space:]]*,?[[:space:]]*(--.*)?\$"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || { echo "$(basename "$0"): cannot cd to $ROOT" >&2; exit 2; }  # else: mutating the wrong tree, or reporting a vacuous pass from an empty file list
@@ -53,6 +56,30 @@ cd "$ROOT" || { echo "$(basename "$0"): cannot cd to $ROOT" >&2; exit 2; }  # el
 # Shipped Lua only. Libs/ is vendored, tests/ is the oracle -- mutating either measures nothing.
 shipped_files() {
   find Elmira* -name '*.lua' -not -path '*/Libs/*' 2>/dev/null | sort
+}
+
+# A malformed or dangling entry aborts before any mutation runs -- same lesson as coverage-exempt.txt.
+EXEMPT_FILE_SET=""; EXEMPT_FIELDS_SET=""
+load_exempt() {
+  [ -z "$NOEXEMPT" ] || return 0
+  [ -f "$EXEMPT_LIST" ] || return 0
+  local n=0 raw line path scope rest
+  while IFS= read -r raw; do
+    n=$((n + 1))
+    line="$(printf '%s' "$raw" | sed 's/^[[:space:]]*//')"
+    case "$line" in ''|'#'*) continue ;; esac
+    read -r path scope rest <<< "$line"
+    if [ -z "$scope" ] || [ -z "$rest" ]; then
+      echo "mutants: $EXEMPT_LIST:$n malformed (need '<path> <file|fields> <reason...>')" >&2; exit 2
+    fi
+    case "$scope" in
+      file|fields) : ;;
+      *) echo "mutants: $EXEMPT_LIST:$n bad scope '$scope' (want file or fields)" >&2; exit 2 ;;
+    esac
+    [ -f "$path" ] || { echo "mutants: $EXEMPT_LIST:$n names a file that does not exist: $path" >&2; exit 2; }
+    if [ "$scope" = file ]; then EXEMPT_FILE_SET="$EXEMPT_FILE_SET $path"
+    else EXEMPT_FIELDS_SET="$EXEMPT_FIELDS_SET $path"; fi
+  done < "$EXEMPT_LIST"
 }
 
 # --- target selection -------------------------------------------------------------------------
@@ -99,11 +126,22 @@ filter_lines() {
   while IFS= read -r t; do
     f="${t%:*}"; l="${t##*:}"
     [ -f "$f" ] || continue
+    if [ -z "$NOEXEMPT" ]; then
+      case " $EXEMPT_FILE_SET " in *" $f "*) printf '%s\n' "$t" >> "$WORKDIR/exempt_file"; continue ;; esac
+    fi
     # Blank or whole-line comment once leading whitespace is stripped.
     text="$(sed -n "${l}p" "$f" | sed 's/^[[:space:]]*//')"
     case "$text" in
       ''|--*) continue ;;
     esac
+    if [ -z "$NOEXEMPT" ]; then
+      case " $EXEMPT_FIELDS_SET " in
+        *" $f "*)
+          if printf '%s' "$text" | grep -qE "$FIELD_RE"; then
+            printf '%s\n' "$t" >> "$WORKDIR/exempt_fields"; continue
+          fi ;;
+      esac
+    fi
     # Escape hatch for a genuine EQUIVALENT MUTANT -- a line whose deletion cannot change behaviour,
     # so no test could ever catch it (Lua's implicit nil return is the usual source). Without this the
     # first such line blocks CI forever and the gate gets switched off, which is how gates die. The
@@ -253,11 +291,19 @@ run_worker() {
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
+load_exempt
 targets > "$WORKDIR/targets"
 TOTAL=$(wc -l < "$WORKDIR/targets" | tr -d ' ')
 
+UIEXEMPT_FILE=0; [ -f "$WORKDIR/exempt_file" ] && UIEXEMPT_FILE=$(wc -l < "$WORKDIR/exempt_file" | tr -d ' ')
+UIEXEMPT_FIELDS=0; [ -f "$WORKDIR/exempt_fields" ] && UIEXEMPT_FIELDS=$(wc -l < "$WORKDIR/exempt_fields" | tr -d ' ')
+UIEXEMPT_TOTAL=$((UIEXEMPT_FILE + UIEXEMPT_FIELDS))
+UIEXEMPT_MSG=""
+[ "$UIEXEMPT_TOTAL" -gt 0 ] && UIEXEMPT_MSG="         ($UIEXEMPT_TOTAL line(s) exempt by $EXEMPT_LIST: $UIEXEMPT_FILE whole-file, $UIEXEMPT_FIELDS literal option fields — NOEXEMPT=1 to audit)"
+
 if [ "$TOTAL" -eq 0 ]; then
   echo "mutants: no candidate lines (base=$BASE). Nothing changed, or only comments changed."
+  [ -n "$UIEXEMPT_MSG" ] && echo "$UIEXEMPT_MSG"
   exit 0
 fi
 
@@ -302,6 +348,7 @@ if [ "$SURV" -eq 0 ]; then
   echo "mutants: 0 survivors of $TESTED testable line(s) — each is protected by a test."
   [ "$SKIP" -gt 0 ] && echo "         ($SKIP line(s) skipped: commenting them out does not parse, so nothing was proven)"
   [ "$EXEMPT" -gt 0 ] && echo "         ($EXEMPT line(s) marked 'mutants: equivalent' — grep for it to review them)"
+  [ -n "$UIEXEMPT_MSG" ] && echo "$UIEXEMPT_MSG"
   exit 0
 fi
 
@@ -312,6 +359,7 @@ else
 fi
 [ "$SKIP" -gt 0 ] && echo "         ($SKIP of $TOTAL skipped: commenting them out does not parse)"
 [ "$EXEMPT" -gt 0 ] && echo "         ($EXEMPT line(s) marked 'mutants: equivalent' — grep for it to review them)"
+[ -n "$UIEXEMPT_MSG" ] && echo "$UIEXEMPT_MSG"
 echo
 if [ -n "$DEEP" ]; then
   sort "$WORKDIR/survivors" | while IFS=$'\t' read -r loc kind src; do

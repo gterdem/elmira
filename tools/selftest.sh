@@ -255,6 +255,74 @@ check "lint fails loudly if Elmira/Classes/ disappears" "1" \
 mv "$CLASSSTASH/Classes" Elmira/Classes
 rmdir "$CLASSSTASH"
 
+
+# 9. DP2b (ADR-0016): tools/mutants-exempt.txt scopes the gate away from pure UI, by declaration.
+#    Each case is the vacuous-pass defect it exists to prevent. Overwrite the SANDBOX's copy only;
+#    the real file at the repo root is never touched.
+EXEMPT="tools/mutants-exempt.txt"
+cp -p "$EXEMPT" "$SANDBOX/st.exempt.bak"
+
+# (a) a `file` entry for the whole target: it drops to 0 candidate lines, and the summary still
+#     names what it exempted instead of going silent about it.
+printf '%s file selftest case (a): whole-file exemption.\n' "$TARGET" > "$EXEMPT"
+A_OUT="$(verdict)"
+check "a 'file' entry drops the target to 0 candidate lines" "1" \
+  "$(printf '%s\n' "$A_OUT" | grep -c 'no candidate lines')"
+check "the summary names the exempt count" "1" \
+  "$(printf '%s\n' "$A_OUT" | grep -c "exempt by $EXEMPT")"
+
+# (b)/(f) a `fields` entry on a page-table-shaped fixture (not a shipped file, registered like case
+#     6/7's): a literal field is exempt, a closure and a `L[...] .. concat` field in the SAME file
+#     are still mutated -- the regex must not be fooled by the `L[` prefix into treating it as one.
+FIXTURE="Elmira/Core/SelftestFields.lua"
+cat > "$FIXTURE" <<'EOF'
+local M = {}
+M.spec = {
+  desc = "selftest literal field",
+  label = L["x"] .. suffix,
+}
+function M.getter() return true end
+return M
+EOF
+sed -i "s|^Core\\\\Init.lua$|Core\\\\SelftestFields.lua\nCore\\\\Init.lua|" Elmira/Elmira_Vanilla.toc
+printf '%s fields selftest case (b): literal field vs closure and concat.\n' "$FIXTURE" > "$EXEMPT"
+B_OUT="$(FILES=$FIXTURE JOBS=4 ./tools/mutants.sh 2>&1)"
+check "a 'fields' entry skips the literal field line" "0" \
+  "$(printf '%s\n' "$B_OUT" | grep -c 'selftest literal field')"
+check "a 'fields' entry still mutates a closure in the same file" "1" \
+  "$(printf '%s\n' "$B_OUT" | grep -c 'function M.getter')"
+check "the field regex does not exempt an 'L[...] .. concat' line" "1" \
+  "$(printf '%s\n' "$B_OUT" | grep -c 'L\["x"\] .. suffix')"
+rm -f "$FIXTURE"
+sed -i '/^Core\\SelftestFields.lua$/d' Elmira/Elmira_Vanilla.toc
+
+# (c) an entry with no reason aborts BEFORE any mutation runs.
+printf '%s file\n' "$TARGET" > "$EXEMPT"
+C_OUT="$(FILES="$TARGET" JOBS=4 ./tools/mutants.sh 2>&1)"; C_STATUS=$?
+check "a scope with no reason aborts (exit 2)" "2" "$C_STATUS"
+check "and no mutation ran (only the malformed-entry message)" "1" \
+  "$(printf '%s\n' "$C_OUT" | grep -c 'malformed')"
+
+# (d) an entry naming a file that does not exist aborts too, and says which one.
+printf 'Elmira/Options/SelftestDoesNotExist.lua file selftest case (d): dangling entry.\n' > "$EXEMPT"
+D_OUT="$(FILES="$TARGET" JOBS=4 ./tools/mutants.sh 2>&1)"; D_STATUS=$?
+check "a dangling entry (missing file) aborts (exit 2)" "2" "$D_STATUS"
+check "and names the missing file" "1" \
+  "$(printf '%s\n' "$D_OUT" | grep -c 'SelftestDoesNotExist.lua')"
+
+# (e) NOEXEMPT=1 ignores the list entirely, restoring the survivor a 'file' entry was hiding.
+cp -p "$TARGET" "$SANDBOX/st.bak"
+{ head -1 "$TARGET"; printf 'local SELFTEST_NOEXEMPT = 1\n'; tail -n +2 "$TARGET"; } > "$SANDBOX/st.new"
+cp "$SANDBOX/st.new" "$TARGET"
+printf '%s file selftest case (e): whole-file exemption.\n' "$TARGET" > "$EXEMPT"
+check "the 'file' entry hides the injected survivor by default" "0" \
+  "$(verdict | grep -c 'SELFTEST_NOEXEMPT')"
+check "NOEXEMPT=1 restores the survivor the entry was hiding" "1" \
+  "$(NOEXEMPT=1 FILES="$TARGET" JOBS=4 ./tools/mutants.sh 2>&1 | grep -c 'SELFTEST_NOEXEMPT')"
+cp -p "$SANDBOX/st.bak" "$TARGET"
+
+cp -p "$SANDBOX/st.exempt.bak" "$EXEMPT"
+
 echo
 if [ "$FAILED" -gt 0 ]; then echo "selftest: $FAILED case(s) FAILED"; exit 1; fi
 echo "selftest: all cases passed"

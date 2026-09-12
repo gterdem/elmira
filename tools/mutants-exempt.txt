@@ -1,0 +1,19 @@
+# Files, or the literal option-table fields in a file, tools/mutants.sh may skip, one per line, each
+# with the scope and the reason it cannot be usefully mutation-tested. An entry here is a claim
+# someone made and can be argued with. An undeclared gap is just a silence, which is what this file
+# exists to prevent -- so keep it short and delete entries as they are earned. ADR-0016.
+#
+# Format: <path> <file|fields> <reason...>
+#   file    every line of the file is skipped.
+#   fields  only literal option-table fields (key = "string"|number|true|false|nil|L[...],) are
+#           skipped -- every set/get/hidden/disabled closure and every function stays mutated.
+# An entry naming a file that does not exist, or missing a scope or a reason, aborts the run before
+# any mutation runs: a silent exemption is the failure mode this file exists to prevent, same as
+# tools/coverage-exempt.txt.
+
+Elmira/Options/TexturePickerWidget.lua file custom AceGUI widget on pooled frames; cells, scroll and tooltips only the client renders.
+Elmira/Options/TexturePanel.lua file texture toolbar; every observable is a frame property the mock cannot see.
+Elmira/Options/CardWidget.lua file custom card widget; same as TexturePanel.lua, a frame the mock cannot observe.
+Elmira/Options/Options.lua fields page tables: literal option fields are verified on screen; closures stay gated.
+Elmira/Options/Spells.lua fields page tables: literal option fields are verified on screen; closures stay gated.
+Elmira/Options/Rotation.lua fields page tables: literal option fields are verified on screen; closures stay gated.
