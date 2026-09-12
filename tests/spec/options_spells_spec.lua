@@ -217,6 +217,18 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("Kick (901)", values["901"])
     end)
 
+    -- AceGUI's pullout rows are 17px with a word-wrapping label: a label wider than the row wraps
+    -- and rides up beside its neighbours (owner, in game: "Greater Blessing of Salvation"). The
+    -- NAME is shortened, never the id -- an ellipsis takes its place, and the id stays whole.
+    it("shortens a name too long for the pullout row, never the id", function()
+      ns.Adapter.spellbookEntries = function()
+        return { { id = 1, name = string.rep("A", 50) } }
+      end
+      local values = addArgs().pick.values
+      local expected = string.rep("A", 35) .. "\226\128\166 (1)"
+      assert.equal(expected, values["1"])
+    end)
+
     -- I1b: with no explicit `sorting`, AceGUI's DropDown sorts by the KEYS -- `tostring(entry.id)`
     -- -- so the list came out ordered by spell id.
     it("sorts the picker by NAME, not by the spell id its key happens to be", function()
@@ -286,6 +298,8 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         return id == 415073 and "Interface\\Icons\\Exo" or nil
       end
       local args = addArgs()
+      assert.equal(20, args.icon.imageWidth)
+      assert.equal(20, args.icon.imageHeight)
       assert.equal("", args.icon.image(), "empty until something resolves")
       args.typed.set(nil, "415073")
       assert.equal("415073 (Exorcism)", args.typed.get())
@@ -307,6 +321,20 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("", args.typed.get())
       assert.equal("", args.icon.image())
       assert.is_nil(args.preview, "the 'Resolves to'/'Not found' line is gone")
+    end)
+
+    -- The empty-state case above is silent whether or not `clearTyped` ran (there was nothing to
+    -- clear); this proves it actually WIPES a real prior resolution, not merely that the box
+    -- happened to already read empty.
+    it("clears a previously resolved box, icon included, when what comes next is junk", function()
+      ns.Display.spellIconByID = function() return "Interface\\Icons\\Exo" end
+      local args = addArgs()
+      args.typed.set(nil, "415073")
+      assert.equal("415073 (Exorcism)", args.typed.get())
+      assert.equal("Interface\\Icons\\Exo", args.icon.image())
+      args.typed.set(nil, "1")
+      assert.equal("", args.typed.get())
+      assert.equal("", args.icon.image())
     end)
 
     it("registers a resolved id on Add, navigates, and clears the box and icon", function()
@@ -337,6 +365,24 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("id", ns.db.char.spells.EXORCISM.source)
       assert.same({ "Elmira", "spells", "list", "EXORCISM" }, ns.selected)
       assert.equal("", args.typed.get())
+    end)
+
+    -- The whole point of the WeakAuras shape, isolated: "20930 (Holy Shock)" -- the box's own
+    -- resolved display text -- is never itself handed to the adapter as a name to resolve.
+    it("never asks the adapter to resolve its own composed display string as a name", function()
+      local askedNames = {}
+      local realByName = ns.Adapter.spellIDByName
+      ns.Adapter.spellIDByName = function(name)
+        askedNames[#askedNames + 1] = name
+        return realByName(name)
+      end
+      local args = addArgs()
+      args.typed.set(nil, "Exorcism")
+      askedNames = {}
+      args.typed.set(nil, args.typed.get())    -- the second Enter, over "415073 (Exorcism)"
+      for _, name in ipairs(askedNames) do
+        assert.not_equal("415073 (Exorcism)", name)
+      end
     end)
 
     it("does nothing when Add is pressed with nothing resolved", function()
@@ -870,6 +916,12 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("combat_or_target", args.show.get())
       args.show.set(nil, "combat")
       assert.equal("combat", A.effective("*", "glow").show)
+      -- AT2-D1, verbatim: the glow's own schedule is independent of the queue strip's.
+      local desc = args.show.desc
+      assert.is_truthy(desc:find("its own schedule", 1, true))
+      assert.is_truthy(desc:find("queue strip's", 1, true))
+      assert.is_truthy(desc:find("does not silence a glow set to Always", 1, true))
+      assert.is_truthy(desc:find("does not force one set to In combat only", 1, true))
     end)
 
     it("stores style and colour per ability, and repaints", function()
@@ -907,12 +959,12 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("Use whatever the All abilities entry at the top of the list is set to.",
                    args.inherit.desc)
       assert.is_true(args.inherit.get())
-      for _, key in ipairs({ "enabled", "style", "color", "particles", "preview" }) do
+      for _, key in ipairs({ "enabled", "show", "style", "color", "particles", "preview" }) do
         assert.is_true(args[key].disabled(), key .. " is live while linked")
       end
       args.inherit.set(nil, false)
       local unlinked = tab("EXORCISM", "glow")
-      for _, key in ipairs({ "enabled", "style", "color", "particles", "preview" }) do
+      for _, key in ipairs({ "enabled", "show", "style", "color", "particles", "preview" }) do
         assert.is_false(unlinked[key].disabled(), key .. " is still greyed after unlinking")
       end
     end)
@@ -1063,6 +1115,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("range", row.type)
       assert.equal(7.5, row.order, "immediately after the expiring event select at order 7")
       assert.equal("Warn me about to expire", row.name)
+      assert.is_truthy(row.desc:find("about to expire", 1, true))
       assert.equal(3, row.get())
       assert.is_true(row.hidden(), "nothing has ever seen this ability buff anyone")
       A.learnBuff("EXORCISM")
@@ -1215,6 +1268,28 @@ describe("Options/Spells (the Abilities page, AB1)", function()
           A.effective("EXORCISM", "texture").path, "the file they chose was thrown away")
       end)
 
+    -- AT8-D5: flipping the tick box is a source change too, asked of Textures the same way the
+    -- Move toolbar and the picker window ask it -- with the source it is LEAVING, not a constant.
+    it("asks Textures to flip the size default, with the source it is leaving", function()
+      local flips = {}
+      ns.Textures.flipSize = function(key, from, to) flips[#flips + 1] = { key, from, to } end
+      tab("EXORCISM", "texture").ownIcon.set(nil, false)
+      assert.same({ { "EXORCISM", "icon", "path" } }, flips)
+      tab("EXORCISM", "texture").ownIcon.set(nil, true)
+      assert.same({ { "EXORCISM", "icon", "path" }, { "EXORCISM", "path", "icon" } }, flips)
+    end)
+
+    -- AT6-D5: a texture already on screen has to pick up a source flip immediately -- the explicit
+    -- repaint at the end of this setter, on top of the one `put` already does for the field write.
+    it("repaints once for the field write and once more explicitly, so a held preview never lags",
+      function()
+        tab("EXORCISM", "texture").ownIcon.set(nil, false) -- reach "path" mode first
+        local refreshes = 0
+        ns.Textures.Refresh = function() refreshes = refreshes + 1; return true end
+        tab("EXORCISM", "texture").ownIcon.set(nil, true) -- exactly one `put` call happens here
+        assert.equal(2, refreshes)
+      end)
+
     it("shows the file and the Choose button only when the icon is not being used", function()
       local args = tab("EXORCISM", "texture")
       assert.is_true(args.path.hidden())
@@ -1234,6 +1309,9 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       row.set(nil, "Interface\\Icons\\Ability_Rogue_Ambush")
       assert.equal("Interface\\Icons\\Ability_Rogue_Ambush", A.effective("EXORCISM", "texture").path)
       assert.equal("Interface\\Icons\\Ability_Rogue_Ambush", tab("EXORCISM", "texture").path.get())
+      assert.is_truthy(row.desc:find("Pick one with Choose", 1, true))
+      assert.is_truthy(row.desc:find("Elmira cannot check a path you", 1, true))
+      assert.is_truthy(row.desc:find("if nothing appears, the ring is drawn instead", 1, true))
     end)
 
     -- AT6-D3 (owner): Choose… opens the picker ON A CLEAR SCREEN. It does what "Move This Texture"
@@ -1249,9 +1327,29 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.equal("execute", row.type)
       assert.equal(5, row.order)
       assert.equal("Choose…", row.name)
+      assert.is_truthy(row.desc:find("this window gets out of the way", 1, true))
+      assert.is_truthy(row.desc:find("you judge a picture at its real size", 1, true))
+      assert.is_truthy(row.desc:find("press Done when it is right", 1, true))
       row.func()
       assert.same({ "EXORCISM" }, moved, "the options window was left sitting over the picker")
       assert.same({ "EXORCISM" }, opened)
+    end)
+
+    -- The two blend modes WeakAuras exposes, under Elmira's own names: "blend" (Opaque, the
+    -- shipped default) and "add" (Glow, additive art).
+    it("offers Opaque/Glow, round-trips the field, and explains what each one does", function()
+      local row = tab("EXORCISM", "texture").blend
+      assert.equal("select", row.type)
+      assert.equal(9.5, row.order)
+      assert.equal("Blend mode", row.name)
+      assert.same({ blend = "Opaque", add = "Glow" }, row.values)
+      assert.same({ "blend", "add" }, row.sorting)
+      assert.equal("blend", row.get(), "ships Opaque by default")
+      row.set(nil, "add")
+      assert.equal("add", A.effective("EXORCISM", "texture").blend)
+      assert.equal("add", tab("EXORCISM", "texture").blend.get())
+      assert.is_truthy(row.desc:find("black disappears and bright parts shine", 1, true))
+      assert.is_truthy(row.desc:find("washes out on a bright background", 1, true))
     end)
 
     it("opens the picker without erroring when no renderer is loaded", function()
@@ -1356,8 +1454,23 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       assert.is_truthy(args.suggested.desc:find("Stays as long as that holds", 1, true))
       assert.is_truthy(args.ready.desc:find("second and a half", 1, true))
       assert.is_truthy(args.active.desc:find("Avenging Wrath", 1, true))
+      -- AT9-D1, verbatim: held until the buff is gone, not a flash -- so its own desc says "stays
+      -- until it is gone", never "a flash", the one moment on this tab that is not one.
+      assert.is_truthy(args.expiring.desc:find("stays until it is gone", 1, true))
+      assert.is_truthy(args.expiring.desc:find("number below says how many", 1, true))
       args.ready.set(nil, true)
       assert.is_true(A.effective("EXORCISM", "texture").ready)
+      -- AT9-D3: the two buff moments are off the page at all until Elmira knows this ability buffs
+      -- you; the other three never ask.
+      assert.is_true(args.active.hidden())
+      assert.is_true(args.expiring.hidden())
+      assert.is_nil(args.suggested.hidden)
+      assert.is_nil(args.ready.hidden)
+      assert.is_nil(args.used.hidden)
+      A.learnBuff("EXORCISM")
+      local seen = tab("EXORCISM", "texture")
+      assert.is_false(seen.active.hidden())
+      assert.is_false(seen.expiring.hidden())
     end)
 
     -- AT8-D1/D2 as amended by AT9-D3/D4: the warning threshold's per-ability copy, right after the
@@ -1479,7 +1592,7 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         -- AT9-D4 adds "Show seconds left" to the list. `expiringSeconds` stays on it: AT9 hid it
         -- behind its own checkbox, but "off means off" is a separate promise and a live slider in
         -- the middle of a dead tab is exactly what AT6-D1 was written against.
-        local greyed = { "ownIcon", "path", "choose", "size", "color", "alpha", "fill",
+        local greyed = { "ownIcon", "path", "choose", "size", "color", "alpha", "fill", "blend",
                          "suggested", "ready", "used", "active", "expiring", "expiringSeconds",
                          "seconds", "move", "reset" }
         for _, field in ipairs(greyed) do
@@ -1514,6 +1627,38 @@ describe("Options/Spells (the Abilities page, AB1)", function()
       tab("EXORCISM", "texture").enabled.set(nil, false)
       assert.is_true(tab("EXORCISM", "texture").silent.hidden())
     end)
+
+    -- AT9-D3: the one line a hidden buff-only control is allowed to cost the player -- present
+    -- while nothing has seen this ability buff anyone, gone the moment it has.
+    it("says buff options will appear once Elmira has seen the buff, until it has", function()
+      local args = tab("EXORCISM", "texture")
+      assert.equal("description", args.noBuff.type)
+      assert.equal(24, args.noBuff.order)
+      assert.equal("medium", args.noBuff.fontSize)
+      assert.is_false(args.noBuff.hidden(), "shown while nothing has ever seen this ability buff")
+      assert.is_truthy(args.noBuff.name:find("Buff options appear once Elmira has seen", 1, true))
+      A.learnBuff("EXORCISM")
+      assert.is_true(tab("EXORCISM", "texture").noBuff.hidden(), "gone the moment it is known to buff")
+    end)
+
+    -- AT9-D4/AT10-D1: the countdown toggle -- hidden on an ability nothing has ever seen buff (the
+    -- same `hasBuff` gate as the two buff moments), a real read/write round trip once it is known,
+    -- and its own explanatory desc.
+    it("the countdown toggle is buff-gated, round-trips its own value, and explains itself",
+      function()
+        local row = tab("EXORCISM", "texture").seconds
+        assert.is_true(row.hidden(), "nothing has ever seen this ability buff the player")
+        A.learnBuff("EXORCISM")
+        assert.is_false(tab("EXORCISM", "texture").seconds.hidden())
+        assert.is_true(tab("EXORCISM", "texture").seconds.get(), "AT9-D4 ships this on by default")
+        tab("EXORCISM", "texture").seconds.set(nil, false)
+        assert.is_false(A.effective("EXORCISM", "texture").seconds)
+        assert.is_false(tab("EXORCISM", "texture").seconds.get())
+        local desc = tab("EXORCISM", "texture").seconds.desc
+        assert.is_truthy(desc:find("middle of the texture", 1, true))
+        assert.is_truthy(desc:find("when its buff appears", 1, true))
+        assert.is_truthy(desc:find("30 as a sample", 1, true))
+      end)
 
     -- AT6-D5: the Preview button is gone. The texture is on screen for as long as its tab is the
     -- one being read (Display/Textures.Preview, driven from Options.holdTexturePreview), so there
@@ -2057,6 +2202,55 @@ describe("Options/Spells (the Abilities page, AB1)", function()
         assert.is_nil(ns.db.char.abilities.MYSTERY)
         assert.is_nil(entry("MYSTERY"))
       end)
+    end)
+  end)
+
+  -- Every interactive control gets a `desc` the owner wrote for a reason; a walk catches the
+  -- deletion of any single one of them, the way options_spec.lua's own font-size walk does for
+  -- `description` rows. Types that legitimately carry no prose of their own (`description` itself,
+  -- `group`/`header` containers, and the icon-only slot beside the typed box) are excluded rather
+  -- than asserted empty.
+  describe("every interactive control has a desc", function()
+    -- All pre-existing, all self-explanatory from their own name/label, and none of them one of
+    -- this pass's survivor lines -- adding prose to them would be a behaviour change out of scope.
+    local EXEMPT_NO_DESC = {
+      ["spells.share.rotation"] = true,
+      ["spells.list.add.pick"] = true,        -- "From your spellbook" already says what it is
+      ["spells.list.filter.name"] = true,     -- a plain search box beside its own label
+      ["spells.list.filter.show"] = true,
+      ["spells.list.*.glow.enabled"] = true,  -- "Glow the button for this ability" says it all
+      ["spells.list.*.glow.style"] = true,
+      ["spells.list.SLICE_AND_DICE.glow.enabled"] = true,
+      ["spells.list.SLICE_AND_DICE.glow.style"] = true,
+      ["spells.list.SLICE_AND_DICE.general.remove"] = true, -- "Remove" needs no further prose
+      ["spells.list.SLICE_AND_DICE.edge.color"] = true,     -- a colour swatch, not a decision
+      ["spells.list.SLICE_AND_DICE.texture.alpha"] = true,
+    }
+
+    local function walk(node, path, out)
+      for key, row in pairs(node.args or {}) do
+        local where = path .. "." .. tostring(key)
+        if type(row) == "table" then
+          if row.type == "group" then
+            walk(row, where, out)
+          elseif row.type and row.type ~= "description" and row.type ~= "header"
+              and not EXEMPT_NO_DESC[where] then
+            out[#out + 1] = { where = where, desc = row.desc }
+          end
+        end
+      end
+    end
+
+    it("across the add panel, the filter row and a fully-populated ability's tabs", function()
+      Spells.add(ns.db.char.spells, { id = 900, name = "Slice and Dice", source = "spellbook" })
+      A.set("SLICE_AND_DICE", "general", "hasBuff", true)
+      local out = {}
+      walk(SpellsPage.group(), "spells", out)
+      for _, control in ipairs(out) do
+        assert.is_string(control.desc, control.where .. " has no desc at all")
+        assert.not_equal("", control.desc, control.where .. " has an empty desc")
+      end
+      assert.is_true(#out > 20, "the walk found suspiciously few controls: " .. #out)
     end)
   end)
 

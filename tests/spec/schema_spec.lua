@@ -1010,6 +1010,17 @@ describe("Core.Schema (docs/02-CONDITION-SCHEMA.md, ADR-0002)", function()
       assert.equal("EXORCISM: buff must be true or absent, got false", out[1])
       assert.equal("SEAL: buff must be true or absent, got yes", out[2])
     end)
+
+    -- The flag read has to be re-declared FRESH on every entry: a non-table entry that follows a bad
+    -- flag must not inherit it. "AAAA" sorts before "ZZZZ", so its bad flag would leak into the
+    -- non-table entry that follows if the read were not scoped per iteration.
+    it("does not leak one entry's flag into the next entry that is not a table", function()
+      local out = Schema.spellBuffErrors({
+        AAAA = { buff = "leak" },
+        ZZZZ = "not a spell table",
+      })
+      assert.same({ "AAAA: buff must be true or absent, got leak" }, out)
+    end)
   end)
 
 end)

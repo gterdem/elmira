@@ -77,6 +77,23 @@ describe("Elmira.API v1 registry", function()
     assert.same({}, logged)
   end)
 
+  -- AT9-D3: the second logging site -- a malformed `buff` flag is inert (four controls stay greyed
+  -- with nothing saying why), so it gets the same "registered anyway, but said out loud" treatment
+  -- as a bad ability default, through the same log call.
+  it("registers a pack with a malformed buff flag, and logs what it ignored", function()
+    local logged = {}
+    helper.ns().log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
+    helper.load("Elmira/Core/AbilitySettings.lua")
+    local Schema = helper.load("Elmira/Core/Schema.lua")
+    assert.is_function(Schema.spellBuffErrors)
+    local ok = API.RegisterDataPack{ class = "PALADIN", flavor = "SoD",
+      spells = { SEAL = { id = 1, buff = "yes" } } }
+    assert.is_true(ok)
+    assert.equal(1, #logged)
+    assert.is_truthy(logged[1]:find("PALADIN", 1, true))
+    assert.is_truthy(logged[1]:find("buff", 1, true))
+  end)
+
   it("registers a pack with no Schema loaded at all", function()
     assert.is_nil(helper.ns().Schema)
     assert.is_true(API.RegisterDataPack{ class = "MAGE", flavor = "SoD", spells = {} })

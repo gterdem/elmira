@@ -221,6 +221,17 @@ describe("Display.Queue", function()
       assert.equal(5, n)   -- MAX_SLOTS, all created up front
     end)
 
+    -- AT2-D3: the strip's own glow lights THIS frame, and only this one -- the button Glow.lua
+    -- reaches through when the Queue page's "Glow the first icon on the strip" is on.
+    it("firstSlotFrame is nil before Create, then the real slot 1 button", function()
+      assert.is_nil(Queue.firstSlotFrame())
+      Queue.Create()
+      assert.equal(icons()[1], Queue.firstSlotFrame())
+      Queue.Render({ { spell = "EXORCISM" } }, "PALADIN_EXODIN", true)
+      assert.equal("icon", Queue.firstSlotFrame().icon.texture,
+        "slot 1's own paint has to land on the frame this function hands back")
+    end)
+
     it("dragging an icon while unlocked moves the container and saves where it landed", function()
       Queue.Create()
       Queue.SetLocked(false)

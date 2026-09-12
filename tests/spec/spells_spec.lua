@@ -259,6 +259,16 @@ describe("Core/Spells (the registry)", function()
         assert.equal(key, second)
         assert.equal(415072, s[key].id)
       end)
+
+      -- A name that normalizes away to nothing (nothing but a "(Rank N)" suffix) must never match
+      -- an existing entry by accident -- the empty-target guard has to fire BEFORE the loop, or an
+      -- earlier entry with an equally empty normalized name would be picked at random.
+      it("never matches an existing entry through an empty normalized name", function()
+        local s = { OLD = { key = "OLD", id = 1, name = "", source = "id" } }
+        local key = Spells.add(s, { id = 2, name = "(Rank 5)", source = "id" })
+        assert.is_not.equal("OLD", key, "an empty-named entry must not be a match target")
+        assert.equal(2, s[key].id)
+      end)
     end)
   end)
 

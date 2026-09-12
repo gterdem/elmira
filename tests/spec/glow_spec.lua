@@ -556,6 +556,19 @@ describe("Display.Glow", function()
       assert.equal(1, Glow.activeCount())
     end)
 
+    -- The shipped default (Visibility.DEFAULT, "combat_or_target"), untouched: out of combat, a
+    -- target answers `true, "target selected"` in Core/Visibility.shouldShow, and only a genuine
+    -- read of `state:targetAttackable()` into `ctx.targetAttackable` can produce that -- a ctx that
+    -- silently dropped the field would read as "no target" no matter what the state actually said.
+    it("glows out of combat with a target, under the default mode nobody has touched", function()
+      stubState(false, true)
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(1, Glow.activeCount())
+      stubState(false, false)
+      Glow.SetNowSlot({ spell = "NOW" })
+      assert.equal(0, Glow.activeCount())
+    end)
+
     it("General's 'Only in combat' silences it too, even when its own mode says Always", function()
       setGlow("show", "always")
       ns.AbilitySettings.set(ns.AbilitySettings.ALL, "general", "onlyInCombat", true)
@@ -570,6 +583,42 @@ describe("Display.Glow", function()
                                                  targetAttackable = function() return false end } end }
       Glow.SetNowSlot({ spell = "NOW" })
       assert.equal(1, Glow.activeCount())
+    end)
+
+    -- `Glow.visibleFor` is called directly (not only through `SetNowSlot`, which always hands it an
+    -- already-computed ctx): a caller with no ctx of its own has to get the SAME answer, reading the
+    -- state itself rather than exploding on a missing second argument.
+    describe("Glow.visibleFor called directly, with no ctx of its own", function()
+      it("reads the state itself when no ctx is handed in", function()
+        setGlow("show", "combat")
+        stubState(false, false)
+        assert.is_false(Glow.visibleFor("NOW"))
+        stubState(true, false)
+        assert.is_true(Glow.visibleFor("NOW"))
+      end)
+
+      it("fails open with no AbilitySettings or Visibility module loaded", function()
+        stubState(false, false)
+        ns.AbilitySettings = nil
+        assert.is_true(Glow.visibleFor("NOW"))
+        ns.AbilitySettings = helper.load("Elmira/Core/AbilitySettings.lua")
+        ns.Visibility = nil
+        assert.is_true(Glow.visibleFor("NOW"))
+      end)
+    end)
+
+    -- SetNowSlot reads the state ONCE and shares it between the now-slot and the dim next-slot
+    -- check: both ask the same "in combat / has a target" question, so a second read would cost a
+    -- state call for an answer that cannot have changed within the same tick.
+    it("reads the state once per call, sharing it between the now-slot and the next-slot", function()
+      local reads = 0
+      ns.API = { GetState = function()
+        reads = reads + 1
+        return { inCombat = function() return true end, targetAttackable = function() return true end }
+      end }
+      ns.db.profile.glow.secondary = true
+      Glow.SetNowSlot({ spell = "NOW" }, { spell = "LATER" })
+      assert.equal(1, reads)
     end)
   end)
 

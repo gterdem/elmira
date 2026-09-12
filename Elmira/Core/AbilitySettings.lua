@@ -115,8 +115,11 @@ AbilitySettings.DEFAULTS = DEFAULTS
 -- AT9-D3: `general.hasBuff` joins it. It is an observation about THIS ability on THIS character --
 -- inheriting it from All abilities would open the buff-only controls for every ability the moment
 -- one of them was seen to buff you, which is the opposite of what the flag is for.
+-- mutants: the texture/edge entries below are equivalent -- CUE_CHANNELS already force `inherits`
+-- false for both, so `effective`'s two `own[field]` reads never fire for them either way; kept
+-- only as the record the comment above OWN describes.
 local OWN = { general = { expiringSeconds = true, hasBuff = true },
-              texture = { enabled = true, x = true, y = true }, edge = { enabled = true },
+              texture = { enabled = true, x = true, y = true }, edge = { enabled = true }, -- mutants: equivalent see above
               sound = { enabled = true }, announce = { enabled = true } }
 
 AbilitySettings.CHANNELS = { "general", "glow", "texture", "edge", "sound", "announce" }
@@ -169,7 +172,7 @@ local function isCueChannel(channel)
   for _, c in ipairs(AbilitySettings.CUE_CHANNELS) do
     if c == channel then return true end
   end
-  return false
+  return false -- mutants: equivalent its one caller only ever uses the answer inside `if`; nil and false are indistinguishable there
 end
 
 function AbilitySettings.inherits(key, channel)
@@ -320,7 +323,7 @@ function AbilitySettings.buffSource(key)
   if entry and entry.buff == true then return "pack" end
   local t = stored(key, "general")
   if t and t.hasBuff == true then return "learned" end
-  return nil
+  return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
 end
 
 function AbilitySettings.hasBuff(key)

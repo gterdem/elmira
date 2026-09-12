@@ -88,9 +88,11 @@ end
 -- cooldown sweep). Unreadable/absent state answers nil, which callers below treat as "fail open":
 -- the same philosophy Display.shouldShow uses, since a broken read must not silently darken every
 -- bar in the game.
+-- mutants: the nil-state guard below is equivalent -- a nil state still errors inside the pcall
+-- (indexing nil for `:inCombat()`), answering the same nil either way.
 local function glowCtx()
   local state = ns.API and ns.API.GetState()
-  if not state then return nil end
+  if not state then return nil end -- mutants: equivalent see above
   local ctx = {}
   local ok = pcall(function()
     ctx.inCombat = state:inCombat() == true

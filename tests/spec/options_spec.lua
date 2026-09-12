@@ -503,6 +503,31 @@ describe("Options (the settings pages)", function()
       assert.equal(15, seen)
     end)
 
+    -- AT2-D3: the strip's own glow, opt-in and off by default, unaffected by `glow.barGlow` on
+    -- General in either direction. Appearance settings cannot apply to a glow already running
+    -- (LibCustomGlow builds its frames from its own starting arguments), so flipping the switch
+    -- tears every glow down and redraws the strip, same as any other appearance change.
+    it("round-trips its own switch, independent of the profile default", function()
+      local stopped, laidOut = 0, 0
+      ns.Glow = { StopAll = function() stopped = stopped + 1 end }
+      ns.Queue.Layout = function() laidOut = laidOut + 1 end
+      local row = args().queue.args.tells.args.stripGlow
+      assert.is_falsy(row.get(), "ships off by default")
+      row.set(nil, true)
+      assert.is_true(ns.db.profile.queue.stripGlow)
+      assert.is_true(args().queue.args.tells.args.stripGlow.get())
+      assert.equal(1, stopped, "an appearance change must tear down every running glow")
+      assert.equal(1, laidOut, "the strip was not told to redraw")
+      row.set(nil, false)
+      assert.is_false(ns.db.profile.queue.stripGlow)
+      assert.equal(2, stopped)
+    end)
+
+    it("answers falsy, without erroring, before the queue table has ever been touched", function()
+      ns.db.profile.queue = nil
+      assert.is_falsy(args().queue.args.tells.args.stripGlow.get())
+    end)
+
     -- PE11-D4. The third instance this session of "the master switch is off and the twelve
     -- controls under it still look live", so it is the page's rule now.
     describe("with the strip switched off", function()
@@ -1118,6 +1143,7 @@ describe("Options (the settings pages)", function()
         ns.Announce.emit("warning", "second")
         local box = logArgs().lines
         assert.equal("input", box.type)
+        assert.equal("Messages", box.name)
         assert.is_true(box.multiline > 1, "a single-line box cannot show a log")
         assert.equal("full", box.width)
         -- AT10-D2: below the two coloured rows (order 2 and 3) this message count puts above it.
@@ -1627,6 +1653,173 @@ describe("Options (the settings pages)", function()
     end)
   end)
 
+  -- AT10-D4: the full path the window is on, walked straight out of the dialog's own status tree
+  -- rather than kept separately -- so whatever put the selection there agrees with what is
+  -- remembered, and a stale request that only got partway still returns where it actually landed.
+  describe("Options.currentPath()", function()
+    -- Each entry in `tree` is `{ selected = <key> }`, keyed by the path walked so far, joined with
+    -- "/"; a path with no entry answers no further selection, ending the walk.
+    local function fakeDialog(tree)
+      return {
+        GetStatusTable = function(_, app, path)
+          assert.equal("Elmira", app)
+          local node = tree[table.concat(path, "/")]
+          return node or {}
+        end,
+      }
+    end
+
+    it("walks every level the status tree actually selected", function()
+      Options.dialog = fakeDialog{
+        [""] = { groups = { selected = "spells" } },
+        ["spells"] = { groups = { selected = "list" } },
+        ["spells/list"] = { groups = { selected = "EXORCISM" } },
+        ["spells/list/EXORCISM"] = { groups = { selected = "texture" } },
+      }
+      assert.same({ "spells", "list", "EXORCISM", "texture" }, Options.currentPath())
+    end)
+
+    it("stops at whatever level the walk actually reached, not further", function()
+      Options.dialog = fakeDialog{
+        [""] = { groups = { selected = "spells" } },
+        -- "spells" itself has no entry: the walk stops there, exactly what a removed ability's
+        -- own page having vanished from the tree would look like.
+      }
+      assert.same({ "spells" }, Options.currentPath())
+    end)
+
+    -- The walk has to STOP the moment a level answers no selection, rather than polling the same
+    -- dead end all the way to MAX_REMEMBERED_DEPTH: a status table read is not free, and this runs
+    -- on every navigation and on every window close.
+    it("stops asking the status table once a level has nothing selected", function()
+      local calls = 0
+      Options.dialog = { GetStatusTable = function(_, app, path)
+        calls = calls + 1
+        if #path == 0 then return { groups = { selected = "spells" } } end
+        return {}
+      end }
+      Options.currentPath()
+      assert.equal(2, calls, "the walk kept polling a dead end instead of stopping there")
+    end)
+
+    it("answers nil, not an empty table, when nothing at all is selected", function()
+      Options.dialog = fakeDialog{}
+      assert.is_nil(Options.currentPath())
+    end)
+
+    it("answers nil without a dialog, or a dialog with no status table at all", function()
+      Options.dialog = nil
+      assert.is_nil(Options.currentPath())
+      Options.dialog = {}
+      assert.is_nil(Options.currentPath())
+    end)
+  end)
+
+  describe("Options.rememberPath()", function()
+    it("saves a real path into the window database", function()
+      ns.db.global = { window = {} }
+      assert.is_true(Options.rememberPath({ "general" }))
+      assert.same({ "general" }, ns.db.global.window.lastPath)
+    end)
+
+    it("refuses an empty or missing path, without touching what was there", function()
+      ns.db.global = { window = { lastPath = { "queue" } } }
+      assert.is_false(Options.rememberPath({}))
+      assert.is_false(Options.rememberPath(nil))
+      assert.same({ "queue" }, ns.db.global.window.lastPath)
+    end)
+
+    it("says so, without erroring, with no window database to write into", function()
+      ns.db.global = nil
+      assert.is_false(Options.rememberPath({ "general" }))
+    end)
+  end)
+
+  -- AT6-D5: "the texture is held on screen exactly as configured and follows every change live" --
+  -- FeedGroup fires on every navigation, deepest-first, and only two path shapes are ever acted on.
+  -- Two returns, not one: `handled` is what lets the deepest-first ordering tell "this path released
+  -- the preview" from "this path had nothing to say", which the comment above the real function
+  -- names as the whole reason a spec needs both.
+  describe("Options.holdTexturePreview()", function()
+    local held
+
+    before_each(function()
+      held = {}
+      ns.Textures = { Preview = function(key) held[#held + 1] = key end }
+    end)
+
+    it("says nothing at all for the root rebuild (an empty path)", function()
+      local key, handled = Options.holdTexturePreview({})
+      assert.is_nil(key)
+      assert.is_false(handled)
+      assert.same({}, held, "the root rebuild must not touch the preview either way")
+    end)
+
+    it("releases for any page outside Abilities entirely", function()
+      local key, handled = Options.holdTexturePreview({ "queue" })
+      assert.is_nil(key)
+      assert.is_true(handled)
+      assert.same({ nil }, held)
+    end)
+
+    it("says nothing for the Abilities page or the list being rebuilt on their own", function()
+      local key1, handled1 = Options.holdTexturePreview({ "spells" })
+      assert.is_nil(key1)
+      assert.is_false(handled1)
+      local key2, handled2 = Options.holdTexturePreview({ "spells", "list" })
+      assert.is_nil(key2)
+      assert.is_false(handled2)
+      assert.same({}, held)
+    end)
+
+    it("holds the key on a four-part path that names the Texture tab directly", function()
+      local key, handled = Options.holdTexturePreview({ "spells", "list", "EXORCISM", "texture" })
+      assert.equal("EXORCISM", key)
+      assert.is_true(handled)
+      assert.same({ "EXORCISM" }, held)
+    end)
+
+    it("releases on a four-part path naming any other tab", function()
+      local key, handled = Options.holdTexturePreview({ "spells", "list", "EXORCISM", "sound" })
+      assert.is_nil(key)
+      assert.is_true(handled)
+      assert.same({ nil }, held)
+    end)
+
+    -- A THREE-part path is a different ability whose remembered tab has to be read back off the
+    -- dialog's own status table.
+    it("holds the key on a three-part path whose remembered tab is Texture", function()
+      Options.dialog = { GetStatusTable = function(_, app, path)
+        assert.same({ "spells", "list", "EXORCISM" }, path)
+        return { groups = { selected = "texture" } }
+      end }
+      local key, handled = Options.holdTexturePreview({ "spells", "list", "EXORCISM" })
+      assert.equal("EXORCISM", key)
+      assert.is_true(handled)
+    end)
+
+    it("releases on a three-part path whose remembered tab is not Texture", function()
+      Options.dialog = { GetStatusTable = function() return { groups = { selected = "general" } } end }
+      local key, handled = Options.holdTexturePreview({ "spells", "list", "EXORCISM" })
+      assert.is_nil(key)
+      assert.is_true(handled)
+    end)
+
+    it("releases on a three-part path with no dialog status table to read at all", function()
+      Options.dialog = nil
+      local key, handled = Options.holdTexturePreview({ "spells", "list", "EXORCISM" })
+      assert.is_nil(key)
+      assert.is_true(handled)
+    end)
+
+    it("does not error, and does not hold, with no Textures module loaded", function()
+      ns.Textures = nil
+      assert.has_no.errors(function()
+        Options.holdTexturePreview({ "spells", "list", "EXORCISM", "texture" })
+      end)
+    end)
+  end)
+
   describe("Options.Open", function()
     it("ends move mode when the panel is closed", function()
       local stopped, closer = 0, nil
@@ -1741,6 +1934,33 @@ describe("Options (the settings pages)", function()
 
       assert.equal(1, stopped, "move mode was not ended")
       assert.equal(1, released, "AceConfigDialog's own OnClose never ran, so the frame leaks")
+    end)
+
+    -- AT10-D4: the last moment the dialog's own status tree can still be read at all (AceGUI wipes
+    -- it once the widget goes back to the pool), so closing re-syncs the remembered path from it
+    -- rather than trusting the last navigation's own write to have caught the final click.
+    it("re-syncs the remembered path from the dialog's own status tree on close", function()
+      ns.Announcers = { StopMoving = function() end }
+      ns.db.global = { window = { lastPath = { "general" } } }
+      local widget = fakeWidget(function() end)
+      -- Answers "queue" at Open (which already remembers it on its own), then "rotation" from then
+      -- on -- simulating a navigation that happened AFTER Open but before the window closed, which
+      -- only the close chain's own re-read can still catch.
+      local selected = "queue"
+      Options.dialog = { Open = function() end, SelectGroup = function() end,
+        OpenFrames = { Elmira = widget },
+        GetStatusTable = function(_, app, path)
+          if #path == 0 then return { groups = { selected = selected } } end
+          return {}
+        end }
+
+      assert.is_true(Options.Open())
+      assert.same({ "queue" }, ns.db.global.window.lastPath, "Open's own remember did not run")
+      selected = "rotation"
+      widget:fireClose()
+
+      assert.same({ "rotation" }, ns.db.global.window.lastPath,
+        "the close path did not re-read the dialog's own status tree")
     end)
 
     -- Our own StopMoving runs from a frame's OnHide. If it throws, it must not take the dialog's
@@ -2022,5 +2242,13 @@ describe("Options.table() wires in the Spells page (R2 D52)", function()
   it("leaves args.spells nil, rather than erroring, when the module has not loaded", function()
     Options = helper.load("Elmira/Options/Options.lua")
     assert.is_nil(Options.table().args.spells)
+  end)
+
+  -- AT2-D1: Options/Spells.lua's own Glow tab reads THIS table (`ns.Options.VISIBILITY_LABELS`) so
+  -- the two pages can never say a mode differently -- shared by reference rather than a second copy
+  -- of the English.
+  it("exports the visibility labels for Options/Spells.lua's own Glow tab to share", function()
+    assert.same({ always = "Always", combat_or_target = "In combat, or when you have a target",
+                  combat = "In combat only" }, Options.VISIBILITY_LABELS)
   end)
 end)

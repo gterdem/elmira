@@ -112,6 +112,9 @@ describe("the texture picker window", function()
       Panel.Open("EXORCISM")
       assert.equal(19, #cells())
       assert.same({ "165558" }, selectedPaths())
+      -- The dropdown's own displayed value has to agree with the grid it opened on -- "3" is
+      -- Icons' own index in the library's order.
+      assert.equal("3", Panel.categories:GetValue())
     end)
   end)
 
@@ -212,6 +215,36 @@ describe("the texture picker window", function()
       Panel.search:Fire("OnTextChanged", "no such texture")
       assert.same({}, pathsShown())
     end)
+
+    -- The dropdown's actual pulldown list, not merely `groupIndex` resolving correctly by number:
+    -- built from the library's own order, with each label read through the locale.
+    it("lists every category, by id, named through the locale, in the library's own order", function()
+      Panel.Open("EXORCISM")
+      local names, ids = {}, {}
+      for _, item in ipairs(Panel.categories.pullout.items) do
+        names[#names + 1] = item.text:GetText()
+        ids[#ids + 1] = item.userdata.value
+      end
+      assert.same({ "Shapes", "Beams", "Icons", "PvP Emblems", "Runes", "Sparks", "Target Markers" },
+        names)
+      assert.same({ "1", "2", "3", "4", "5", "6", "7" }, ids)
+    end)
+
+    -- AceGUI's own dispatch (`WidgetBase.Fire`) wraps every callback in `safecall`, so an error
+    -- inside a `SetCallback` handler never reaches a spec's own `assert.has_no.errors` -- the ONE
+    -- path that reaches `fillGrid` as a PLAIN call, unprotected, is `Open` feeding the grid for the
+    -- first time, which is what this actually has to go through to prove the guard.
+    it("does not crash on the initial fill when the grid widget itself failed to create", function()
+      local RealAceGUI = LibStub("AceGUI-3.0")
+      local originalCreate = RealAceGUI.Create
+      RealAceGUI.Create = function(self, kind)
+        if kind == "ElmiraTexturePicker" then return nil end
+        return originalCreate(self, kind)
+      end
+      assert.has_no.errors(function() Panel.Open("EXORCISM") end)
+      assert.is_nil(Panel.grid)
+      RealAceGUI.Create = originalCreate
+    end)
   end)
 
   -- AceGUI's pool is shared with every other Ace3 addon in the client. A window that leaves its
@@ -235,7 +268,42 @@ describe("the texture picker window", function()
       end
       assert.equal(_G.UIParent, button:GetParent(), "a button of ours stayed on the pooled frame")
       assert.equal(_G.UIParent, picker.frame:GetParent())
+      -- Every one of the five child fields itself, not only what it points at, is forgotten -- a
+      -- stale `TexturePanel.okay` reaching a released Button is exactly the same class of leak.
+      assert.is_nil(Panel.grid)
+      assert.is_nil(Panel.categories)
+      assert.is_nil(Panel.search)
+      assert.is_nil(Panel.okay)
+      assert.is_nil(Panel.cancel)
     end)
+
+    it("tells the Rotation page its picture may have changed", function()
+      local notified = 0
+      ns.Rotation = { notifyChange = function() notified = notified + 1 end }
+      Panel.Open("EXORCISM")
+      Panel.Close(false)
+      assert.equal(1, notified)
+    end)
+
+    it("says nothing, without erroring, with no Rotation module loaded", function()
+      Panel.Open("EXORCISM")
+      assert.has_no.errors(function() Panel.Close(false) end)
+    end)
+
+    -- Opening a second ability without an explicit Close first still has to release the first
+    -- window through the real Close path before making a second one: AceGUI only ever hands back
+    -- the SAME pooled widget for "Frame" while none has been released, so a genuine release-then-
+    -- reacquire is the only way the window that opens for JUDGEMENT is the very one EXORCISM had --
+    -- skip the release and AceGUI has nothing to give back but a second, distinct window, and the
+    -- first stays on screen with nothing left pointed at it.
+    it("releases the first ability's window before opening a second one, not a second window",
+      function()
+        Panel.Open("EXORCISM")
+        local firstWindow, firstGrid = Panel.window, Panel.grid
+        Panel.Open("JUDGEMENT")
+        assert.equal(firstWindow, Panel.window, "a second Frame was built instead of reusing the released one")
+        assert.equal(firstGrid, Panel.grid, "a second grid was built instead of reusing the released one")
+      end)
 
     it("re-acquires the same widgets on the next open, showing the new ability", function()
       Panel.Open("EXORCISM")
@@ -246,6 +314,18 @@ describe("the texture picker window", function()
       assert.equal("JUDGEMENT", Panel.abilityKey())
       assert.equal(8, #cells())
       assert.is_true(Panel.window.frame:IsShown())
+    end)
+
+    -- SetPoint only ever ADDS an anchor -- a pooled widget re-opened for a second ability without
+    -- being cleared first would carry the first ability's anchor as well as the second's.
+    it("re-anchors every pooled widget with exactly one point, not a growing pile of them", function()
+      Panel.Open("EXORCISM")
+      Panel.Close(false)
+      Panel.Open("JUDGEMENT")
+      for _, widget in ipairs({ Panel.categories, Panel.search, Panel.okay, Panel.cancel }) do
+        assert.equal(1, widget.frame:GetNumPoints())
+      end
+      assert.equal(2, Panel.grid.frame:GetNumPoints(), "the grid is anchored on two corners")
     end)
 
     it("closes what is open before opening for another ability", function()
@@ -292,6 +372,143 @@ describe("the texture picker window", function()
     _G.LibStub = nil
     assert.is_false(Panel.Open("EXORCISM"))
     _G.LibStub = saved
+  end)
+
+  it("forgets the ability it just started remembering if the window itself fails to acquire",
+    function()
+      local RealAceGUI = LibStub("AceGUI-3.0")
+      local originalCreate = RealAceGUI.Create
+      RealAceGUI.Create = function(self, kind)
+        if kind == "Frame" then return nil end
+        return originalCreate(self, kind)
+      end
+      assert.is_false(Panel.Open("EXORCISM"))
+      assert.is_nil(Panel.abilityKey())
+      RealAceGUI.Create = originalCreate
+    end)
+
+  it("registers itself under ns.TexturePanel", function()
+    assert.equal(Panel, ns.TexturePanel)
+  end)
+
+  it("sizes the window to the shipped dimensions", function()
+    Panel.Open("EXORCISM")
+    assert.equal(720, Panel.window.frame:GetWidth())
+    assert.equal(560, Panel.window.frame:GetHeight())
+  end)
+
+  it("forgets which ability it was for once the window is closed", function()
+    Panel.Open("EXORCISM")
+    Panel.Close(false)
+    assert.is_nil(Panel.abilityKey())
+  end)
+
+  describe("the category dropdown and search box, laid out and labelled", function()
+    it("labels, sizes and shows the category dropdown at the top left", function()
+      Panel.Open("EXORCISM")
+      local c = Panel.categories
+      assert.equal(Panel.window.content, c.frame:GetParent())
+      assert.equal("Category", c.label:GetText())
+      assert.equal(260, c.frame:GetWidth())
+      assert.is_true(c.frame:IsShown())
+      local _, rel, relPoint, x, y = c.frame:GetPoint(1)
+      assert.equal("TOPLEFT", select(1, c.frame:GetPoint(1)))
+      assert.equal(Panel.window.content, rel)
+      assert.equal("TOPLEFT", relPoint)
+      assert.same({ 0, 0 }, { x, y })
+    end)
+
+    it("labels, sizes, disables its go-button and shows the search box at the top right", function()
+      Panel.Open("EXORCISM")
+      local s = Panel.search
+      assert.equal(Panel.window.content, s.frame:GetParent())
+      assert.equal("Search", s.label:GetText())
+      assert.equal(260, s.frame:GetWidth())
+      assert.is_false(s.button:IsShown(), "a search box needs no separate go-button")
+      -- The button is already hidden fresh off the pool (AceGUI's own OnAcquire), which is not
+      -- evidence of anything -- typing is what would normally reveal it (AceGUIWidget-EditBox.lua's
+      -- own OnTextChanged -> ShowButton), and DisableButton(true) is what keeps it down even then.
+      s.editbox:SetText("squ")
+      local onTextChanged = s.editbox:GetScript("OnTextChanged")
+      if onTextChanged then onTextChanged(s.editbox) end
+      assert.is_false(s.button:IsShown(), "typing revealed a confirm button this box must not have")
+      assert.is_true(s.frame:IsShown())
+      local point, rel, relPoint, x, y = s.frame:GetPoint(1)
+      assert.equal("TOPRIGHT", point)
+      assert.equal(Panel.window.content, rel)
+      assert.equal("TOPRIGHT", relPoint)
+      assert.same({ 0, 0 }, { x, y })
+    end)
+  end)
+
+  -- Every widget is CLEARED before it is re-anchored: `SetPoint` only ever ADDS an anchor, so a
+  -- pooled widget re-opened for a second ability without a clear first would carry the FIRST
+  -- session's anchor as well as the second's -- identical values here, but a stray extra anchor a
+  -- future change to any of these offsets would then silently disagree with.
+  it("re-anchors each pooled widget with exactly one point, not a growing pile of them", function()
+    Panel.Open("EXORCISM")
+    Panel.Close(false)
+    Panel.Open("JUDGEMENT")
+    for _, widget in ipairs({ Panel.categories, Panel.search, Panel.okay, Panel.cancel }) do
+      assert.equal(1, widget.frame:GetNumPoints())
+    end
+    assert.equal(2, Panel.grid.frame:GetNumPoints(), "the grid is anchored on two corners, not a pile of four")
+  end)
+
+  it("hangs the grid between the controls strip and the buttons strip, at the shipped width", function()
+    Panel.Open("EXORCISM")
+    local g = Panel.grid
+    assert.equal(Panel.window.content, g.frame:GetParent())
+    assert.is_true(g.frame:IsShown())
+    assert.same({ "TOPLEFT", Panel.window.content, "TOPLEFT", 0, -50 }, { g.frame:GetPoint(1) })
+    assert.same({ "BOTTOMRIGHT", Panel.window.content, "BOTTOMRIGHT", 0, 30 }, { g.frame:GetPoint(2) })
+  end)
+
+  describe("Okay and Cancel, labelled, sized and anchored bottom right", function()
+    it("Okay sits flush in the bottom right corner", function()
+      Panel.Open("EXORCISM")
+      local okay = Panel.okay
+      assert.equal(Panel.window.content, okay.frame:GetParent())
+      assert.equal("Okay", okay.text:GetText())
+      assert.equal(100, okay.frame:GetWidth())
+      assert.is_true(okay.frame:IsShown())
+      local point, rel, relPoint, x, y = okay.frame:GetPoint(1)
+      assert.equal("BOTTOMRIGHT", point)
+      assert.equal(Panel.window.content, rel)
+      assert.equal("BOTTOMRIGHT", relPoint)
+      assert.same({ 0, 0 }, { x, y })
+    end)
+
+    it("Cancel sits directly to Okay's left", function()
+      Panel.Open("EXORCISM")
+      local cancel = Panel.cancel
+      assert.equal(Panel.window.content, cancel.frame:GetParent())
+      assert.equal("Cancel", cancel.text:GetText())
+      assert.equal(100, cancel.frame:GetWidth())
+      assert.is_true(cancel.frame:IsShown())
+      local point, rel, relPoint, x, y = cancel.frame:GetPoint(1)
+      assert.equal("BOTTOMRIGHT", point)
+      assert.equal(Panel.okay.frame, rel)
+      assert.equal("BOTTOMLEFT", relPoint)
+      assert.same({ -6, 0 }, { x, y })
+    end)
+  end)
+
+  describe("applyPath's own guards", function()
+    it("still writes the settings, but skips the repaint, with no Textures module at hand", function()
+      Panel.Open("EXORCISM")
+      ns.Textures = nil
+      assert.has_no.errors(function() cells()[4]:Click() end)
+      local e = A.effective("EXORCISM", "texture")
+      assert.equal("Interface\\AddOns\\Elmira\\media\\shape_diamond", e.path)
+      assert.equal(0, refreshes, "there is no Textures module left to ask for a repaint")
+    end)
+
+    it("does nothing, without erroring, with no AbilitySettings module at hand", function()
+      Panel.Open("EXORCISM")
+      ns.AbilitySettings = nil
+      assert.has_no.errors(function() cells()[4]:Click() end)
+    end)
   end)
 
   -- Five across at the shipped width (owner, 2026-09-11) -- and a sixth that WRAPS. A column count

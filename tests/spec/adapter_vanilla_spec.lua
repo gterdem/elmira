@@ -343,6 +343,13 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.is_false(Vanilla.addonLoaded(42))
     end)
 
+    -- Without the guard, an empty string is just another name -- and the client can genuinely hand
+    -- back an addon whose OWN name is empty (a malformed .toc), which would then read as "loaded".
+    it("answers false for an empty name even when an addon by that name would say yes", function()
+      mock.addons[#mock.addons + 1] = { name = "", loaded = true }
+      assert.is_false(Vanilla.addonLoaded(""))
+    end)
+
     -- The bare global is what Classic Era has; C_AddOns is where retail moved it. Either alone must
     -- carry the answer, which a spec that only ever removes one of them cannot show.
     it("falls back to C_AddOns when the bare global is gone, and reads a numeric 1 as true",

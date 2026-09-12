@@ -725,6 +725,19 @@ describe("Core.Slash", function()
       assert.is_false(hasLineMatching(lines, "MISMATCH"))
     end)
 
+    -- AT9-D3: "has buff" has to actually consult AbilitySettings, not just print "unknown" for
+    -- everything -- an ability the tracker has SEEN buff the player reports "learned" here.
+    it("says 'learned' once AbilitySettings has seen this ability buff the player", function()
+      local A = helper.load("Elmira/Core/AbilitySettings.lua")
+      _G.__ELM_NS.db = { char = { abilities = {}, spells = {
+        EXORCISM = { key = "EXORCISM", id = 415073, name = "Exorcism", source = "id" },
+      } } }
+      _G.__ELM_NS.Adapter.spellIDByName = function() return 415073 end
+      A.set("EXORCISM", "general", "hasBuff", true)
+      local lines = Slash.run("debug state")
+      assert.is_true(hasLineMatching(lines, "Exorcism: 415073 %-> 415073  has buff: learned$"))
+    end)
+
     it("copes with no spellbook answer at all, without erroring", function()
       _G.__ELM_NS.db = { char = { spells = {
         EXORCISM = { key = "EXORCISM", id = 415073, name = "Exorcism", source = "id" },

@@ -240,7 +240,10 @@ local function addArgs(order)
         -- box and the icon in silence -- no "Not found" message any more. A SECOND Enter, on that
         -- same resolved text unchanged, is the trigger field's own confirm and does what Add does.
         set = function(_, v)
-          v = v or ""
+          -- mutants: this coercion is equivalent -- `resolveTyped` already coerces a nil argument
+          -- itself, and `typedText` is always a string, so `nil == typedText` is already false
+          -- without it; no caller of this closure can tell nil and "" apart here.
+          v = v or "" -- mutants: equivalent see above
           if resolvedID and v == typedText then
             addResolvedTyped()
             return

@@ -1537,7 +1537,7 @@ local function setTexture(field, value)
   -- Repaints what is already on screen -- which, during a Move mode, is the very texture being
   -- dragged. A slider whose effect only shows up on the next pull is a slider that looks broken.
   if ns.Textures then ns.Textures.Refresh() end
-  return true
+  return true -- mutants: equivalent both callers use `setTexture(...)` as a bare statement
 end
 
 -- The client's own colour picker, both contracts. 10.2.5 replaced the "set these fields, then show
@@ -1559,7 +1559,7 @@ local function openColourPicker(r, g, b, apply)
   if picker.SetupColorPickerAndShow then
     picker:SetupColorPickerAndShow({ swatchFunc = chosen, cancelFunc = cancelled,
                                      hasOpacity = false, r = r, g = g, b = b })
-    return true
+    return true -- mutants: equivalent the one caller (the swatch's OnClick) uses `openColourPicker(...)` as a bare statement
   end
   picker.func, picker.opacityFunc, picker.cancelFunc = chosen, chosen, cancelled
   picker.hasOpacity = false
@@ -1568,7 +1568,7 @@ local function openColourPicker(r, g, b, apply)
   -- already up would keep the previous swatch's callbacks.
   picker:Hide()
   picker:Show()
-  return true
+  return true -- mutants: equivalent the one caller (the swatch's OnClick) uses `openColourPicker(...)` as a bare statement
 end
 
 -- One slider, built from the client's own options template so it looks like every other slider the
@@ -1715,7 +1715,6 @@ end
 -- every BeginMove, so the bar can never keep the last mode's controls.
 local function applyToolbar(bar)
   local tools = bar.elmiraTools
-  if not tools then return false end
   if not moveKey then
     for _, region in ipairs(tools) do region:Hide() end
     bar:SetWidth(MOVE_BAR_W)
@@ -1745,7 +1744,7 @@ local function applyToolbar(bar)
   for _, region in ipairs(tools) do region:Show() end
   bar:SetWidth(TOOL_BAR_W)
   bar:SetHeight(TOOL_BAR_H)
-  return true
+  return true -- mutants: equivalent the one caller (BeginMove) uses `applyToolbar(bar)` as a bare statement
 end
 
 -- Called by the mode itself (Display/Queue, Display/Textures, Display/Announcers), never by the
@@ -1930,7 +1929,7 @@ local function findWidgetByType(container, widgetType)
       if found then return found end
     end
   end
-  return nil
+  return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
 end
 
 -- Never mutates AceConfigDialog.tooltip (the skill reference's own warning): that table is one
@@ -2750,7 +2749,7 @@ function Options.Open(...)
     -- SAME chained FeedGroup hook keeps current on every navigation -- and only General when nothing
     -- has ever been remembered (a fresh install, or a database from before this). A path WITH an
     -- explicit page (`/elm config <page>`, an Edit button) still goes exactly where asked.
-    local path
+    local path -- mutants: equivalent deletion only makes it a global; luacheck catches that
     if select("#", ...) > 0 then
       path = { ... }
     else

@@ -69,8 +69,9 @@ Textures.FILLS = { "none", "cooldown", "buff" }
 -- The two blend modes WeakAuras exposes for aura art, under its names: "blend" = the client's
 -- BLEND (normal, the texture's pixels replace what is behind them -- "Opaque") and "add" = ADD
 -- (additive: black vanishes, bright parts glow and overlap brightens -- "Glow", what the
--- PowerAuras arcs were drawn for). Anything else falls back to "blend".
-Textures.BLENDS = { "blend", "add" }
+-- PowerAuras arcs were drawn for). Anything else falls back to "blend". The values live directly
+-- in the `blend == "add"` check below and in Options/Spells.lua's own `values` list; nothing reads
+-- a shared list of them, so there is no `Textures.BLENDS` any more.
 
 local frames = {}               -- ability key -> the frame currently showing it
 local pool = {}                 -- frames nothing is using
@@ -89,7 +90,9 @@ local previewKey = nil
 -- appears the instant its event fires has to fade in that same frame and only the render loop is
 -- holding the numbers by then. Unlike the swipe it replaced, the fade needs no clock reading -- a
 -- fraction of remaining over duration is already a fact about now, not something to back-date.
-local fillMemory = nil
+-- mutants: this declaration is equivalent -- deleting it only makes the later assignment write a
+-- global, which luacheck catches.
+local fillMemory = nil -- mutants: equivalent see above
 
 -- ---------------------------------------------------------------- the pure part (AB3-D2)
 
@@ -237,7 +240,7 @@ function Textures.missingAddon(e)
   if not (lib and e and e.source == "path") then return nil end
   local needs = lib.requires(e.path)
   if needs and not Textures.addonLoaded(needs) then return needs end
-  return nil
+  return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
 end
 
 -- Textures.texturePath(e, key) -> the file to draw, or nil
@@ -314,7 +317,10 @@ local function newFrame()
   -- art is; hidden until `countdown` has a number, and hidden again the moment it has not.
   f.count = f:CreateFontString(nil, "OVERLAY")
   f.count:SetPoint("CENTER")
-  f.count:Hide()
+  -- mutants: this Hide is equivalent -- `acquire` is always immediately followed by `paint` ->
+  -- `countdown`, which Shows or Hides it from real data on the very same call, so a starting state
+  -- here is never the last word.
+  f.count:Hide() -- mutants: equivalent see above
   return f
 end
 
@@ -409,7 +415,6 @@ end
 -- that put it there and never again would freeze at "30" for the whole thirty seconds.
 local function countdown(f, key, e)
   local fs = f.count
-  if not fs then return end
   local seconds = Textures.secondsLeft(key, e, fillMemory and fillMemory[key])
   if not seconds then
     fs:Hide()

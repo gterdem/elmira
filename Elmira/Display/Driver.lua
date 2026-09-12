@@ -422,7 +422,9 @@ function Display.glowCouldBeVisible()
   local A = ns.AbilitySettings
   local mode = (A and A.effective(A.ALL, "glow").show) or ns.Visibility.DEFAULT
   local state = ns.API and ns.API.GetState()
-  if not state then return true end
+  -- mutants: this guard is equivalent -- a nil state still errors inside the pcall below (indexing
+  -- nil for `:inCombat()`), and the very next line already answers `true` for that failure too.
+  if not state then return true end -- mutants: equivalent see above
   local ok, ctx = pcall(readShowCtx, state)
   if not ok then return true end
   if not ns.Visibility.shouldShow(mode, ctx) then return false end

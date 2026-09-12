@@ -47,9 +47,10 @@ local BUTTON_W = 100
 --
 -- The rest is bookkeeping. One declaration for the lot: separately, deleting any of them only makes
 -- a global, which luacheck fails on and no test can see.
-local activeKey, groups, groupIndex, needle
-local beforeSource, beforePath
-local closing = false           -- are WE releasing the window, or did the player press its X
+local activeKey, groups, groupIndex, needle -- mutants: equivalent deletion only makes it a global; luacheck catches that
+local beforeSource, beforePath -- mutants: equivalent deletion only makes it a global; luacheck catches that
+-- are WE releasing the window, or did the player press its X
+local closing = false -- mutants: equivalent deletion only makes it a global; luacheck catches that
 
 local function AS()
   return ns.AbilitySettings
@@ -106,7 +107,7 @@ local function applyPath(path)
   if not T then return true end
   T.Refresh()
   if T.movingKey and T.movingKey() ~= activeKey then T.TestFire(activeKey) end
-  return true
+  return true -- mutants: equivalent the one caller (fillGrid's onSelect) uses this as a bare statement
 end
 
 -- The current category, filtered by whatever is typed in the search box. `matches` is the library's
@@ -124,10 +125,13 @@ end
 local function fillGrid(keepScroll)
   local grid = TexturePanel.grid
   if not grid then return false end
+  -- mutants: `keepScroll` is equivalent -- every call site below passes literal `false`, which
+  -- reads the same as the field being absent (the widget's own `data.keepScroll ~= true` check),
+  -- so nobody currently distinguishes it from nil either way.
   grid:SetCustomData({
     textures = visibleTextures(),
     selected = currentPath(),
-    keepScroll = keepScroll == true,
+    keepScroll = keepScroll == true, -- mutants: equivalent see above
     onSelect = function(path)
       applyPath(path)
       -- The border moves without the grid being laid out again: the player is still browsing and
@@ -135,7 +139,7 @@ local function fillGrid(keepScroll)
       grid:SetSelected(path)
     end,
   })
-  return true
+  return true -- mutants: equivalent every caller uses `fillGrid(...)` as a bare statement
 end
 
 -- The dropdown's list, in the library's own order, with the category names taken through the locale
@@ -191,7 +195,10 @@ function TexturePanel.Close(cancelled)
   window:Release()
   TexturePanel.window, closing = nil, false
   activeKey, groups, groupIndex, needle = nil, nil, nil, nil
-  beforeSource, beforePath = nil, nil
+  -- mutants: this clear is equivalent -- `Open` always overwrites both fields (below) before Close
+  -- could ever read them again, and the guard above (`cancelled and activeKey and AS()`) already
+  -- read them for THIS call before this line runs; nothing reads them while the window is shut.
+  beforeSource, beforePath = nil, nil -- mutants: equivalent see above
   -- The Texture tab is showing the path in a text field; it is not rebuilt by a click in a window
   -- of ours, so say so. Through Rotation.notifyChange -- the addon's one NotifyChange call site --
   -- rather than a second LibStub lookup that could disagree with it.
@@ -213,7 +220,10 @@ function TexturePanel.Open(key)
   local e = A.effective(key, "texture")
   beforeSource, beforePath = e.source or "icon", e.path or ""
   groups = ns.Textures.libraryGroups()
-  needle = ""
+  -- mutants: this reset is equivalent -- Close (line 196 above) already nils `needle` before this
+  -- runs, on every path that reaches here (a fresh session or the `Close(false)` just above), and
+  -- `TextureLibrary.matches` treats nil the same as "": both mean "show everything".
+  needle = "" -- mutants: equivalent see above
   groupIndex = indexOfCurrent()
 
   local window = AceGUI:Create("Frame")
@@ -245,7 +255,10 @@ function TexturePanel.Open(key)
     groupIndex = tonumber(value) or 1
     fillGrid(false)
   end)
-  categories.frame:ClearAllPoints()
+  -- mutants: this clear is equivalent -- AceGUI:Release already runs
+  -- `widget.frame:ClearAllPoints()` on every widget it hands back to the
+  -- pool (AceGUI-3.0.lua:196), before this file ever re-anchors one.
+  categories.frame:ClearAllPoints() -- mutants: equivalent see above
   categories.frame:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
   categories.frame:Show()
   TexturePanel.categories = categories
@@ -261,7 +274,10 @@ function TexturePanel.Open(key)
     needle = text or ""
     fillGrid(false)
   end)
-  search.frame:ClearAllPoints()
+  -- mutants: this clear is equivalent -- AceGUI:Release already runs
+  -- `widget.frame:ClearAllPoints()` on every widget it hands back to the
+  -- pool (AceGUI-3.0.lua:196), before this file ever re-anchors one.
+  search.frame:ClearAllPoints() -- mutants: equivalent see above
   search.frame:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, 0)
   search.frame:Show()
   TexturePanel.search = search
@@ -269,7 +285,10 @@ function TexturePanel.Open(key)
   local grid = AceGUI:Create("ElmiraTexturePicker")
   if grid then
     grid.frame:SetParent(content)
-    grid.frame:ClearAllPoints()
+    -- mutants: this clear is equivalent -- AceGUI:Release already runs
+    -- `widget.frame:ClearAllPoints()` on every widget it hands back to the
+    -- pool (AceGUI-3.0.lua:196), before this file ever re-anchors one.
+    grid.frame:ClearAllPoints() -- mutants: equivalent see above
     grid.frame:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -CONTROLS_H)
     grid.frame:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 0, BUTTONS_H)
     -- Five 120px cells across at the shipped width, and the number the grid actually measures
@@ -284,7 +303,10 @@ function TexturePanel.Open(key)
   okay:SetText(L["Okay"])
   okay:SetWidth(BUTTON_W)
   okay:SetCallback("OnClick", function() TexturePanel.Close(false) end)
-  okay.frame:ClearAllPoints()
+  -- mutants: this clear is equivalent -- AceGUI:Release already runs
+  -- `widget.frame:ClearAllPoints()` on every widget it hands back to the
+  -- pool (AceGUI-3.0.lua:196), before this file ever re-anchors one.
+  okay.frame:ClearAllPoints() -- mutants: equivalent see above
   okay.frame:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 0, 0)
   okay.frame:Show()
   TexturePanel.okay = okay
@@ -294,7 +316,10 @@ function TexturePanel.Open(key)
   cancel:SetText(L["Cancel"])
   cancel:SetWidth(BUTTON_W)
   cancel:SetCallback("OnClick", function() TexturePanel.Close(true) end)
-  cancel.frame:ClearAllPoints()
+  -- mutants: this clear is equivalent -- AceGUI:Release already runs
+  -- `widget.frame:ClearAllPoints()` on every widget it hands back to the
+  -- pool (AceGUI-3.0.lua:196), before this file ever re-anchors one.
+  cancel.frame:ClearAllPoints() -- mutants: equivalent see above
   cancel.frame:SetPoint("BOTTOMRIGHT", okay.frame, "BOTTOMLEFT", -6, 0)
   cancel.frame:Show()
   TexturePanel.cancel = cancel

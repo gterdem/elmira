@@ -202,5 +202,12 @@ describe("Display.TextureLibrary", function()
       assert.equal("", Library.nameFromPath(""))
       assert.equal("165558", Library.nameFromPath("165558"))
     end)
+
+    -- Two adjacent separators collapse to the one space between words, and one on the very ends of
+    -- the name is trimmed away rather than read as a leading or trailing blank word.
+    it("collapses a run of separators and trims a leading or trailing one", function()
+      assert.equal("Foo Bar", Library.nameFromPath("foo__bar.tga"))
+      assert.equal("Foo", Library.nameFromPath("_foo_.tga"))
+    end)
   end)
 end)

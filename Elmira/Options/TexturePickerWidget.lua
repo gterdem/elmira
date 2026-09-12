@@ -123,7 +123,10 @@ local function cellFor(self, index)
       line:SetPoint("BOTTOM" .. edge, cell, "BOTTOM" .. edge, 0, 0)
       line:SetWidth(BORDER)
     end
-    line:Hide()
+    -- mutants: this starting Hide is equivalent -- `redraw` always runs `applySelection` on a cell
+    -- right after `cellFor` builds it (never before), and that call already Shows or Hides every
+    -- edge from real data on the very same pass.
+    line:Hide() -- mutants: equivalent see above
     border[#border + 1] = line
   end
   cell.elmiraIcon, cell.elmiraBorder, cell.elmiraOwner = icon, border, self
@@ -177,7 +180,9 @@ local function redraw(self)
   self.content:SetWidth(math.max(CELL, columns * (CELL + GAP)))
   self.content:SetHeight(math.max(CELL, y))
   self.shownCount, self.contentHeight = index, y
-  return index
+  -- mutants: this return is equivalent -- every caller uses `redraw(self)` as a bare statement,
+  -- and `self.shownCount` above already carries this same value for anyone who wants it.
+  return index -- mutants: equivalent see above
 end
 
 local methods = {
@@ -248,8 +253,11 @@ local function Constructor()
   scroll:SetScript("OnMouseWheel", onWheel)
 
   local content = CreateFrame("Frame", nil, scroll)
-  content:SetWidth(CELL)
-  content:SetHeight(CELL)
+  -- mutants: this starting size is equivalent -- `AceGUI:Create` runs `OnAcquire` (which calls
+  -- `redraw`, overwriting both dimensions for real) before handing the widget back to anyone, so
+  -- no caller ever sees the size set here.
+  content:SetWidth(CELL) -- mutants: equivalent see above
+  content:SetHeight(CELL) -- mutants: equivalent see above
   scroll:SetScrollChild(content)
 
   local widget = {

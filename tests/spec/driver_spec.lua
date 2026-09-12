@@ -172,6 +172,31 @@ describe("Display.Driver", function()
       A.set(A.ALL, "glow", "show", "always")
       assert.is_false(Display.glowCouldBeVisible())
     end)
+
+    -- The strip's own glow switch (Queue page "Glow the first icon on the strip") is a SEPARATE
+    -- opt-in from `profile.glow.barGlow`, and either alone must be enough to keep asking.
+    it("the strip's own glow switch alone is enough, with the bar switch off", function()
+      ns.db.profile.glow.barGlow = false
+      ns.db.profile.queue = { stripGlow = true }
+      A.set(A.ALL, "glow", "show", "always")
+      assert.is_true(Display.glowCouldBeVisible())
+    end)
+
+    it("answers true rather than hiding silently when there is no state yet", function()
+      A.set(A.ALL, "glow", "show", "always")
+      ns.API = nil
+      assert.is_true(Display.glowCouldBeVisible())
+    end)
+
+    -- "combat", not "always": Visibility.shouldShow("always", ...) never even looks at ctx, so a
+    -- mode of "always" here would still answer true if the broken-state guard were deleted and a
+    -- string (pcall's own error message) reached shouldShow as ctx. "combat" actually depends on
+    -- ctx.inCombat, which is what makes this the case that needs its own guard.
+    it("answers true rather than hiding silently when the state errors", function()
+      A.set(A.ALL, "glow", "show", "combat")
+      ns.API = { GetState = function() return { inCombat = function() error("boom") end } end }
+      assert.is_true(Display.glowCouldBeVisible())
+    end)
   end)
 
   -- Display.stats() is what `/elm debug perf` reads. lastBuildKey is only set by a RENDER, so before

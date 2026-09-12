@@ -37,7 +37,6 @@ local TextureLibrary = {}
 -- The addon whose files the last two categories point at. One constant, read by the category
 -- definitions and by `requires` below, so "which addon does this need" is answered in one place.
 local WEAKAURAS = "WeakAuras"
-TextureLibrary.WEAKAURAS = WEAKAURAS
 
 local ELMIRA_MEDIA = "Interface\\AddOns\\Elmira\\media\\"
 local WA_MEDIA = "Interface\\AddOns\\WeakAuras\\Media\\Textures\\"
@@ -67,9 +66,11 @@ function TextureLibrary.nameFromPath(path)
   end))
 end
 
+-- mutants: the return below is equivalent -- `add` is local (not exported); every caller uses it
+-- only for the side effect on `out`, and none reads this return value.
 local function add(out, path, name)
   out[#out + 1] = { path = path, name = name or TextureLibrary.nameFromPath(path) }
-  return out
+  return out -- mutants: equivalent see above
 end
 
 -- A run of numeric file ids under one heading. The id IS the whole path, so there is no segment to
@@ -205,7 +206,7 @@ end
 function TextureLibrary.requires(path)
   local lowered = tostring(path or ""):lower():gsub("/", "\\")
   if lowered:find("interface\\addons\\weakauras\\", 1, true) == 1 then return WEAKAURAS end
-  return nil
+  return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
 end
 
 -- TextureLibrary.drawable(path) -> what `SetTexture` wants

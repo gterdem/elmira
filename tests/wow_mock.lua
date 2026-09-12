@@ -294,6 +294,10 @@ local function newRegion(kind, parent)
   function r:GetStringWidth() return #tostring(self.__text or "") * 6 end
   function r:SetTexture(t) self.__texture = t end
   function r:GetTexture() return self.__texture end
+  -- A solid-colour texture rather than a file, e.g. the dark plate under an indicator's art or a
+  -- gold selection border. Four returns, matching the real client (r, g, b, a).
+  function r:SetColorTexture(cr, cg, cb, ca) self.__colorTexture = { cr, cg, cb, ca } end
+  function r:GetColorTexture() local c = self.__colorTexture or {}; return c[1], c[2], c[3], c[4] end
   function r:SetText(t) self.__text = t end
   function r:GetText() return self.__text end
   function r:Show() self.__shown = true end
@@ -349,6 +353,19 @@ function CreateFrame(frameType, name, parent, template)
   function frame:GetRegions() return unpack(self.__regions) end
   function frame:GetChildren() return unpack(self.__children) end
   function frame:GetNumChildren() return #self.__children end
+  -- ScrollFrame's own surface: EnableMouseWheel/SetScrollChild are real client calls a scroll
+  -- frame answers regardless of type; the vertical getters/setters are what a widget built
+  -- straight on `CreateFrame("ScrollFrame", ...)` (rather than through an AceGUI container) reads
+  -- and writes. `GetVerticalScrollRange` is a TEST LEVER, not a real layout computation -- the
+  -- client derives it from the scroll child's height, which nothing here lays out for real; a
+  -- spec sets `frame.__scrollRange` directly to say what the range is for its own scenario.
+  function frame:EnableMouseWheel(v) self.__mouseWheelEnabled = v and true or false end
+  function frame:IsMouseWheelEnabled() return self.__mouseWheelEnabled == true end
+  function frame:SetScrollChild(child) self.__scrollChild = child end
+  function frame:GetScrollChild() return self.__scrollChild end
+  function frame:SetVerticalScroll(v) self.__vScroll = v end
+  function frame:GetVerticalScroll() return self.__vScroll or 0 end
+  function frame:GetVerticalScrollRange() return self.__scrollRange or 0 end
   -- The three state textures are objects in the client, not the values that were set: AceConfigDialog
   -- sets one and immediately calls SetTexCoord on what it gets back (AceConfigDialog-3.0.lua:589).
   local function stateTexture(self, which)

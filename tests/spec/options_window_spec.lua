@@ -333,6 +333,16 @@ describe("Options window", function()
       local f = fakeFrame()
       f.kind, f.name, f.parent, f.template = kind, name, parent, template
       created[#created + 1] = f
+      -- OptionsSliderTemplate publishes three children under the SLIDER's own name (the real
+      -- template's low/high end labels and its own title), the same way wow_mock.lua's own
+      -- UIDropDownMenuTemplate handling does for a dropdown: AT4-D1's toolbar sliders read all
+      -- three back out of `_G` by name, and a template that handed back nothing would leave the
+      -- toolbar's own title permanently blank.
+      if name and template == "OptionsSliderTemplate" then
+        _G[name .. "Low"] = fakeTexture(nil)
+        _G[name .. "High"] = fakeTexture(nil)
+        _G[name .. "Text"] = fakeTexture(nil)
+      end
       return f
     end
     -- The client's list of frame NAMES Escape closes. A table, because that is what the move bar
@@ -357,6 +367,11 @@ describe("Options window", function()
     _G.CLOSE, _G.UIParent, _G.GameTooltip, _G.CreateFrame, _G.hooksecurefunc =
       nil, nil, nil, nil, nil
     _G.UISpecialFrames = nil
+    -- The OptionsSliderTemplate stand-ins CreateFrame above publishes by name: real plain globals,
+    -- so they must not leak into a spec after this one the way a `ns` table reset cannot reach.
+    for _, name in ipairs({ "ElmiraMoveBarSize", "ElmiraMoveBarAlpha" }) do
+      _G[name .. "Low"], _G[name .. "High"], _G[name .. "Text"] = nil, nil, nil
+    end
   end)
 
   -- Opens the panel the way /elm config does, and hands back the widget it opened onto.
@@ -1284,6 +1299,11 @@ describe("Options window", function()
         feed({ type = "SimpleGroup", children = {} }, { "notifications" })
       end)
     end)
+
+    it("does nothing, without erroring, when FeedGroup hands over no container at all", function()
+      open()
+      assert.has_no.errors(function() feed(nil, { "notifications" }) end)
+    end)
   end)
 
   -- AT10-D4. `windowDB().lastPath` is what `Options.Open` reads when asked for no page at all, so
@@ -1756,11 +1776,66 @@ describe("Options window", function()
         -- AT8-D5: the toolbar's own slider follows the tab's new 16-512 range.
         assert.same({ 16, 512 }, b.elmiraSize.range)
         assert.same({ 0.05, 1 }, b.elmiraAlpha.range)
+        assert.same({ 120, 16 }, { b.elmiraSize.width, b.elmiraSize.height })
+        assert.same({ 120, 16 }, { b.elmiraAlpha.width, b.elmiraAlpha.height })
+        assert.same({ 24, 24 }, { b.elmiraSwatch.width, b.elmiraSwatch.height })
+        -- Every control is sized and placed off the one before it, left to right, so a missing
+        -- width anywhere would stack two of them on the same spot.
+        assert.same({ 32, 32 }, { b.elmiraIcon.width, b.elmiraIcon.height })
+        assert.equal(120, b.elmiraName.width)
+        assert.equal("LEFT", b.elmiraName.justify)
+        assert.same({ 90, 22 }, { b.elmiraChoose.width, b.elmiraChoose.height })
+        assert.equal("Texture", b.elmiraChoose.text)
+        assert.equal("Colour", b.elmiraSwatchLabel.text)
+        -- Each control anchored off the one before it, left to right: a missing anchor anywhere
+        -- would stack two controls on the same spot instead of shifting the row.
+        assert.same({ "TOPLEFT", b, "TOPLEFT", 12, -44 }, b.elmiraIcon.points[1])
+        assert.same({ "LEFT", b.elmiraIcon, "RIGHT", 8, 0 }, b.elmiraName.points[1])
+        assert.same({ "LEFT", b.elmiraName, "RIGHT", 8, 0 }, b.elmiraChoose.points[1])
+        assert.same({ "LEFT", b.elmiraChoose, "RIGHT", 20, 0 }, b.elmiraSize.points[#b.elmiraSize.points])
+        assert.same({ "LEFT", b.elmiraSize, "RIGHT", 24, 10 }, b.elmiraSwatchLabel.points[1])
+        assert.same({ "LEFT", b.elmiraSize, "RIGHT", 24, -6 }, b.elmiraSwatch.points[1])
+        assert.equal(b.elmiraSwatch, b.elmiraSwatch.elmiraFill.allPointsOf,
+          "the colour fill does not cover its own swatch")
+        assert.same({ "LEFT", b.elmiraSwatch, "RIGHT", 24, 0 }, b.elmiraAlpha.points[#b.elmiraAlpha.points])
+        assert.equal("HORIZONTAL", b.elmiraSize.orientation)
+        assert.equal(8, b.elmiraSize.valueStep)
+        assert.is_true(b.elmiraSize.obeyStep)
+        assert.equal(0.05, b.elmiraAlpha.valueStep)
+        -- The template's own end labels are blanked (the toolbar draws its own number in the
+        -- title, in the middle), and the title itself reads "<label>: <value>" in each slider's
+        -- own format.
+        assert.equal("", _G.ElmiraMoveBarSizeLow:GetText())
+        assert.equal("", _G.ElmiraMoveBarSizeHigh:GetText())
+        assert.equal("Size: 96", _G.ElmiraMoveBarSizeText:GetText())
+        assert.equal("Opacity: 0.40", _G.ElmiraMoveBarAlphaText:GetText())
+        bar().elmiraSize:SetValue(200)
+        assert.equal("Size: 200", _G.ElmiraMoveBarSizeText:GetText())
         for _, region in ipairs(b.elmiraTools) do
           assert.is_false(region.hidden, "a toolbar control was left off the bar")
         end
         assert.equal(620, b.width, "the bar did not make room for the toolbar")
         assert.equal(130, b.height)
+      end)
+
+      -- "The template's own label does not follow a SetValue on every client": a real Blizzard
+      -- slider does not always re-fire OnValueChanged from a SetValue the way this harness's own
+      -- fake always does, so applyToolbar retitles explicitly rather than trusting that call alone.
+      it("retitles explicitly rather than trusting the slider's own OnValueChanged", function()
+        open()
+        A.set("EXORCISM", "texture", "size", 96)
+        A.set("EXORCISM", "texture", "alpha", 0.4)
+        Options.BeginMove("texture", "EXORCISM")
+        local b = bar()
+        -- Simulate the client quirk the comment describes: this slider's OnValueChanged does not
+        -- fire from the load that is about to happen.
+        b.elmiraSize.scripts.OnValueChanged, b.elmiraAlpha.scripts.OnValueChanged = nil, nil
+        Options.EndMove()
+        A.set("EXORCISM", "texture", "size", 200)
+        A.set("EXORCISM", "texture", "alpha", 0.6)
+        Options.BeginMove("texture", "EXORCISM")
+        assert.equal("Size: 200", _G.ElmiraMoveBarSizeText:GetText())
+        assert.equal("Opacity: 0.60", _G.ElmiraMoveBarAlphaText:GetText())
       end)
 
       -- Loading is not editing. SetValue fires OnValueChanged exactly as a drag does, so without
@@ -1812,6 +1887,54 @@ describe("Options window", function()
         _G.ColorPickerFrame = nil
       end)
 
+      -- The pre-10.2.5 contract, which Classic Era has carried alongside the modern one the whole
+      -- time (AceGUIWidget-ColorPicker.lua:64 branches on exactly this test): set the fields, then
+      -- show it. `Hide` first, because that frame reads them in its own `OnShow`.
+      it("falls back to the pre-10.2.5 colour picker contract and stores what comes back", function()
+        open()
+        local hid, shown, seeded = false, false, nil
+        _G.ColorPickerFrame = {
+          SetColorRGB = function(_, r, g, b) seeded = { r, g, b } end,
+          Hide = function() hid = true end,
+          Show = function() assert.is_true(hid, "shown before the pre-open hide"); shown = true end,
+        }
+        Options.BeginMove("texture", "EXORCISM")
+        bar().elmiraSwatch.scripts.OnClick()
+        assert.is_true(shown, "no colour picker was opened")
+        assert.is_false(_G.ColorPickerFrame.hasOpacity)
+        assert.same({ 1.0, 0.8274509803921568, 0.47843137254901963 }, seeded,
+          "the picker did not open pre-loaded with the current colour")
+
+        _G.ColorPickerFrame.func()
+        assert.same({ r = 1.0, g = 0.8274509803921568, b = 0.47843137254901963 },
+          A.effective("EXORCISM", "texture").color,
+          "the pre-10.2.5 contract has no GetColorRGB, so the swatch's own colour is kept")
+
+        -- Cancel puts back what the swatch opened on, so changing your mind changes nothing.
+        A.set("EXORCISM", "texture", "color", { r = 0.2, g = 0.2, b = 0.2 })
+        _G.ColorPickerFrame.cancelFunc()
+        local c = A.effective("EXORCISM", "texture").color
+        assert.equal(1.0, c.r)
+        _G.ColorPickerFrame = nil
+      end)
+
+      it("says so rather than erroring on a client with no colour picker frame at all", function()
+        open()
+        _G.ColorPickerFrame = nil
+        Options.BeginMove("texture", "EXORCISM")
+        assert.has_no.errors(function() bar().elmiraSwatch.scripts.OnClick() end)
+      end)
+
+      it("does nothing, without erroring, with no settings store to read the colour from", function()
+        open()
+        local shown = false
+        _G.ColorPickerFrame = { SetupColorPickerAndShow = function() shown = true end }
+        Options.BeginMove("texture", "EXORCISM")
+        ns.AbilitySettings = nil
+        assert.has_no.errors(function() bar().elmiraSwatch.scripts.OnClick() end)
+        assert.is_false(shown, "the picker opened with no colour to seed it from")
+      end)
+
       it("opens the texture picker for the ability being moved", function()
         open()
         Options.BeginMove("texture", "EXORCISM")
@@ -1848,6 +1971,21 @@ describe("Options window", function()
         assert.is_nil(ns.db.char.abilities.EXORCISM,
           "a slider with no ability behind it still wrote a settings row")
       end)
+
+      -- EndMove's OWN clear, isolated from a later BeginMove("strip") also clearing it: nothing
+      -- must write to the ability once the mode that was dragging it has simply ENDED.
+      it("stops writing to the ability once EndMove itself has run, with no other mode started",
+        function()
+          open()
+          A.set("EXORCISM", "texture", "size", 96)
+          Options.BeginMove("texture", "EXORCISM")
+          local b = bar()
+          Options.EndMove()
+          refreshes = 0
+          b.elmiraSize:SetValue(300)
+          assert.equal(0, refreshes, "a slider from an ended mode still repainted the screen")
+          assert.equal(96, A.effective("EXORCISM", "texture").size, "the ended mode still wrote")
+        end)
     end)
 
     -- A client with no CreateFrame at all is only reachable in a spec, but the mode still has to

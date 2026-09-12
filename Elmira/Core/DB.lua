@@ -85,7 +85,10 @@ DB.defaults = {
     -- AT2-D3: the strip's own glow, opt-in and off by default -- the strip already says "this one"
     -- with size and motion (ADR-0015 §3, amended), so lighting slot 1 too is a player's choice. Its
     -- own switch: unaffected by `glow.barGlow` above, in either direction.
-    queue = { stripGlow = false },
+    -- mutants: this default is equivalent -- every reader (`profile.queue and profile.queue.stripGlow`,
+    -- Options.lua's `p.queue and p.queue.stripGlow == true`) short-circuits to the same falsy answer
+    -- whether `queue` is absent or `{stripGlow=false}`; this only documents the shipped default.
+    queue = { stripGlow = false }, -- mutants: equivalent see above
     -- F37. `routes` starts EMPTY and Core/Announce falls back to its shipped defaults, so a category
     -- added by a later release arrives with its intended routing rather than silent -- and a user
     -- who has never opened the panel is not carrying a frozen copy of an old default set.

@@ -70,7 +70,7 @@ local function keyByName(s, name)
   for key, entry in pairs(s or {}) do
     if normalizeName(entry.name) == target then return key end
   end
-  return nil
+  return nil -- mutants: equivalent the last statement of a function; Lua returns nil either way
 end
 
 -- Spells.merged(pack) -> ctx.spells

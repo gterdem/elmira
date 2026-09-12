@@ -48,6 +48,7 @@ describe("Display.Textures", function()
     function f:CreateTexture()
       local t = fakeFrame("Texture")
       t.shown = true
+      t.SetBlendMode = function(this, v) this.blendMode = v end
       self.textures[#self.textures + 1] = t
       return t
     end
@@ -56,7 +57,10 @@ describe("Display.Textures", function()
     -- failure this channel keeps producing.
     function f:CreateFontString()
       local fs = fakeFrame("FontString")
-      fs.shown = false
+      -- A FontString, unlike a Frame, is visible by default (the client convention
+      -- tests/wow_mock.lua's own region/frame split already draws): Textures.lua's own `f.count:Hide()`
+      -- at creation is what keeps a fresh count string off screen, and a fixture that pre-hid it would
+      -- hide that call's own failure.
       fs.SetFont = function(this, path, size, flags) this.font = { path, size, flags } end
       fs.SetTextColor = function(this, r, g, b) this.textColor = { r, g, b } end
       fs.SetText = function(this, t) this.text = t end
@@ -147,6 +151,15 @@ describe("Display.Textures", function()
       assert.equal(64, A.effective("JUDGEMENT", "texture").size)
     end)
 
+    -- Neither of `Textures.SOURCES` -- a guard that has to fire BEFORE the size is touched, or an
+    -- untouched ability (still sitting on the "icon" default) would have its size field wiped to
+    -- nil by `A.set(key, "texture", "size", nil)` rather than being left alone.
+    it("refuses rather than clearing the size when the target source has no default of its own",
+      function()
+        assert.is_false(Textures.flipSize("EXORCISM", "icon", "bogus"))
+        assert.equal(48, A.effective("EXORCISM", "texture").size)
+      end)
+
     -- AT4-D2: there is no `shape` source any more -- the shipped shapes are eight files in the
     -- picker's first category, reached like every other file, through `path`.
     it("draws the shipped ring for a file source nobody has chosen a file for yet", function()
@@ -210,6 +223,17 @@ describe("Display.Textures", function()
       assert.equal(1, f.alpha)
       -- AT6-D4: the centre of the SCREEN, with no anchor of ours in between.
       assert.same({ "CENTER", _G.UIParent, "CENTER", 0, 0 }, f.point)
+    end)
+
+    -- The two blend modes WeakAuras exposes: "add" maps to the client's ADD (bright parts glow),
+    -- anything else -- including the shipped default -- to plain BLEND.
+    it("maps the blend field to the client's own blend mode names", function()
+      switchOn("EXORCISM")
+      Textures.Fire("EXORCISM", "suggested")
+      assert.equal("BLEND", showing()[1].textures[1].blendMode)
+      A.set("EXORCISM", "texture", "blend", "add")
+      Textures.Refresh()
+      assert.equal("ADD", showing()[1].textures[1].blendMode)
     end)
 
     it("draws the chosen file in the chosen colour at the chosen size", function()
@@ -416,6 +440,13 @@ describe("Display.Textures", function()
         assert.equal("1", count().text, "the last second read as zero")
       end)
 
+      -- Anchored once, at creation, and never again: a count string with no anchor at all would
+      -- still show the right text, sit at the wrong spot (or nowhere) on a real client.
+      it("is anchored to the centre of its texture", function()
+        buffUp(10)
+        assert.equal("CENTER", count().point[1])
+      end)
+
       it("sizes it to the texture in the game's number font, white with an outline", function()
         A.set("EXORCISM", "texture", "size", 120)
         buffUp(10)
@@ -424,11 +455,65 @@ describe("Display.Textures", function()
         assert.same({ 1, 1, 1 }, count().textColor)
       end)
 
+      -- The client's own number font, read off the shipped FONT OBJECT rather than hardcoded, with
+      -- two fallbacks behind it for a client (or a spec's mock) that publishes neither.
+      describe("the font it reads off the client (falling back when it cannot)", function()
+        local savedNumberFont, savedStandardFont
+
+        before_each(function()
+          savedNumberFont, savedStandardFont = _G.NumberFontNormal, _G.STANDARD_TEXT_FONT
+        end)
+
+        after_each(function()
+          _G.NumberFontNormal, _G.STANDARD_TEXT_FONT = savedNumberFont, savedStandardFont
+        end)
+
+        it("uses the shipped number font object's own path when it has one", function()
+          _G.NumberFontNormal = { GetFont = function() return "Fonts\\NUMBER.TTF" end }
+          _G.STANDARD_TEXT_FONT = "Fonts\\STANDARD.TTF"
+          buffUp(10)
+          assert.equal("Fonts\\NUMBER.TTF", count().font[1])
+        end)
+
+        it("falls back to the standard text font with no number font object", function()
+          _G.NumberFontNormal = nil
+          _G.STANDARD_TEXT_FONT = "Fonts\\STANDARD.TTF"
+          buffUp(10)
+          assert.equal("Fonts\\STANDARD.TTF", count().font[1])
+        end)
+
+        it("falls back to its own literal with neither global published", function()
+          _G.NumberFontNormal, _G.STANDARD_TEXT_FONT = nil, nil
+          buffUp(10)
+          assert.equal("Fonts\\FRIZQT__.TTF", count().font[1])
+        end)
+      end)
+
       it("draws nothing while the texture is up for the suggestion alone", function()
         switchOn("EXORCISM")
         Textures.Fire("EXORCISM", "suggested")
         Textures.Sync("EXORCISM", { EXORCISM = { active = false } }, clock)
         assert.is_false(count().shown, "a number counting down something that is not on you")
+      end)
+
+      -- Stale `remaining` from a state this texture is NOT showing for must never leak into a
+      -- number: held on screen for the SUGGESTION here, with a `remaining` value left over from
+      -- some other reading -- only `active`/`expiring` say whether the count is actually about a
+      -- buff that is on you right now, and the texture stays up (via "suggested") either way.
+      it("ignores a leftover remaining value on a row that is neither active nor expiring", function()
+        switchOn("EXORCISM")
+        Textures.Fire("EXORCISM", "suggested")
+        Textures.Sync("EXORCISM", { EXORCISM = { active = false, remaining = 15, duration = 30 } },
+          clock)
+        assert.is_not_nil(showing()[1], "the texture itself is still up for the suggestion")
+        assert.is_false(count().shown, "not active or expiring, whatever remaining still says")
+      end)
+
+      -- Zero rounds up to "0", which nobody wants to read off a warning; it must read as gone.
+      it("draws nothing once the buff has no time left at all", function()
+        buffUp(20)
+        Textures.Sync(nil, { EXORCISM = { active = true, remaining = 0, duration = 30 } }, clock)
+        assert.is_false(count().shown)
       end)
 
       it("draws nothing when the toggle is off, and clears a number already there", function()
@@ -569,6 +654,16 @@ describe("Display.Textures", function()
       assert.equal(0, A.effective("EXORCISM", "texture").x)
     end)
 
+    -- A Move mode's sample is held by neither a suggestion nor a buff, so the render loop's own
+    -- Sync would consider it "not still" and release it on the very next tick -- Sync has to do
+    -- nothing at all while a mode is running, not merely leave this one key alone.
+    it("is not taken down by the render loop while the drag is running", function()
+      Textures.StartMove("EXORCISM")
+      Textures.Sync("SOMETHING_ELSE", {}, clock)
+      assert.equal(1, #showing(), "the sample was released mid-drag")
+      assert.equal("EXORCISM", Textures.movingKey())
+    end)
+
     it("takes the sample away and gives the mouse back when the mode ends", function()
       Textures.StartMove("EXORCISM")
       local f = showing()[1]
@@ -652,6 +747,24 @@ describe("Display.Textures", function()
       assert.equal(0, #showing())
     end)
 
+    -- An empty string is not an ability key -- it has to read as "no preview", the same as nil,
+    -- rather than being stored as one and quietly previewing nothing.
+    it("treats an empty string the same as no preview at all", function()
+      switchOn("EXORCISM")
+      Textures.Preview("EXORCISM")
+      assert.is_true(Textures.Preview(""))
+      assert.is_nil(Textures.describe().previewKey)
+      assert.equal(0, #showing())
+    end)
+
+    -- Re-asking for the SAME preview key that is already up must not re-layout, or a tab that
+    -- calls Preview on every render (as this one does) would rebuild the whole grid for nothing.
+    it("does nothing and does not re-layout when asked for the preview it already holds", function()
+      switchOn("EXORCISM")
+      Textures.Preview("EXORCISM")
+      assert.is_false(Textures.Preview("EXORCISM"), "re-asking for the same key answered as a change")
+    end)
+
     it("is released when another ability is previewed instead", function()
       switchOn("EXORCISM")
       switchOn("JUDGEMENT")
@@ -680,6 +793,18 @@ describe("Display.Textures", function()
       Textures.StopMoveMode()
       assert.is_nil(Textures.describe().previewKey)
       assert.equal(0, #showing(), "the texture was left standing after Done")
+    end)
+
+    -- StartMove already clears the preview it might have inherited; this proves StopMoveMode has
+    -- its OWN clear too, for a preview that started (or restarted) DURING the drag -- not merely
+    -- one still nil from StartMove's own clearing moments earlier.
+    it("clears a preview set again during the drag when the mode ends", function()
+      switchOn("JUDGEMENT")
+      Textures.StartMove("EXORCISM")
+      Textures.Preview("JUDGEMENT")
+      assert.equal("JUDGEMENT", Textures.describe().previewKey)
+      Textures.StopMoveMode()
+      assert.is_nil(Textures.describe().previewKey, "StopMoveMode did not clear its own preview")
     end)
 
     it("reports which ability it is holding, for /elm debug textures", function()
@@ -908,6 +1033,17 @@ describe("Display.Textures", function()
       assert.equal(0.5, showing()[1].alpha)
     end)
 
+    -- An instant flash (ready/used) reads at the tab's Opacity, full stop: fading it would let a
+    -- flash that lands mid-cooldown come out dim, which is a real seal at 5 s left never being seen
+    -- (owner, in game, 2026-09-11) all over again for the moments that are not held at all.
+    it("does not fade an instant flash, even with fade data already sitting in memory", function()
+      fill("cooldown")
+      A.set("EXORCISM", "texture", "used", true)
+      Textures.Sync(nil, { EXORCISM = { cooldown = 6, cooldownFull = 6 } }, clock)
+      Textures.Fire("EXORCISM", "used")
+      assert.equal(1, showing()[1].alpha, "a flash must not read the 0.05-floor fade a held state would")
+    end)
+
     -- `SetAlpha` restarts no animation, so unlike the swipe it replaces there is nothing to guard
     -- against re-pushing: the opacity has to move on every tick that the numbers move, not only on
     -- the ticks the SET of textures on screen changed.
@@ -955,6 +1091,14 @@ describe("Display.Textures", function()
       assert.same({}, row.events)
       assert.is_nil(row.shownAt)
       assert.is_false(row.visible)
+      -- AT9-D3/AT9-D4: WHY the two buff moments are missing, and whether the countdown is even
+      -- switched on -- neither is guessable from the screen, so both are reported outright.
+      assert.is_nil(row.buffSource, "nothing has ever seen this ability buff anyone")
+      assert.is_true(row.seconds, "AT9-D4 ships the countdown on by default")
+      A.learnBuff("EXORCISM")
+      assert.equal("learned", Textures.describe().textures[1].buffSource)
+      A.set("EXORCISM", "texture", "seconds", false)
+      assert.is_false(Textures.describe().textures[1].seconds)
     end)
 
     it("reports what is on screen, when it last appeared, and an unresolvable file", function()
