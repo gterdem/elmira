@@ -96,6 +96,10 @@ local FIELDS = {
   buff = { label = "Buff on you", keyAt = 2, keySource = "spells", ops = {
     { id = "present", label = "is up" },
     { id = "min", label = "stacks at least", arg = "number" },
+    -- MG1-D5(a): the one op that also passes on ABSENCE ("stacks at most N, or not up at all") —
+    -- Balefire Bolt's self-stack cap reads as "keep casting it while this is true", which must be
+    -- true before the first cast ever lands. See Core/Schema.lua C.buff.make.
+    { id = "max", label = "stacks at most", arg = "number" },
     { id = "maxRemaining", label = "seconds left at most", arg = "number", unit = "seconds" },
     { id = "minRemaining", label = "seconds left at least", arg = "number", unit = "seconds" },
   } },
@@ -104,6 +108,10 @@ local FIELDS = {
   } },
   debuff = { label = "Debuff on the target", keyAt = 2, keySource = "spells", ops = {
     { id = "present", label = "is on the target" },
+    -- MG1-D5(b): mirrors `buff`'s `min`/`maxRemaining` (Scorch/Fire Vulnerability stack maintenance
+    -- needs both: "reapply below 5 stacks", "refresh with 4s or less left").
+    { id = "min", label = "stacks at least", arg = "number" },
+    { id = "maxRemaining", label = "seconds left at most", arg = "number", unit = "seconds" },
     { id = "minRemaining", label = "seconds left at least", arg = "number", unit = "seconds" },
   } },
   no_debuff = { label = "Debuff missing from the target", keyAt = 2, keySource = "spells", ops = {
@@ -437,6 +445,9 @@ WORDS.buff = function(cond, ctx, L)
   if cond.min and cond.min > 1 then
     return string.format(L["%s at %s stacks or more"], name, num(cond.min))
   end
+  if cond.max then
+    return string.format(L["%s at %s stacks or fewer (or not up)"], name, num(cond.max))
+  end
   if cond.maxRemaining then
     return string.format(L["%s with %ss left or less"], name, num(cond.maxRemaining))
   end
@@ -448,6 +459,12 @@ end
 WORDS.no_buff = function(cond, ctx, L) return string.format(L["%s is not up"], named(cond[2], ctx)) end
 WORDS.debuff = function(cond, ctx, L)
   local name = named(cond[2], ctx)
+  if cond.min and cond.min > 1 then
+    return string.format(L["%s on the target at %s stacks or more"], name, num(cond.min))
+  end
+  if cond.maxRemaining then
+    return string.format(L["%s on the target with %ss left or less"], name, num(cond.maxRemaining))
+  end
   if cond.minRemaining then
     return string.format(L["%s on the target with %ss left or more"], name, num(cond.minRemaining))
   end

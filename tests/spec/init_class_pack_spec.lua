@@ -135,10 +135,10 @@ describe("Core.Init — built-in vs external class pack (ADR-0011 §3)", functio
   end)
 
   it("logs nothing about loadClassPack when nothing claims the class (the 'no-pack' sentinel)", function()
-    -- No built-in either: MAGE has none registered. The null-state message this also produces is a
+    -- No built-in either: WARRIOR has none registered. The null-state message this also produces is a
     -- SEPARATE log line from Init.lua's own later branch; this test only asserts the loadClassPack
     -- failure line specifically never appears.
-    ns.Adapter = fakeAdapter("MAGE", function() return false, "no-pack" end)
+    ns.Adapter = fakeAdapter("WARRIOR", function() return false, "no-pack" end)
 
     NA:OnInitialize()
     NA:OnEnable()
@@ -169,9 +169,9 @@ describe("Core.Init — built-in vs external class pack (ADR-0011 §3)", functio
 
   it("logs the addon name and the exact reason when an external pack claims a class with no "
      .. "built-in and fails to load", function()
-    -- No RegisterBuiltinPack("MAGE", ...) at all.
-    ns.Adapter = fakeAdapter("MAGE", function()
-      return false, "DISABLED", "Elmira_BrokenMage"
+    -- No RegisterBuiltinPack("WARRIOR", ...) at all.
+    ns.Adapter = fakeAdapter("WARRIOR", function()
+      return false, "DISABLED", "Elmira_BrokenWarrior"
     end)
 
     NA:OnInitialize()
@@ -182,7 +182,7 @@ describe("Core.Init — built-in vs external class pack (ADR-0011 §3)", functio
     -- check on "did not load" alone.
     local found = false
     for _, line in ipairs(logged) do
-      if line == "Elmira_BrokenMage claims MAGE but did not load (DISABLED)." then found = true end
+      if line == "Elmira_BrokenWarrior claims WARRIOR but did not load (DISABLED)." then found = true end
     end
     assert.is_true(found, "expected the exact failure line among: " .. table.concat(logged, " | "))
   end)

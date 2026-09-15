@@ -28,6 +28,7 @@ describe("Core.Schema (docs/02-CONDITION-SCHEMA.md, ADR-0002)", function()
       spells = {
         TESTSPELL = {}, EXORCISM = {}, CRUSADER_STRIKE = {}, DIVINE_STORM = {}, JUDGEMENT = {},
         ART_OF_WAR_BUFF = { proc = true }, HOLY_POWER_BUFF = {}, SOME_DEBUFF = {},
+        BALEFIRE_BOLT = {}, -- MG1-D5(a): the buff `max` op's own scenario key
         SEAL_OF_MARTYRDOM = {}, SEAL_OF_RIGHTEOUSNESS = {},
         RUNE_ART_OF_WAR = {}, RUNE_CRUSADER_STRIKE = {},
       },
@@ -149,6 +150,30 @@ describe("Core.Schema (docs/02-CONDITION-SCHEMA.md, ADR-0002)", function()
       assert.is_true(test(inWindow, 0))
       assert.is_false(test(tooLate, 0))
     end)
+
+    -- MG1-D5(a): `max` ("stacks at most") is the buff op that ALSO passes on absence — Balefire
+    -- Bolt's filler line reads "keep casting while at most 3 stacks", which must be true before the
+    -- first stack ever lands, not merely once it is up and low.
+    describe("max (MG1-D5a: stacks at most, passes on absence too)", function()
+      it("passes when the aura is entirely absent", function()
+        local test = pred({ { "buff", "BALEFIRE_BOLT", max = 3 } })
+        assert.is_true(test(FakeState.new{}, 0))
+      end)
+      it("passes when stacks are at or below the cap", function()
+        local test = pred({ { "buff", "BALEFIRE_BOLT", max = 3 } })
+        assert.is_true(test(FakeState.new{ buffs = { BALEFIRE_BOLT = { stacks = 3 } } }, 0))
+      end)
+      it("fails once stacks exceed the cap", function()
+        local test = pred({ { "buff", "BALEFIRE_BOLT", max = 3 } })
+        assert.is_false(test(FakeState.new{ buffs = { BALEFIRE_BOLT = { stacks = 4 } } }, 0))
+      end)
+      it("combined with min, still requires the floor when the aura is up", function()
+        local test = pred({ { "buff", "BALEFIRE_BOLT", min = 2, max = 3 } })
+        assert.is_false(test(FakeState.new{ buffs = { BALEFIRE_BOLT = { stacks = 1 } } }, 0),
+          "below min while present must still fail")
+        assert.is_true(test(FakeState.new{ buffs = { BALEFIRE_BOLT = { stacks = 2 } } }, 0))
+      end)
+    end)
   end)
 
   describe("no_buff", function()
@@ -183,6 +208,34 @@ describe("Core.Schema (docs/02-CONDITION-SCHEMA.md, ADR-0002)", function()
       local freshlyApplied = FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, remaining = 8 } } }
       assert.is_false(test(soonExpires, 0))
       assert.is_true(test(freshlyApplied, 0))
+    end)
+
+    -- MG1-D5(b): `min` (stacks at least) mirrors `buff`'s own `min` — Scorch/Fire Vulnerability's
+    -- "5 stacks" check needs it, and unlike `buff`'s `max` there is no absence-passes reading: the
+    -- debuff must be ON THE TARGET for a stack count to mean anything.
+    it("min: fails when present but below the stack floor", function()
+      local test = pred({ { "debuff", "SOME_DEBUFF", min = 5 } })
+      local s = FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, stacks = 4 } } }
+      assert.is_false(test(s, 0))
+    end)
+    it("min: passes at or above the stack floor", function()
+      local test = pred({ { "debuff", "SOME_DEBUFF", min = 5 } })
+      local s = FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, stacks = 5 } } }
+      assert.is_true(test(s, 0))
+    end)
+    it("min: still fails when the debuff is entirely absent", function()
+      local test = pred({ { "debuff", "SOME_DEBUFF", min = 1 } })
+      assert.is_false(test(FakeState.new{}, 0))
+    end)
+
+    -- MG1-D5(b): `maxRemaining` mirrors `buff`'s own op — "refresh Scorch with 4s or less left".
+    it("maxRemaining: passes only inside the window, requires presence", function()
+      local test = pred({ { "debuff", "SOME_DEBUFF", maxRemaining = 4 } })
+      local expiringSoon = FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, remaining = 3 } } }
+      local freshlyApplied = FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, remaining = 10 } } }
+      assert.is_true(test(expiringSoon, 0))
+      assert.is_false(test(freshlyApplied, 0))
+      assert.is_false(test(FakeState.new{}, 0))
     end)
   end)
 

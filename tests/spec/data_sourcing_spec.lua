@@ -285,9 +285,16 @@ describe("Data sourcing policy (docs/03)", function()
         local advice = data.advice and data.advice[e.class] and data.advice[e.class][key]
         assert.is_table(advice, key .. ": no advice entry")
         assert.is_table(advice.soul, key .. ": advice.soul missing (an empty list is fine; absent is not)")
-        assert.truthy(advice.weapon and (advice.weapon.type == "1H" or advice.weapon.type == "2H"),
-          key .. ": advice.weapon.type must be 1H or 2H")
-        assert.is_string(advice.weapon.reason, key .. ": advice.weapon.reason missing")
+        -- `weapon` is OPTIONAL (hard rule 8: never assume gear, weapon included) — a build only
+        -- ships one when a real mechanic favours 1H/2H (Paladin's builds all do; a caster whose
+        -- damage does not come from its main-hand at all has nothing true to say and must not
+        -- invent an opinion just to fill the field, MG1 fix pass item 2). When present it is still
+        -- held to the same shape Advisor.recommend expects.
+        if advice.weapon ~= nil then
+          assert.truthy(advice.weapon.type == "1H" or advice.weapon.type == "2H",
+            key .. ": advice.weapon.type must be 1H or 2H")
+          assert.is_string(advice.weapon.reason, key .. ": advice.weapon.reason missing")
+        end
         assert.truthy(type(advice.runes) == "table" and #advice.runes > 0, key .. ": advice.runes missing or empty")
         assert.truthy(advice.ringRunes and type(advice.ringRunes.default) == "table" and #advice.ringRunes.default > 0,
           key .. ": advice.ringRunes.default missing or empty")
@@ -361,18 +368,34 @@ describe("Data sourcing policy (docs/03)", function()
     assert.same({}, missing)
   end)
 
-  -- Every entry still awaiting in-game confirmation, named out loud. This test does not fail on
-  -- their existence — provisional entries are legal — it fails when the list drifts from what is
-  -- documented, so one can never be added or quietly resolved without a deliberate edit here.
-  it("has exactly the provisional entries we expect", function()
-    local pending = {}
-    for key, record in pairs(pack.spells) do
-      if type(record) == "table" and record.verify == "in-game" then pending[#pending + 1] = key end
-    end
-    table.sort(pending)
+  -- Every entry still awaiting in-game confirmation, named out loud, PER CLASS. This test does not
+  -- fail on their existence — provisional entries are legal — it fails when the list drifts from
+  -- what is documented, so one can never be added or quietly resolved without a deliberate edit
+  -- here. MG1-D2: Mage lists ENIGMA_FIRE_CRIT_BUFF (the Enigma Insight 2pc buff — the follow-up note
+  -- addendum fetched its Wowhead page directly but kept it provisional because the page shares its
+  -- name with the real Fire Blast ability). MG2-D1 adds three more, each WoWSims-sourced per
+  -- mage-healer-ids-verified-2026-09-14.md: ARCANE_BLAST_BUFF, MISSILE_BARRAGE_BUFF, ARCANE_TUNNELING.
+  -- Neither Mage soul is in this list: souls are a separate table this test does not scan (see the
+  -- souls block below).
+  local PROVISIONAL_SPELLS_BY_CLASS = {
     -- The four SOUL_*_AURA entries were here until 2026-09-01, when the dump refuted them: a soul's
     -- "permanent hidden aura" is not visible to UnitAura, so it cannot drive detection (docs/07 §9.13).
-    assert.same({ "SWIFT_JUDGEMENT_BUFF", "TEMPLAR_BUFF" }, pending)
+    Paladin = { "SWIFT_JUDGEMENT_BUFF", "TEMPLAR_BUFF" },
+    Mage = { "ENIGMA_FIRE_CRIT_BUFF", "ARCANE_BLAST_BUFF", "MISSILE_BARRAGE_BUFF", "ARCANE_TUNNELING" },
+  }
+  it("has exactly the provisional entries we expect, per class", function()
+    for _, entry in ipairs(shippedPacks()) do
+      local expected = PROVISIONAL_SPELLS_BY_CLASS[entry.class]
+      assert.is_table(expected, entry.class .. ": no expected provisional list declared here — " ..
+        "add one rather than letting this check go vacuous for a new class pack")
+      local pending = {}
+      for key, record in pairs(entry.data.spells) do
+        if type(record) == "table" and record.verify == "in-game" then pending[#pending + 1] = key end
+      end
+      table.sort(pending)
+      table.sort(expected)
+      assert.same(expected, pending, entry.class)
+    end
   end)
 
   -- A bonus naming an aura key that no spell record defines resolves to nil at runtime and the

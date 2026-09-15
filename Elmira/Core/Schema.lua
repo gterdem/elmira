@@ -48,14 +48,23 @@ local C = {}
 
 C.buff = {
   make = function(cond, ctx)
-    local key, min = cond[2], cond.min or 1
+    local key, min, max = cond[2], cond.min, cond.max
     local maxRem, minRem = cond.maxRemaining, cond.minRemaining
     local spell = ctx.spells and ctx.spells[key]
     local isProc = spell ~= nil and spell.proc == true
     return function(state, t)
       if isProc and t and t > 0 then return false end -- procs are unpredictable; absent in the future
       local stacks, remaining = state:buff(key)
-      if not stacks or stacks < min then return false end
+      -- MG1-D5(a): `max` ("stacks at most") is the one op that passes on ABSENCE too — "cast this
+      -- filler while its self-stack cap is not yet reached" reads as true with zero stacks up, not
+      -- as "false, the aura is missing". `min` still requires presence (the default, unchanged): a
+      -- plain `{"buff","X"}` with neither op keeps meaning "up", stacks >= 1.
+      if max then
+        if stacks and stacks > max then return false end
+        if stacks and min and stacks < min then return false end
+      else
+        if not stacks or stacks < (min or 1) then return false end
+      end
       if maxRem and (remaining == nil or remaining > maxRem) then return false end
       if minRem and (remaining == nil or remaining < minRem) then return false end
       return true
@@ -72,11 +81,18 @@ C.debuff = { make = function(cond)
   local key = cond[2]
   local mine = cond.mine
   if mine == nil then mine = true end -- docs/02: defaults to true
-  local minRem = cond.minRemaining
+  -- MG1-D5(b): `min` (stacks at least) and `maxRemaining` (seconds left at most) mirror `buff`'s
+  -- own ops. Unlike `buff`'s `max`, a debuff has no "absent passes" reading — the entries that need
+  -- it (Scorch stack maintenance) ask "is it on the target AND below N stacks", which is exactly
+  -- the plain presence check `not stacks` already enforces.
+  local min = cond.min
+  local minRem, maxRem = cond.minRemaining, cond.maxRemaining
   return function(state)
     local stacks, remaining = state:debuff(key, mine)
     if not stacks then return false end
+    if min and stacks < min then return false end
     if minRem and (remaining == nil or remaining < minRem) then return false end
+    if maxRem and (remaining == nil or remaining > maxRem) then return false end
     return true
   end
 end }

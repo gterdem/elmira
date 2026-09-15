@@ -767,7 +767,21 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
     return (count and count > 0) and count or 1, remaining > 0 and remaining or 0, aura.duration
   end
 
-  function S:buff(key) return findAura("player", key, "HELPFUL") end
+  -- MG1-D5(c): a spell flagged `selfAura = "either"` may file its own self-buff under either the
+  -- HELPFUL or the HARMFUL list. Balefire Bolt's stacking self-debuff lowers Spirit and raises the
+  -- caster's own damage at once, and the dossier could not tell from a fetched page which bucket the
+  -- client actually sorts it into — the checklist's `/dump` settles that per-character. Every other
+  -- spell is unaffected: the HARMFUL scan of the player's OWN buffs never runs unless the pack says
+  -- to look there, so this cannot turn a real debuff on the player into a false `buff()` hit.
+  function S:buff(key)
+    local stacks, remaining, duration = findAura("player", key, "HELPFUL")
+    if stacks then return stacks, remaining, duration end
+    local spell = spells[key]
+    if spell and spell.selfAura == "either" then
+      return findAura("player", key, "HARMFUL")
+    end
+    return nil -- mutants: equivalent falling off the end of the function returns nil implicitly in Lua; no caller can tell the two apart
+  end
   function S:debuff(key, mine) return findAura("target", key, "HARMFUL", mine == true) end
 
   -- COMBO_POINTS, added at R2 (D59) for the pack-less rogue this pass exists to serve: with no data

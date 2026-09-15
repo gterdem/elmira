@@ -1,5 +1,16 @@
 # Changelog
 ## Unreleased
+- **Added: Mage.** Fire, Frost (Spellfrost) and a Frost leveling playstyle from the Phase 8 sims and
+  guides — Fire Blast (Overheat) into Hot Streak Pyroblasts and 5 stacks of Fire Vulnerability from
+  Scorch; Frost's Deep Freeze and Ice Lance shatter combo off Fingers of Frost; a Frost leveling build
+  for questing. Set up through `/elm setup` like the paladin. **Plus a fourth playstyle, Arcane
+  healer** — Elmira's first healer role: Arcane Blast stacks, Missile Barrage procs and Arcane Barrage
+  on the enemy target show as real suggestions, the same way a DPS build does, while Regeneration,
+  Mass Regeneration, Chronostatic Preservation and Rewind Time show only as cooldown reminders, since
+  Elmira cannot see who in the raid needs the heal.
+- **Added: two condition operators.** A Buff condition can now ask for "stacks at most" (also true
+  when the buff is not up at all, for a self-stack-cap filler); a Debuff condition gains "stacks at
+  least" and "seconds left at most", matching Buff's own.
 - **Changed: the options window reopens on the page (and, for Abilities, the ability and tab) you
   last had open**, across a `/reload` and a `/logout` -- not always back on General.
 - **Changed: the Notifications Log shows a coloured line per message again**, newest first, above

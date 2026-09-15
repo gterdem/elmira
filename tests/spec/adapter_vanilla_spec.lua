@@ -53,6 +53,13 @@ local function spellsFixture()
     -- Synthetic debuff ids for the mine-filter case.
     JUDGEMENT_OF_LIGHT_DEBUFF    = { id = 900301 },
     OTHER_TARGET_DEBUFF          = { id = 900302 },
+    -- MG1-D5(c): Balefire Bolt's real id, flagged the way Elmira/Classes/Mage.lua ships it — the
+    -- dossier could not tell from a fetched page whether the client files this self-aura HELPFUL or
+    -- HARMFUL, so `S:buff()` must fall back to the HARMFUL list for exactly this flag.
+    BALEFIRE_BOLT_EITHER         = { id = 428878, selfAura = "either" },
+    -- Unflagged control with the SAME id pattern, to prove the fallback is opt-in per spell record,
+    -- not a blanket second scan of every buff lookup.
+    BALEFIRE_BOLT_PLAIN          = { id = 428879 },
   }
 end
 
@@ -1602,6 +1609,44 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
     it("returns nil for a key the data pack does not define, rather than erroring", function()
       local state = Vanilla.newState({}, {}, {})
       assert.is_nil(state:buff("NOT_A_REAL_KEY"))
+    end)
+
+    -- MG1-D5(c): `selfAura = "either"` falls back to the player's HARMFUL list when HELPFUL misses.
+    describe("selfAura = \"either\" (Balefire Bolt's self-aura, docs/02)", function()
+      it("still prefers HELPFUL when the aura shows up there", function()
+        mock.auras.player = {}
+        mock.auras.player[1] = { name = "Balefire Bolt", spellID = 428878, count = 2, expires = 130 }
+        local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+        local stacks = state:buff("BALEFIRE_BOLT_EITHER")
+        assert.equal(2, stacks)
+      end)
+
+      it("falls back to HARMFUL when HELPFUL has nothing for this id", function()
+        mock.auras.player = {}
+        mock.auraFilters.player.HARMFUL = {
+          { name = "Balefire Bolt", spellID = 428878, count = 3, expires = 130 },
+        }
+        local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+        local stacks, remaining = state:buff("BALEFIRE_BOLT_EITHER")
+        assert.equal(3, stacks)
+        assert.is_true(remaining > 0)
+      end)
+
+      it("reports nil when the aura is in neither list", function()
+        mock.auras.player = {}
+        local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+        assert.is_nil(state:buff("BALEFIRE_BOLT_EITHER"))
+      end)
+
+      it("never falls back for a spell that does not carry the flag", function()
+        mock.auras.player = {}
+        mock.auraFilters.player.HARMFUL = {
+          { name = "Balefire Bolt", spellID = 428879, count = 5, expires = 130 },
+        }
+        local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
+        assert.is_nil(state:buff("BALEFIRE_BOLT_PLAIN"),
+          "an unflagged spell must never be found through the HARMFUL fallback")
+      end)
     end)
   end)
 

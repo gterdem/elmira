@@ -28,6 +28,12 @@ local function defaults()
     spellNames = {},
     powerCosts = {},         -- [spellID] = amount (mana)
     auras = { player = {}, target = {} },
+    -- MG1-D5(c): an explicit override for a (unit, filter) pair, so a spec can make the SAME unit
+    -- answer differently for HELPFUL vs HARMFUL — the real client does, `auras[unit]` above does
+    -- not (it answers every filter identically, which is right for every spec written before this
+    -- and wrong for the one selfAura="either" test that needs the two lists to disagree). Absent
+    -- for a (unit, filter) pair, `UnitAura` falls back to `auras[unit]` exactly as before.
+    auraFilters = { player = {}, target = {} },
     power = { [0] = { 1000, 1000 } },
     comboPoints = 0,   -- GetComboPoints(unit, "target"); R2 D59, classic-only, not part of `power`
     inventory = {},          -- [slot] = itemID
@@ -146,7 +152,8 @@ function GetSpellPowerCost(id)
 end
 
 function UnitAura(unit, i, filter)
-  local list = M.auras[unit] or {}
+  local overrides = M.auraFilters[unit]
+  local list = (overrides and overrides[filter]) or M.auras[unit] or {}
   local a = list[i]
   if not a then return nil end
   return a.name, nil, a.count or 1, nil, a.duration or 10, (a.expires or M.time + 10),

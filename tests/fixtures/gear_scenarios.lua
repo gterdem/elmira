@@ -1221,4 +1221,624 @@ return {
       expect = { "item:13", "item:14" },
       expectLabels = { "Trinket", "Trinket" } },
   },
+
+  -- =================================================================================================
+  -- MAGE_FIRE (MG1-D7). No cooldown numbers are shipped for any Mage spell (docs/research found no
+  -- fetched page that quoted one), so Simulation's fallback (docs/02 "Simulation semantics": no
+  -- state:baseCooldown, no Data `cooldown` -> one time step) governs every virtual slot: a spell with
+  -- no rival, cast once, is back off cooldown by the very next slot and simply repeats. That is an
+  -- honest consequence of the sourcing discipline (hard rule 2), not a bug — most scenarios below
+  -- isolate ONE entry with `usable = false` on everything that could otherwise outrank it (the same
+  -- technique paladin_exodin's own fixture uses for `trinkets_only` above) so the resulting 1-or-3-slot
+  -- queue is unambiguous to hand-derive, rather than trying to predict a full, un-isolated cascade.
+  MAGE_FIRE = {
+    -- Natural, un-isolated cascade with the build's own 8 runes engraved and nothing else: entry 1
+    -- (Hot Streak) fails (no buff), entry 2 (Overheat) is engraved and off-GCD so it wins slot 1
+    -- without spending simulated time; slot 2 is still t=0, where entry 2 is now on its own 1-step
+    -- virtual cooldown, so entry 3 (Scorch, absent debuff) wins; by slot 3 (t=1.5s) entry 2's virtual
+    -- cooldown has already elapsed (1 step = 1.5s, the scenario's own gcd), so it is eligible again
+    -- and outranks Scorch's now-also-reset cooldown by LIST POSITION alone.
+    { name = "runes_engraved_baseline",
+      runes = { RUNE_HOT_STREAK = true, RUNE_OVERHEAT = true, RUNE_ENLIGHTENMENT = true, RUNE_BALEFIRE_BOLT = true,
+                RUNE_LIVING_BOMB = true, RUNE_FROSTFIRE_BOLT = true, RUNE_ICY_VEINS = true, RUNE_SPELL_POWER = true },
+      expect = { "FIRE_BLAST", "SCORCH", "FIRE_BLAST" },
+      expectLabels = { "Overheat", "Stack Scorch", "Overheat" } },
+
+    -- Hot Streak is a proc (`proc = true` on HOT_STREAK_BUFF): Simulation suppresses it for every
+    -- virtual slot past t=0, so it can only ever win slot 1 — exactly Paladin's VENGEANCE_BUFF shape.
+    { name = "hot_streak_up_never_held",
+      buffs = { HOT_STREAK_BUFF = { stacks = 1, remaining = 8 } },
+      usable = { FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "PYROBLAST" } },
+
+    -- Overheat NOT engraved: entry 2's rune gate fails, so the un-engraved baseline Fire Blast entry
+    -- (no `when` at all, no `hold`) is what fires — and with nothing else usable and no sourced
+    -- cooldown, it simply repeats every slot (the sourcing-gap behaviour the header above explains).
+    { name = "overheat_not_engraved_uses_baseline_fire_blast",
+      runes = {},
+      usable = { PYROBLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "FIRE_BLAST", "FIRE_BLAST", "FIRE_BLAST" },
+      expectLabels = { false, false, false } },
+
+    -- Overheat engraved with Fire Blast the ONLY usable entry: `hold = true` never advances simulated
+    -- time, so its own virtual cooldown (1 step) never clears and the queue truncates to 1 slot —
+    -- proving the entry is reachable and off-GCD at once.
+    { name = "overheat_engraved_isolated",
+      runes = { RUNE_OVERHEAT = true },
+      usable = { PYROBLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "FIRE_BLAST" },
+      expectLabels = { "Overheat" } },
+
+    -- Scorch at 0 stacks (debuff entirely absent): entry 3 ("Stack Scorch") wins over entry 5's
+    -- "not(min=5)" (also true when absent) purely by list position — expectLabels proves it.
+    { name = "scorch_zero_stacks_applies",
+      usable = { PYROBLAST = false, FIRE_BLAST = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "SCORCH", "SCORCH", "SCORCH" },
+      expectLabels = { "Stack Scorch", "Stack Scorch", "Stack Scorch" } },
+
+    -- 4 stacks, 3s left: entry 4 ("Refresh Scorch", maxRemaining = 4) wins over entry 3 (fails,
+    -- debuff present) and entry 5 (fails, stacks < 5 so `not(min=5)` sees the inner test false... no,
+    -- inner is false so `not` is true — entry 5 is ALSO eligible here, but entry 4 is listed first).
+    { name = "scorch_four_stacks_refreshed",
+      debuffs = { FIRE_VULNERABILITY = { stacks = 4, remaining = 3, mine = true } },
+      usable = { PYROBLAST = false, FIRE_BLAST = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "SCORCH", "SCORCH", "SCORCH" },
+      expectLabels = { "Refresh Scorch", "Refresh Scorch", "Refresh Scorch" } },
+
+    -- 5 stacks, 20s left (nowhere near expiring): all three Scorch entries fail (present, not <=4s
+    -- left, and stacks >= 5 makes entry 5's `not(min=5)` false too) — the queue correctly falls
+    -- through to Living Bomb instead, proving the cap actually stops Scorch rather than merely
+    -- relabelling it.
+    { name = "scorch_five_stacks_skips_to_living_bomb",
+      debuffs = { FIRE_VULNERABILITY = { stacks = 5, remaining = 20, mine = true } },
+      usable = { PYROBLAST = false, FIRE_BLAST = false, COMBUSTION = false, ICY_VEINS = false, COLD_SNAP = false,
+                 BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false, FLAMESTRIKE = false,
+                 FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "LIVING_BOMB", "LIVING_BOMB", "LIVING_BOMB" } },
+
+    -- 3 stacks, 20s left: entry 3 fails (present), entry 4 fails (remaining = 20 > 4), and entry 5
+    -- ("not(min=5)") is the ONLY one of the three that can distinguish this from the 5-stacks/full-
+    -- duration case above — its inner `debuff(...,min=5)` sees 3 < 5 (false), so `not` is true and
+    -- it fires. Deleting entry 5 alone would not change the 5-stacks scenario above at all; this is
+    -- the scenario that actually needs it.
+    { name = "scorch_below_five_stacks_keeps_refreshing",
+      debuffs = { FIRE_VULNERABILITY = { stacks = 3, remaining = 20, mine = true } },
+      usable = { PYROBLAST = false, FIRE_BLAST = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "SCORCH", "SCORCH", "SCORCH" },
+      expectLabels = { "5 stacks", "5 stacks", "5 stacks" } },
+
+    -- 5 stacks but only 2s left: entry 4's plain `maxRemaining = 4` does not check stack count, so
+    -- it fires regardless — refreshing even a maxed stack before it falls off.
+    { name = "scorch_five_stacks_expiring_still_refreshed",
+      debuffs = { FIRE_VULNERABILITY = { stacks = 5, remaining = 2, mine = true } },
+      usable = { PYROBLAST = false, FIRE_BLAST = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "SCORCH", "SCORCH", "SCORCH" },
+      expectLabels = { "Refresh Scorch", "Refresh Scorch", "Refresh Scorch" } },
+
+    -- Living Bomb absent -> maintained; present -> the reapply line is skipped (falls through to a
+    -- filler), proving `no_debuff` actually gates it rather than firing unconditionally.
+    { name = "living_bomb_absent_is_applied",
+      debuffs = {},
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, COMBUSTION = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "LIVING_BOMB", "LIVING_BOMB", "LIVING_BOMB" } },
+    { name = "living_bomb_up_skips_reapply",
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, COMBUSTION = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false },
+      expect = { "FROSTFIRE_BOLT", "FROSTFIRE_BOLT", "FROSTFIRE_BOLT" } },
+
+    -- Both burst cooldowns are `hold = true` with no gate: each wins its own slot once, and since
+    -- neither ever advances simulated time, both are permanently "just cast" (1-step virtual cooldown
+    -- that elapsed can never clear) — the queue truncates to exactly 2 slots.
+    { name = "combustion_then_icy_veins_both_off_gcd",
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COLD_SNAP = false,
+                 BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false, FLAMESTRIKE = false,
+                 FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "COMBUSTION", "ICY_VEINS" } },
+
+    -- Trinkets: an item entry is suppressed for the rest of the queue once suggested (docs/02), so
+    -- both fire once each and the queue truncates to 2 — mirrors paladin_exodin's `trinkets_only`.
+    { name = "trinkets_only",
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false,
+                 BLAST_WAVE = false, FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      items = { [13] = { cooldown = 0 }, [14] = { cooldown = 0 } },
+      expect = { "item:13", "item:14" },
+      expectLabels = { "Trinket", "Trinket" } },
+
+    -- Icy Veins reads 45s remaining on the LIVE state; `cooldown_gt` still sees it well over 30 in
+    -- the virtual overlay. MG1 fix pass item 3: `hold = true` now (matches the other cooldown lines,
+    -- MG1-D4 item 5), so it never advances simulated time -- its own 1-step virtual cooldown never
+    -- clears with nothing else usable, and the queue truncates to 1 slot.
+    { name = "cold_snap_resets_icy_veins",
+      cooldowns = { ICY_VEINS = 45 },
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false, FLAMESTRIKE = false,
+                 FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "COLD_SNAP" } },
+
+    -- Balefire Bolt's `max = 3` self-cap: at or under 3 stacks it fires; at 4 it is blocked and the
+    -- queue falls through to a filler — MG1-D5(a)'s whole reason for existing.
+    { name = "balefire_three_stacks_castable",
+      buffs = { BALEFIRE_BOLT = { stacks = 3, remaining = 20 } },
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "BALEFIRE_BOLT", "BALEFIRE_BOLT", "BALEFIRE_BOLT" } },
+    { name = "balefire_four_stacks_blocked_falls_through",
+      buffs = { BALEFIRE_BOLT = { stacks = 4, remaining = 20 } },
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, LIVING_FLAME = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FIREBALL = false },
+      expect = { "FROSTFIRE_BOLT", "FROSTFIRE_BOLT", "FROSTFIRE_BOLT" } },
+
+    -- AoE promotion, one spell isolated at a time (all three share the identical `enemies >= 3` gate
+    -- and would otherwise always shadow each other by list position).
+    { name = "aoe_living_flame_at_three_enemies",
+      enemies = 3,
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, BALEFIRE_BOLT = false, BLAST_WAVE = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "LIVING_FLAME", "LIVING_FLAME", "LIVING_FLAME" },
+      expectLabels = { "AoE", "AoE", "AoE" } },
+    { name = "aoe_blast_wave_at_three_enemies",
+      enemies = 3,
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false,
+                 FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "BLAST_WAVE", "BLAST_WAVE", "BLAST_WAVE" },
+      expectLabels = { "AoE", "AoE", "AoE" } },
+    { name = "aoe_flamestrike_at_three_enemies",
+      enemies = 3,
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false,
+                 BLAST_WAVE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "FLAMESTRIKE", "FLAMESTRIKE", "FLAMESTRIKE" },
+      expectLabels = { "AoE", "AoE", "AoE" } },
+
+    -- Rule-review finding (MG1 fix pass item 1): the three AoE lines' `{"enemies", min = 3}` gate
+    -- had no scenario proving the FALSE branch — removing the `when` entirely, or loosening it to
+    -- `min = 2`, left the suite green. Unlike the "at three enemies" scenarios above, the AoE spells
+    -- are left USABLE here (only what sits ABOVE them in the list is silenced) so a wrongly-passing
+    -- gate would win the slot instead of the filler below — mirrors Paladin's own
+    -- `cleave_two_no_aoe_avengers_shield` (fixture ~709-716).
+    { name = "aoe_enemies_one_no_promotion",
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, BALEFIRE_BOLT = false, FIREBALL = false },
+      expect = { "FROSTFIRE_BOLT", "FROSTFIRE_BOLT", "FROSTFIRE_BOLT" } },
+    { name = "aoe_enemies_two_no_promotion",
+      enemies = 2,
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, BALEFIRE_BOLT = false, FIREBALL = false },
+      expect = { "FROSTFIRE_BOLT", "FROSTFIRE_BOLT", "FROSTFIRE_BOLT" } },
+
+    -- Baseline fillers, isolated.
+    { name = "frostfire_bolt_filler_isolated",
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false,
+                 BLAST_WAVE = false, FLAMESTRIKE = false, FIREBALL = false },
+      expect = { "FROSTFIRE_BOLT", "FROSTFIRE_BOLT", "FROSTFIRE_BOLT" } },
+    { name = "fireball_filler_isolated",
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false,
+                 BLAST_WAVE = false, FLAMESTRIKE = false, FROSTFIRE_BOLT = false },
+      expect = { "FIREBALL", "FIREBALL", "FIREBALL" } },
+
+    -- Fireleaf Regalia 6pc (MG1-D3): all three thresholds are pure passive numeric interactions no
+    -- build entry gates on (Wowhead describes a cooldown/tick-rate change, never a decision point),
+    -- so this pins `state:bonus()` resolution directly rather than through a queue difference — the
+    -- same `bonusExpected` mechanism gear_matrix_spec.lua already runs for every scenario that sets it.
+    { name = "fireleaf_6pc_bonuses_resolve",
+      sets = { MAGE_FIRELEAF_REGALIA = 6 },
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false,
+                 BLAST_WAVE = false, FLAMESTRIKE = false, FIREBALL = false },
+      expect = { "FROSTFIRE_BOLT", "FROSTFIRE_BOLT", "FROSTFIRE_BOLT" },
+      bonusExpected = { LIVING_BOMB_FAST_TICK = true, PYROBLAST_CLEARS_BALEFIRE = true, FIRE_BLAST_REFRESHES_LB = true } },
+    { name = "fireleaf_below_threshold_bonuses_absent",
+      sets = { MAGE_FIRELEAF_REGALIA = 1 },
+      usable = { PYROBLAST = false, FIRE_BLAST = false, SCORCH = false, LIVING_BOMB = false, COMBUSTION = false,
+                 ICY_VEINS = false, COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false,
+                 BLAST_WAVE = false, FLAMESTRIKE = false, FIREBALL = false },
+      expect = { "FROSTFIRE_BOLT", "FROSTFIRE_BOLT", "FROSTFIRE_BOLT" },
+      bonusExpected = { LIVING_BOMB_FAST_TICK = false, PYROBLAST_CLEARS_BALEFIRE = false, FIRE_BLAST_REFRESHES_LB = false } },
+  },
+
+  -- =================================================================================================
+  -- MAGE_FROST_SPELLFROST (MG1-D7)
+  MAGE_FROST_SPELLFROST = {
+    -- Natural cascade with the 7 non-chest runes engraved: Molten Armor fails (default `inCombat`),
+    -- Deep Freeze/Ice Lance fail (no Fingers of Frost), Frozen Orb has no gate and no sourced
+    -- cooldown, so it wins every slot by list position over Living Bomb below it.
+    { name = "runes_engraved_baseline",
+      runes = { RUNE_DEEP_FREEZE = true, RUNE_FROZEN_ORB = true, RUNE_MOLTEN_ARMOR = true, RUNE_ICE_LANCE = true,
+                RUNE_SPELLFROST_BOLT = true, RUNE_ICY_VEINS = true, RUNE_SPELL_POWER = true },
+      expect = { "FROZEN_ORB", "FROZEN_ORB", "FROZEN_ORB" } },
+
+    -- Molten Armor: out of combat and not already up -> applied once; casting it sets its own
+    -- self-buff for the virtual slots after, so `no_buff` correctly stops re-suggesting it.
+    { name = "molten_armor_precombat",
+      inCombat = false,
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, LIVING_BOMB = false, ICY_VEINS = false,
+                 COLD_SNAP = false, LIVING_FLAME = false, BALEFIRE_BOLT = false, SPELLFROST_BOLT = false,
+                 FROSTBOLT = false },
+      expect = { "MOLTEN_ARMOR" } },
+
+    -- Fingers of Frost up: Deep Freeze (listed first) wins the shatter combo's guaranteed-stun slot;
+    -- FINGERS_OF_FROST_BUFF is `proc = true`, so the proc is suppressed for every slot past t=0 and
+    -- the queue truncates to 1 with nothing else usable.
+    { name = "fof_up_deep_freeze_wins",
+      buffs = { FINGERS_OF_FROST_BUFF = { stacks = 1, remaining = 15 } },
+      usable = { FROZEN_ORB = false, LIVING_BOMB = false, ICY_VEINS = false, COLD_SNAP = false, LIVING_FLAME = false,
+                 BALEFIRE_BOLT = false, SPELLFROST_BOLT = false, FROSTBOLT = false },
+      expect = { "DEEP_FREEZE" },
+      expectLabels = { "FoF" } },
+    -- Same proc, with Deep Freeze silenced so Ice Lance (the actual shatter nuke) surfaces instead.
+    { name = "fof_up_ice_lance_when_deep_freeze_silenced",
+      buffs = { FINGERS_OF_FROST_BUFF = { stacks = 1, remaining = 15 } },
+      usable = { DEEP_FREEZE = false, FROZEN_ORB = false, LIVING_BOMB = false, ICY_VEINS = false, COLD_SNAP = false,
+                 LIVING_FLAME = false, BALEFIRE_BOLT = false, SPELLFROST_BOLT = false, FROSTBOLT = false },
+      expect = { "ICE_LANCE" },
+      expectLabels = { "Shatter" } },
+
+    -- Living Bomb maintenance, isolated.
+    { name = "living_bomb_absent_is_applied",
+      debuffs = {},
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, ICY_VEINS = false, COLD_SNAP = false,
+                 LIVING_FLAME = false, BALEFIRE_BOLT = false, SPELLFROST_BOLT = false, FROSTBOLT = false },
+      expect = { "LIVING_BOMB", "LIVING_BOMB", "LIVING_BOMB" } },
+
+    -- Icy Veins alone (`hold = true`, no gate): wins slot 1, then permanently "just cast" since
+    -- nothing else is usable and simulated time never advances for it.
+    { name = "icy_veins_isolated",
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, LIVING_BOMB = false, COLD_SNAP = false,
+                 LIVING_FLAME = false, BALEFIRE_BOLT = false, SPELLFROST_BOLT = false, FROSTBOLT = false },
+      expect = { "ICY_VEINS" } },
+
+    { name = "trinkets_only",
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, LIVING_BOMB = false, ICY_VEINS = false,
+                 COLD_SNAP = false, LIVING_FLAME = false, BALEFIRE_BOLT = false, SPELLFROST_BOLT = false,
+                 FROSTBOLT = false },
+      items = { [13] = { cooldown = 0 }, [14] = { cooldown = 0 } },
+      expect = { "item:13", "item:14" },
+      expectLabels = { "Trinket", "Trinket" } },
+
+    -- MG1 fix pass item 3: `hold = true` now (matches the other cooldown lines, MG1-D4 item 5), so
+    -- it never advances simulated time — its own 1-step virtual cooldown never clears with nothing
+    -- else usable, and the queue truncates to 1 slot instead of repeating 3 times.
+    { name = "cold_snap_resets_icy_veins",
+      cooldowns = { ICY_VEINS = 45 },
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, LIVING_BOMB = false,
+                 LIVING_FLAME = false, BALEFIRE_BOLT = false, SPELLFROST_BOLT = false, FROSTBOLT = false },
+      expect = { "COLD_SNAP" } },
+
+    { name = "aoe_living_flame_at_three_enemies",
+      enemies = 3,
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, LIVING_BOMB = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, SPELLFROST_BOLT = false, FROSTBOLT = false },
+      expect = { "LIVING_FLAME", "LIVING_FLAME", "LIVING_FLAME" },
+      expectLabels = { "AoE", "AoE", "AoE" } },
+
+    -- Rule-review finding (MG1 fix pass item 1), Frost's own copy of the gate: left USABLE (only
+    -- what outranks it in the list is silenced), enemies unset/1 and enemies = 2 must both fall
+    -- through to the Frostbolt filler rather than promoting Living Flame.
+    { name = "aoe_enemies_one_no_promotion",
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, LIVING_BOMB = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, SPELLFROST_BOLT = false },
+      expect = { "FROSTBOLT", "FROSTBOLT", "FROSTBOLT" } },
+    { name = "aoe_enemies_two_no_promotion",
+      enemies = 2,
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, LIVING_BOMB = false, ICY_VEINS = false,
+                 COLD_SNAP = false, BALEFIRE_BOLT = false, SPELLFROST_BOLT = false },
+      expect = { "FROSTBOLT", "FROSTBOLT", "FROSTBOLT" } },
+
+    -- Balefire Bolt's self-cap, identical semantics to the Fire build's own entry line (a SEPARATE
+    -- source line in THIS file, so it needs its own scenario for the mutation gate).
+    { name = "balefire_three_stacks_castable",
+      buffs = { BALEFIRE_BOLT = { stacks = 3, remaining = 20 } },
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, LIVING_BOMB = false, ICY_VEINS = false,
+                 COLD_SNAP = false, LIVING_FLAME = false, SPELLFROST_BOLT = false, FROSTBOLT = false },
+      expect = { "BALEFIRE_BOLT", "BALEFIRE_BOLT", "BALEFIRE_BOLT" } },
+    { name = "balefire_four_stacks_blocked_falls_through",
+      buffs = { BALEFIRE_BOLT = { stacks = 4, remaining = 20 } },
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, LIVING_BOMB = false, ICY_VEINS = false,
+                 COLD_SNAP = false, LIVING_FLAME = false, FROSTBOLT = false },
+      expect = { "SPELLFROST_BOLT", "SPELLFROST_BOLT", "SPELLFROST_BOLT" } },
+
+    { name = "frostbolt_filler_isolated",
+      usable = { DEEP_FREEZE = false, ICE_LANCE = false, FROZEN_ORB = false, LIVING_BOMB = false, ICY_VEINS = false,
+                 COLD_SNAP = false, LIVING_FLAME = false, BALEFIRE_BOLT = false, SPELLFROST_BOLT = false },
+      expect = { "FROSTBOLT", "FROSTBOLT", "FROSTBOLT" } },
+  },
+
+  -- =================================================================================================
+  -- MAGE_FROST_LEVELING (MG1-D7)
+  MAGE_FROST_LEVELING = {
+    { name = "runes_engraved_baseline",
+      runes = { RUNE_LIVING_BOMB = true, RUNE_LIVING_FLAME = true, RUNE_FROSTFIRE_BOLT = true,
+                RUNE_DEEP_FREEZE = true, RUNE_FROZEN_ORB = true, RUNE_BRAIN_FREEZE = true },
+      debuffs = {},
+      expect = { "LIVING_BOMB", "LIVING_BOMB", "LIVING_BOMB" } },
+
+    { name = "living_bomb_up_skips_reapply",
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FIRE_BLAST = false, BLIZZARD = false, ARCANE_EXPLOSION = false, CONE_OF_COLD = false,
+                 FROSTFIRE_BOLT = false, FROSTBOLT = false },
+      expect = { "FROZEN_ORB", "FROZEN_ORB", "FROZEN_ORB" } },
+
+    { name = "frozen_orb_isolated",
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FIRE_BLAST = false, BLIZZARD = false, ARCANE_EXPLOSION = false, CONE_OF_COLD = false,
+                 FROSTFIRE_BOLT = false, FROSTBOLT = false, FIREBALL = false },
+      expect = { "FROZEN_ORB", "FROZEN_ORB", "FROZEN_ORB" } },
+
+    { name = "fire_blast_isolated",
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FROZEN_ORB = false, BLIZZARD = false, ARCANE_EXPLOSION = false, CONE_OF_COLD = false,
+                 FROSTFIRE_BOLT = false, FROSTBOLT = false, FIREBALL = false },
+      expect = { "FIRE_BLAST", "FIRE_BLAST", "FIRE_BLAST" } },
+
+    { name = "aoe_blizzard_at_three_enemies",
+      enemies = 3,
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FROZEN_ORB = false, FIRE_BLAST = false, ARCANE_EXPLOSION = false, CONE_OF_COLD = false,
+                 FROSTFIRE_BOLT = false, FROSTBOLT = false, FIREBALL = false },
+      expect = { "BLIZZARD", "BLIZZARD", "BLIZZARD" },
+      expectLabels = { "AoE", "AoE", "AoE" } },
+    { name = "aoe_arcane_explosion_at_three_enemies",
+      enemies = 3,
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FROZEN_ORB = false, FIRE_BLAST = false, BLIZZARD = false, CONE_OF_COLD = false,
+                 FROSTFIRE_BOLT = false, FROSTBOLT = false, FIREBALL = false },
+      expect = { "ARCANE_EXPLOSION", "ARCANE_EXPLOSION", "ARCANE_EXPLOSION" },
+      expectLabels = { "AoE", "AoE", "AoE" } },
+    { name = "aoe_cone_of_cold_at_three_enemies",
+      enemies = 3,
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FROZEN_ORB = false, FIRE_BLAST = false, BLIZZARD = false, ARCANE_EXPLOSION = false,
+                 FROSTFIRE_BOLT = false, FROSTBOLT = false, FIREBALL = false },
+      expect = { "CONE_OF_COLD", "CONE_OF_COLD", "CONE_OF_COLD" },
+      expectLabels = { "AoE", "AoE", "AoE" } },
+
+    -- Rule-review finding (MG1 fix pass item 1), Leveling's three AoE lines: left USABLE, enemies
+    -- unset/1 and enemies = 2 must both fall through to the Frostfire Bolt filler rather than
+    -- promoting any of Blizzard/Arcane Explosion/Cone of Cold.
+    { name = "aoe_enemies_one_no_promotion",
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FROZEN_ORB = false, FIRE_BLAST = false },
+      expect = { "FROSTFIRE_BOLT", "FROSTFIRE_BOLT", "FROSTFIRE_BOLT" } },
+    { name = "aoe_enemies_two_no_promotion",
+      enemies = 2,
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FROZEN_ORB = false, FIRE_BLAST = false },
+      expect = { "FROSTFIRE_BOLT", "FROSTFIRE_BOLT", "FROSTFIRE_BOLT" } },
+
+    { name = "frostfire_bolt_filler_isolated",
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FROZEN_ORB = false, FIRE_BLAST = false, BLIZZARD = false, ARCANE_EXPLOSION = false,
+                 CONE_OF_COLD = false, FROSTBOLT = false, FIREBALL = false },
+      expect = { "FROSTFIRE_BOLT", "FROSTFIRE_BOLT", "FROSTFIRE_BOLT" } },
+    { name = "frostbolt_filler_isolated",
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FROZEN_ORB = false, FIRE_BLAST = false, BLIZZARD = false, ARCANE_EXPLOSION = false,
+                 CONE_OF_COLD = false, FROSTFIRE_BOLT = false, FIREBALL = false },
+      expect = { "FROSTBOLT", "FROSTBOLT", "FROSTBOLT" } },
+    { name = "fireball_filler_isolated",
+      debuffs = { LIVING_BOMB = { stacks = 1, remaining = 10, mine = true } },
+      usable = { FROZEN_ORB = false, FIRE_BLAST = false, BLIZZARD = false, ARCANE_EXPLOSION = false,
+                 CONE_OF_COLD = false, FROSTFIRE_BOLT = false, FROSTBOLT = false },
+      expect = { "FIREBALL", "FIREBALL", "FIREBALL" } },
+  },
+
+  -- =================================================================================================
+  -- MAGE_ARCANE_HEALER (MG2-D5). Every scenario below silences whatever outranks the entry under
+  -- test by SPELL (never by `when`) so the fixture proves the ENGINE, not the fixture's own gate --
+  -- the same discipline MAGE_FIRE's scenarios use throughout this file. `ARCANE_BLAST` is produced by
+  -- two entries (`Build stacks` and the unlabelled baseline), so any scenario whose `expect` touches
+  -- it needs `expectLabels` (gear_matrix_spec.lua's ambiguity guard).
+  MAGE_ARCANE_HEALER = {
+    -- Reminder 1 (MASS_REGENERATION): held while off cooldown, isolated from everything else.
+    { name = "mass_regeneration_reminder_appears_off_cooldown",
+      usable = { REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false, EVOCATION = false,
+                 ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false,
+                 ARCANE_BLAST = false },
+      expect = { "MASS_REGENERATION" },
+      expectLabels = { "Beacons (reminder)" } },
+    -- On cooldown: gone. Falls through everything else to the baseline stack-builder, the honest
+    -- floor once every other entry is silenced too.
+    { name = "mass_regeneration_reminder_gone_on_cooldown",
+      cooldowns = { MASS_REGENERATION = 5 },
+      usable = { REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false, EVOCATION = false,
+                 ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { "Build stacks", "Build stacks", "Build stacks" } },
+
+    -- Reminder 2 (REWIND_TIME): same shape, a separate source line.
+    { name = "rewind_time_reminder_appears_off_cooldown",
+      usable = { MASS_REGENERATION = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false, EVOCATION = false,
+                 ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false,
+                 ARCANE_BLAST = false },
+      expect = { "REWIND_TIME" },
+      expectLabels = { "Rewind (reminder)" } },
+    { name = "rewind_time_reminder_gone_on_cooldown",
+      cooldowns = { REWIND_TIME = 10 },
+      usable = { MASS_REGENERATION = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false, EVOCATION = false,
+                 ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { "Build stacks", "Build stacks", "Build stacks" } },
+
+    -- Self-buff cooldowns, isolated.
+    { name = "arcane_power_isolated",
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, PRESENCE_OF_MIND = false, EVOCATION = false,
+                 ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false,
+                 ARCANE_BLAST = false },
+      expect = { "ARCANE_POWER" } },
+    { name = "presence_of_mind_isolated",
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, EVOCATION = false,
+                 ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false,
+                 ARCANE_BLAST = false },
+      expect = { "PRESENCE_OF_MIND" } },
+
+    -- Trinkets: an item entry is suppressed for the rest of the queue once suggested (docs/02).
+    { name = "trinkets_only",
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false,
+                 BALEFIRE_BOLT = false, ARCANE_BLAST = false },
+      items = { [13] = { cooldown = 0 }, [14] = { cooldown = 0 } },
+      expect = { "item:13", "item:14" },
+      expectLabels = { "Trinket", "Trinket" } },
+
+    -- Evocation's mana gate: `maxPct` is inclusive (docs/02 `inRange`), so exactly 20% still passes;
+    -- 21% must fall through.
+    -- Evocation has no sourced `cooldown` field (no fetched page quoted one), so Simulation's virtual
+    -- state falls back to a one-time-step estimate and the mana condition stays true throughout (the
+    -- virtual overlay does not model mana regen/consumption for it) — it repeats every slot, the same
+    -- sourcing-gap shape MAGE_FIRE's own "overheat_not_engraved_uses_baseline_fire_blast" documents.
+    { name = "evocation_ready_at_twenty_percent_mana",
+      power = { MANA = { 200, 1000 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false,
+                 ARCANE_BLAST = false },
+      expect = { "EVOCATION", "EVOCATION", "EVOCATION" },
+      expectLabels = { "Mana", "Mana", "Mana" } },
+    { name = "evocation_not_ready_at_twenty_one_percent_mana",
+      power = { MANA = { 210, 1000 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { "Build stacks", "Build stacks", "Build stacks" } },
+
+    -- Missile Barrage proc: up wins its own slot; MISSILE_BARRAGE_BUFF is `proc = true` so the queue
+    -- truncates to 1 with nothing else usable, matching HOT_STREAK_BUFF/FINGERS_OF_FROST_BUFF's shape
+    -- elsewhere in this file. Absent falls through to the baseline stack-builder.
+    { name = "missile_barrage_proc_up",
+      buffs = { MISSILE_BARRAGE_BUFF = { stacks = 1, remaining = 15 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false,
+                 ARCANE_BLAST = false },
+      expect = { "ARCANE_MISSILES" },
+      expectLabels = { "Missile Barrage" } },
+    { name = "missile_barrage_absent_falls_through",
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { "Build stacks", "Build stacks", "Build stacks" } },
+
+    -- Arcane Blast stack thresholds: 0/absent and 1 both read as "Build stacks" (`max = 1` passes on
+    -- absence too, MG1-D5a); 2 stacks promotes Arcane Barrage instead, and Build stacks is no longer
+    -- eligible at all -- the queue falls to the unlabelled baseline, proving the cap actually stops
+    -- it rather than merely relabelling it.
+    { name = "arcane_blast_one_stack_still_builds",
+      buffs = { ARCANE_BLAST_BUFF = { stacks = 1, remaining = 6 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false,
+                 BALEFIRE_BOLT = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { "Build stacks", "Build stacks", "Build stacks" } },
+    -- Rule-review finding: the scenario above silences ARCANE_BARRAGE outright, so a `min = 2` ->
+    -- `min = 1` mutation on ITS OWN line is never exercised through a queue. Leaves Arcane Barrage
+    -- LIVE at exactly 1 stack instead — unmutated code must still fall through to Build stacks.
+    { name = "arcane_blast_one_stack_barrage_live_not_promoted",
+      buffs = { ARCANE_BLAST_BUFF = { stacks = 1, remaining = 6 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 BALEFIRE_BOLT = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { "Build stacks", "Build stacks", "Build stacks" } },
+    -- (2 stacks at 1 enemy promoting Arcane Barrage, not Build stacks, is proven by the AoE block's
+    -- own "one_enemy_two_stacks_barrage_wins_not_aoe" scenario below -- not duplicated here.)
+    { name = "arcane_blast_two_stacks_build_stacks_not_eligible",
+      buffs = { ARCANE_BLAST_BUFF = { stacks = 2, remaining = 6 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false,
+                 BALEFIRE_BOLT = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { false, false, false } },
+
+    -- AoE promotion: 2 enemies + 2 Arcane Blast stacks promotes Arcane Explosion ahead of Arcane
+    -- Barrage (both are eligible; Arcane Explosion is listed first). At 1 enemy (the default) the
+    -- same stack count leaves Arcane Barrage the winner -- proves the `enemies` gate, not just the
+    -- stack one, decides between them.
+    -- Neither Arcane Explosion nor Arcane Barrage carries a sourced `cooldown`, and the virtual state
+    -- does not model the Arcane Blast stack count changing, so both repeat every slot once they win —
+    -- same sourcing-gap shape as Evocation above.
+    { name = "aoe_two_enemies_two_stacks_promotes_arcane_explosion",
+      enemies = 2,
+      buffs = { ARCANE_BLAST_BUFF = { stacks = 2, remaining = 6 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_MISSILES = false },
+      expect = { "ARCANE_EXPLOSION", "ARCANE_EXPLOSION", "ARCANE_EXPLOSION" },
+      expectLabels = { "AoE", "AoE", "AoE" } },
+    { name = "one_enemy_two_stacks_barrage_wins_not_aoe",
+      buffs = { ARCANE_BLAST_BUFF = { stacks = 2, remaining = 6 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_MISSILES = false },
+      expect = { "ARCANE_BARRAGE", "ARCANE_BARRAGE", "ARCANE_BARRAGE" },
+      expectLabels = { "2 stacks", "2 stacks", "2 stacks" } },
+    -- Rule-review finding: the AoE line was negative-tested only at 0 stacks elsewhere in this file, a
+    -- boundary a `min = 2` -> `min = 1` mutation on its own line still correctly rejects (0 < 1 too).
+    -- 2 enemies + EXACTLY 1 stack is the case that actually kills it — unmutated code must still fall
+    -- through to Build stacks, not Arcane Explosion.
+    { name = "two_enemies_one_stack_arcane_explosion_not_promoted",
+      enemies = 2,
+      buffs = { ARCANE_BLAST_BUFF = { stacks = 1, remaining = 6 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 BALEFIRE_BOLT = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { "Build stacks", "Build stacks", "Build stacks" } },
+
+    -- Balefire Bolt's `max = 3` self-cap, identical semantics to the Fire/Frost builds' own entries
+    -- (a separate source line here, so it needs its own scenario for the mutation gate).
+    { name = "balefire_three_stacks_castable",
+      buffs = { BALEFIRE_BOLT = { stacks = 3, remaining = 20 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false },
+      expect = { "BALEFIRE_BOLT", "BALEFIRE_BOLT", "BALEFIRE_BOLT" } },
+    { name = "balefire_four_stacks_blocked_falls_through",
+      buffs = { BALEFIRE_BOLT = { stacks = 4, remaining = 20 } },
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { "Build stacks", "Build stacks", "Build stacks" } },
+
+    -- Baseline filler, isolated (no Arcane Blast stack, everything else silenced).
+    { name = "arcane_blast_baseline_filler_isolated",
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_MISSILES = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false,
+                 BALEFIRE_BOLT = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { "Build stacks", "Build stacks", "Build stacks" } },
+
+    -- MG2-D5's own floor: "with no runes at all the queue is ARCANE_BLAST only and nothing errors."
+    -- Read literally against the shipped data this cannot mean an EMPTY rune set -- Arcane Blast
+    -- itself is a hands-slot SoD rune ability (mage-healer-ids-verified-2026-09-14.md), so a
+    -- genuinely bare character would not know it either and the queue would be empty, not
+    -- ARCANE_BLAST-only (flagged during implementation). This scenario proves the honest floor
+    -- the sentence actually describes: every OTHER build-specific ability made unpickable (`usable =
+    -- false`, the same fixture mechanism this whole file uses to stand in for "unknown" -- an
+    -- un-engraved rune's ability fails the engine's own `state:usable` check on the real adapter, not
+    -- a separate `state:known` one; see Core/Engine.lua's `eligible`), Arcane Blast alone still
+    -- produces a safe, non-erroring, single-spell queue -- never an engine error, never an empty pick.
+    { name = "minimum_kit_falls_back_to_arcane_blast_only",
+      usable = { MASS_REGENERATION = false, REWIND_TIME = false, ARCANE_POWER = false, PRESENCE_OF_MIND = false,
+                 EVOCATION = false, ARCANE_EXPLOSION = false, ARCANE_BARRAGE = false, BALEFIRE_BOLT = false },
+      expect = { "ARCANE_BLAST", "ARCANE_BLAST", "ARCANE_BLAST" },
+      expectLabels = { "Build stacks", "Build stacks", "Build stacks" } },
+  },
 }

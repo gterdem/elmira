@@ -104,6 +104,7 @@ Options\Options.lua
 # Core file that defines ns.RegisterBuiltinPack, and before the entry point that calls the thunk.
 # (Naming those two files here would break toc_spec, which locates entries by their first mention.)
 Classes\Paladin.lua
+Classes\Mage.lua
 
 # Entry point last
 Core\Init.lua
