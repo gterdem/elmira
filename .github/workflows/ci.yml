@@ -1,5 +1,7 @@
 name: ci
 on: [push, pull_request]
+env:
+  LUA: lua   # gh-actions-lua installs the 5.1 interpreter as plain `lua`; the Makefile and tools/ default to lua5.1
 jobs:
   test:
     runs-on: ubuntu-latest
