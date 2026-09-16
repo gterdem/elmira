@@ -1,7 +1,7 @@
 std = "lua51"
 max_line_length = 140
 allow_defined_top = false
-exclude_files = { "Elmira/Libs", ".release", "collected" }
+exclude_files = { "Elmira/Libs", ".release", "collected", ".luarocks", ".lua" } -- the last two: CI installs Lua and rocks inside the checkout
 ignore = {
   "211/ADDON", -- the mandated `local ADDON, ns = ...` leaves ADDON unused in most files
   "212/self",  -- Ace3 callback methods (OnEnable, OnProfileChanged, ...) often don't need self

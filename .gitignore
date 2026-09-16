@@ -18,3 +18,5 @@ README-WORKSPACE.md
 
 # WSL/Windows download-provenance stubs, created beside any file copied in from Windows.
 *:Zone.Identifier
+.luarocks/
+.lua/
