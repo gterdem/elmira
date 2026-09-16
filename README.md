@@ -27,12 +27,14 @@ Protection; seal twisting experimental) plus a Mage build to prove the engine is
 - Rotation modes (Single / Cleave / AoE), consumables, time-to-die awareness, latency lead
 - Fight tracker with history; suggestions module and WoWSims integration on the roadmap
 
-## Modules
-Elmira ships as a family — install the package and only the relevant parts load:
-`Elmira` — one folder, containing everything including all class data and the ElvUI/Bartender4 and ItemRack integrations.
+## What you get
+One addon folder, `Elmira`, containing everything: the engine, all class data and the ElvUI, Bartender4 and ItemRack integrations.
 
 ## Install
-Via the CurseForge app (recommended) or download the release zip and extract into `Interface/AddOns`.
+1. Download the latest `Elmira-vX.Y.Z-classic.zip` from the [Releases](../../releases) page. The zip already contains every library it needs.
+2. Extract it into your `World of Warcraft/_classic_era_/Interface/AddOns/` folder so that you end up with `Interface/AddOns/Elmira/`.
+3. Start the game (or `/reload`), tick Elmira in the AddOns list if it is not already, and the setup wizard opens on your first login.
+
 Type `/elm` in game for help, `/elm setup` to run the wizard again.
 
 ## Development

@@ -1,5 +1,7 @@
 # Changelog
 ## Unreleased
+
+## v0.1.0 (2026-09-16)
 - **Fixed: Choosing "stacks at least/at most" or a seconds test in a condition no longer snaps back
   to "is up" before the amount is typed.**
 - **Changed: the condition Value dropdown and the line's Ability select show each spell's icon and

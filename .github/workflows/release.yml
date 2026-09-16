@@ -2,6 +2,8 @@ name: release
 on:
   push:
     tags: ["v*"]
+permissions:
+  contents: write   # the packager creates the GitHub release and attaches the zip
 jobs:
   package:
     runs-on: ubuntu-latest
