@@ -1,5 +1,10 @@
 package-as: Elmira
 enable-nolib-creation: no
+# Release notes come from this file, not from the git log (which the packager would otherwise dump
+# in full for a release with no predecessor tag).
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
 # One shipped addon folder (ADR-0014). Bar providers and the ItemRack integration live inside it;
 # third-party packs are still separate addons registering through Elmira.API.
 move-folders:
