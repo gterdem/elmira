@@ -23,7 +23,12 @@ jobs:
       # present. Without this, `make test` fails on a fresh checkout while passing on every developer
       # machine that has run `make libs`.
       - name: Fetch embedded libraries (init_spec runs against the real Ace3)
-        run: make libs
+        # The packager refuses to run on a branch push whose commit also carries a tag ("Found
+        # future tag"), which is exactly what the main-branch run of every release commit is. Only
+        # the libraries are wanted here, so drop the local tag first; the tag-ref run is unaffected.
+        run: |
+          git tag -d $(git tag --points-at HEAD) 2>/dev/null || true
+          make libs
 
       - name: Shellcheck the quality gates
         run: shellcheck tools/*.sh
