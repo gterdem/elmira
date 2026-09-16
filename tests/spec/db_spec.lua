@@ -51,6 +51,8 @@ describe("Core.DB", function()
     -- AT6-D4 removed `textures.anchor` with the indicator row it placed: every texture now sits at
     -- the centre of the screen plus its own offset, stored in its own ability settings row.
     assert.is_nil(DB.defaults.char.textures)
+    -- M5a-i-D2: the manual rotation-mode override defaults to Auto, per character.
+    assert.equal("Auto", DB.defaults.char.rotationMode)
   end)
 
   -- AB1-D3: what a glow LOOKS like is per ability and per character now (Core/AbilitySettings), so

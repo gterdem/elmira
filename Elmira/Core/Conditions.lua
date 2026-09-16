@@ -111,6 +111,10 @@ local FIELDS = {
     -- MG1-D5(b): mirrors `buff`'s `min`/`maxRemaining` (Scorch/Fire Vulnerability stack maintenance
     -- needs both: "reapply below 5 stacks", "refresh with 4s or less left").
     { id = "min", label = "stacks at least", arg = "number" },
+    -- VL2-D4: mirrors `buff`'s `max` exactly (Core/Schema.lua C.debuff.make) -- the one op that ALSO
+    -- passes on ABSENCE, so "cast Scorch until 3 stacks" is one row instead of "missing" plus "not
+    -- at least 3".
+    { id = "max", label = "stacks at most", arg = "number" },
     { id = "maxRemaining", label = "seconds left at most", arg = "number", unit = "seconds" },
     { id = "minRemaining", label = "seconds left at least", arg = "number", unit = "seconds" },
   } },
@@ -461,6 +465,11 @@ WORDS.debuff = function(cond, ctx, L)
   local name = named(cond[2], ctx)
   if cond.min and cond.min > 1 then
     return string.format(L["%s on the target at %s stacks or more"], name, num(cond.min))
+  end
+  -- VL2-D4: mirrors `buff`'s `max` wording -- the one op that also passes on absence.
+  if cond.max then
+    return string.format(L["%s on the target at %s stacks or fewer (or not on the target)"],
+      name, num(cond.max))
   end
   if cond.maxRemaining then
     return string.format(L["%s on the target with %ss left or less"], name, num(cond.maxRemaining))

@@ -403,7 +403,7 @@ local function abilityRankLines()
 end
 
 Slash.register{
-  key = "debug", args = "state|bars|swing|cues|textures|perf|libs|memory|alloc|dump|queue|gates",
+  key = "debug", args = "state|bars|swing|cues|textures|perf|libs|memory|alloc|dump|queue|gates|enemies",
   desc = ns.L["Diagnostics"], order = 10,
   run = function(rest)
     local sub = rest and rest:match("^(%S+)")
@@ -428,8 +428,32 @@ Slash.register{
         "moving: " .. tostring(moving or "nothing"),
         "window chrome: " .. tostring(chrome or "no window open"),
       }
+      -- M5a-i-D4: the reading every `enemies`/`mode` condition and Auto mode currently see. Only
+      -- printed when there is a live state to ask at all -- before an adapter/pack exist this would
+      -- otherwise be a claim about a character that has not loaded yet.
+      local liveState = ns.API and ns.API.GetState and ns.API.GetState()
+      if liveState then
+        local ok, n = pcall(liveState.enemies, liveState)
+        if ok and type(n) == "number" then
+          lines[#lines + 1] = string.format(ns.L["Enemies: %d"], n)
+        else
+          lines[#lines + 1] = ns.L["Enemies: nameplates off"]
+        end
+      end
       for _, line in ipairs(abilityRankLines()) do lines[#lines + 1] = line end
       return lines
+    elseif sub == "enemies" then
+      -- M5a-i-D4: a fresh scan, printed as plates seen / attackable / in combat, so the owner can
+      -- calibrate against the macro in tasks/todo.md mid-dungeon rather than trusting a cached number.
+      if not (ns.Adapter and ns.Adapter.enemyDebugCounts) then return { "enemies: adapter not loaded" } end
+      local d = ns.Adapter.enemyDebugCounts()
+      if not d.nameplatesOn then
+        return { "enemies: nameplates are off (nameplateShowEnemies is 0) -- press V to show them, then try again." }
+      end
+      return {
+        string.format("enemies: %d plate(s) seen, %d attackable, %d in combat", d.seen, d.attackable, d.inCombat),
+        "\"in combat\" is the number every `enemies` condition and Auto mode currently read.",
+      }
     elseif sub == "gates" then
       -- Which rows of the active build cannot fire for this character, and why. The same answer
       -- the announcement gives at the moment it changes, on demand and in full.
@@ -806,8 +830,10 @@ Slash.register{
       local packs = ns.API and ns.API.GetProviders("dataPacks") or {}
       local class = ns.Adapter and ns.Adapter.playerClass and ns.Adapter.playerClass()
       local pack = class and packs[class] or nil
+      -- PF-D7: this command reads PACK-ONLY data (advice, catalog, gear-derived comparisons), so it
+      -- keeps its refusal on a pack-less class -- only the wording changes.
       if not pack then
-        return { string.format("dump: no data pack registered for %s", tostring(class)) }
+        return { "dump: needs a class data pack" }
       end
       local snapshot = Collector.snapshot(pack)
       -- Capture the queue into the file too. Reading it off the chat frame is unworkable in combat —
@@ -888,7 +914,7 @@ Slash.register{
       end
       return lines
     end
-    return { "Usage: /elm debug state|bars|swing|cues|textures|perf|libs|memory|alloc|dump|queue [build] [depth]" }
+    return { "Usage: /elm debug state|bars|swing|cues|textures|perf|libs|memory|alloc|dump|queue|gates|enemies [build] [depth]" }
   end,
 }
 
@@ -949,7 +975,9 @@ Slash.register{
       return { "Cleared." }
     elseif sub == "mark" then
       local p = pack()
-      if not p then return { "rec: no data pack registered" } end
+      -- PF-D7: a mark captures PACK-ONLY data (Collector.snapshot's comparisons), so this keeps its
+      -- refusal on a pack-less class -- only the wording changes.
+      if not p then return { "rec: needs a class data pack" } end
       -- No dedupe key: a mark the player asked for is always recorded, even if nothing changed.
       local ok, err = Recorder.mark(label ~= "" and label or "mark", ns.now(),
         function() return ns.captureMark(p) end)
@@ -1027,11 +1055,12 @@ Slash.register{
 }
 Slash.register{
   key = "profile", args = "<key>", desc = ns.L["Pin a build"], order = 102,
+  -- PF-D7: no pack precondition -- `UserBuilds.list`/`.find` resolve the player's own forks from
+  -- their CLASS (F1a), not from a shipped pack, so a pack-less class can still see and pin them.
   run = function(rest)
     local pack = ns.Display and ns.Display.currentPack()
-    if not (pack and pack.builds) then return { "profile: no data pack for your class" } end
     local keys = {}
-    for key in pairs(pack.builds) do keys[#keys + 1] = key end
+    for key in pairs((pack and pack.builds) or {}) do keys[#keys + 1] = key end
     table.sort(keys)
     -- The user's forks (ADR-0010) after the shipped builds, so the two never read as one list.
     for _, key in ipairs(ns.UserBuilds and ns.UserBuilds.list(pack) or {}) do keys[#keys + 1] = key end
@@ -1055,7 +1084,8 @@ Slash.register{
       if ns.Display then ns.Display.refresh() end
       return { "Unpinned. Elmira will choose a build for you again." }
     end
-    local known = pack.builds[wanted] or (ns.UserBuilds and ns.UserBuilds.find(pack, wanted))
+    local known = (pack and pack.builds and pack.builds[wanted])
+      or (ns.UserBuilds and ns.UserBuilds.find(pack, wanted))
     if not known then
       return { string.format("No build %q. Available: %s", wanted, table.concat(keys, ", ")) }
     end
@@ -1064,14 +1094,38 @@ Slash.register{
     return { "Pinned to " .. wanted .. ". /elm profile auto to undo." }
   end,
 }
+-- M5a-i-D2: forces Single/Cleave/AoE, or back to Auto (the nameplate count). The keybinding
+-- (Bindings.xml -> Elmira:CycleRotationMode, Core/Init.lua) cycles through the same four values via
+-- ns.RotationMode; this is the typed equivalent, and the only way to jump straight to one of them.
+Slash.register{
+  key = "mode", args = "<auto|single|cleave|aoe>", desc = ns.L["Force Single/Cleave/AoE, or back to Auto"],
+  order = 109,
+  run = function(rest)
+    if not ns.RotationMode then return { "mode: not loaded" } end
+    local wanted = rest and rest:match("^(%S+)")
+    if not wanted then
+      return { string.format("Rotation mode: %s. Usage: /elm mode <auto|single|cleave|aoe>.",
+        ns.RotationMode.get()) }
+    end
+    local canonical
+    for _, m in ipairs(ns.RotationMode.MODES) do
+      if m:lower() == wanted:lower() then canonical = m end
+    end
+    if not canonical or not ns.RotationMode.set(canonical) then
+      return { string.format("No mode %q. Usage: /elm mode <auto|single|cleave|aoe>.", wanted) }
+    end
+    return { "Rotation mode: " .. canonical .. "." }
+  end,
+}
 -- PRD F9. Chat truncates long messages, so the string is also placed in the Options window's
 -- Import/Export box, which is where a person actually copies it from; the lines returned here are
 -- what a headless caller (and the spec) sees.
 Slash.register{
   key = "export", args = "[key]", desc = ns.L["Copy a build as a string"], order = 107,
+  -- PF-D7: no pack precondition -- `UserBuilds.exportKey`/`.find` resolve a fork by CLASS (F1a), so
+  -- a pack-less class can export one of its own rotations by key.
   run = function(rest)
     local pack = ns.Display and ns.Display.currentPack()
-    if not pack then return { "export: no data pack for your class" } end
     local key = rest and rest:match("^(%S+)")
     if not key and ns.Display then
       local _, active = ns.Display.activeBuild()
@@ -1087,10 +1141,10 @@ Slash.register{
 }
 Slash.register{
   key = "import", args = "<string> [name]", desc = ns.L["Import a build string as one of your builds"], order = 108,
+  -- PF-D7: no pack precondition -- `UserBuilds.importString` decides from the player's own class
+  -- (F1a), not from whether a shipped pack happens to be loaded.
   run = function(rest)
     local pack = ns.Display and ns.Display.currentPack()
-    -- Only saves the parse: UserBuilds.importString says the same for a nil pack.
-    if not pack then return { "import: no data pack for your class" } end -- mutants: equivalent importString repeats it
     local str, name = (rest or ""):match("^%s*(ELM1:%S+)%s*(.-)%s*$")
     if not str then return { "Usage: /elm import <ELM1:...> [name]" } end
     if not ns.UserBuilds then return { "import: builds module is not loaded" } end
@@ -1117,7 +1171,9 @@ Slash.register{
   run = function()
     if not (ns.Advisor and ns.Detect and ns.API) then return { "advise: the advisor is not loaded" } end
     local pack = ns.Display and ns.Display.currentPack()
-    if not pack then return { "advise: no data pack for your class" } end
+    -- PF-D7: gear advice lives on the PACK's own `advice` table, so this keeps its refusal on a
+    -- pack-less class -- only the wording changes.
+    if not pack then return { "advise: needs a class data pack" } end
     local _, buildKey = ns.Display.activeBuild()
     if not buildKey then return { "advise: no active build" } end
 

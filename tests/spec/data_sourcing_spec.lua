@@ -375,13 +375,17 @@ describe("Data sourcing policy (docs/03)", function()
   -- addendum fetched its Wowhead page directly but kept it provisional because the page shares its
   -- name with the real Fire Blast ability). MG2-D1 adds three more, each WoWSims-sourced per
   -- mage-healer-ids-verified-2026-09-14.md: ARCANE_BLAST_BUFF, MISSILE_BARRAGE_BUFF, ARCANE_TUNNELING.
+  -- MG3-D2 adds FINGERS_OF_FROST_BUFF: it has a real Wowhead page (spell=400669) but is not yet
+  -- client-verified the way HOT_STREAK_BUFF's sibling fix was, so it stays `verify = "in-game"`
+  -- until the MG3 checklist's `/dump` confirms it.
   -- Neither Mage soul is in this list: souls are a separate table this test does not scan (see the
   -- souls block below).
   local PROVISIONAL_SPELLS_BY_CLASS = {
     -- The four SOUL_*_AURA entries were here until 2026-09-01, when the dump refuted them: a soul's
     -- "permanent hidden aura" is not visible to UnitAura, so it cannot drive detection (docs/07 §9.13).
     Paladin = { "SWIFT_JUDGEMENT_BUFF", "TEMPLAR_BUFF" },
-    Mage = { "ENIGMA_FIRE_CRIT_BUFF", "ARCANE_BLAST_BUFF", "MISSILE_BARRAGE_BUFF", "ARCANE_TUNNELING" },
+    Mage = { "ENIGMA_FIRE_CRIT_BUFF", "ARCANE_BLAST_BUFF", "MISSILE_BARRAGE_BUFF", "ARCANE_TUNNELING",
+             "FINGERS_OF_FROST_BUFF" },
   }
   it("has exactly the provisional entries we expect, per class", function()
     for _, entry in ipairs(shippedPacks()) do

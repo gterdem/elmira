@@ -45,6 +45,36 @@ describe("Core.Profiles", function()
     end)
   end)
 
+  -- PF-D1: a class with no shipped data pack at all (`pack` is nil) is a normal state now, not a
+  -- guard raised before this even runs. A pinned fork must still resolve through `UserBuilds.find`,
+  -- which needs no pack.
+  describe("PF: a nil pack (no class data pack)", function()
+    it("resolves a pinned fork through buildExists -> UserBuilds.find with no pack at all", function()
+      helper.load("Elmira/Core/UserBuilds.lua")
+      local ns = helper.ns()
+      ns.db = { keys = { class = "ROGUE", char = "Arthorion - Realm" },
+                global = { userBuilds = { USER_MINE = { class = "ROGUE",
+                                                         build = { key = "USER_MINE", entries = {} } } } } }
+      local key, reason = Profiles.resolve(nil, { activeBuild = "USER_MINE" })
+      assert.equal("USER_MINE", key)
+      assert.equal("pinned", reason)
+    end)
+
+    it("answers nil plus a reason, never an error, with no pack and nothing pinned", function()
+      local ok, key, reason = pcall(Profiles.resolve, nil, {})
+      assert.is_true(ok)
+      assert.is_nil(key)
+      assert.equal("no data pack", reason)
+    end)
+
+    it("names the pin rather than falling into a catalog that does not exist", function()
+      local ok, key, reason = pcall(Profiles.resolve, nil, { activeBuild = "GHOST" })
+      assert.is_true(ok)
+      assert.is_nil(key)
+      assert.truthy(reason:find("GHOST", 1, true))
+    end)
+  end)
+
   describe("rule 2: dangling pin", function()
     it("a pin naming a build absent from pack.builds falls through, never nil, never errors", function()
       local p = pack{

@@ -193,7 +193,10 @@ ns.RegisterBuiltinPack("PALADIN", function()
     RUNE_MALLEABLE_PROTECTION    = { id = 458318, src = "https://www.wowhead.com/classic/spell=458318/malleable-protection", rune = "waist" },
     RUNE_IMPROVED_SANCTUARY      = { id = 429133, src = "https://www.wowhead.com/classic/spell=429133/improved-sanctuary", rune = "head" },
     -- Shockadin (M5, theorycraft build -- ADR-0013 §6). Verified 2026-09-03, docs/staging/data/m5-shockadin-ids.lua.
-    SEAL_OF_RIGHTEOUSNESS   = { id = 20289,  src = "https://www.wowhead.com/classic/spell=20289/seal-of-righteousness", seal = true, cost = { mana = 90 }, buff = true }, -- Shockadin's seal
+    -- rank 8 (level 58); 20289 was rank 4 (level 26) and never matched a level-60 character's own
+    -- cast until SL1's name fallback in Adapters/Vanilla.lua findAura -- fetched 2026-09-14,
+    -- https://www.wowhead.com/classic/spell=20293.
+    SEAL_OF_RIGHTEOUSNESS   = { id = 20293,  src = "https://www.wowhead.com/classic/spell=20293/seal-of-righteousness", seal = true, cost = { mana = 200 }, buff = true }, -- Shockadin's seal
     HOLY_SHOCK              = { id = 20473,  src = "https://www.wowhead.com/classic/spell=20473/holy-shock", cost = { mana = 225 }, cooldown = 30 }, -- Holy talent, not a rune
     -- Back slot: shares it with RUNE_RIGHTEOUS_VENGEANCE (every Ret build) and RUNE_SHIELD_OF_RIGHTEOUSNESS (Prot).
     -- Client-verified 2026-09-03: GetRuneForEquipmentSlot(15).learnedAbilitySpellIDs = { 462834 }.
@@ -589,9 +592,8 @@ ns.RegisterBuiltinPack("PALADIN", function()
       -- wowsims/sod never target-count-gates its baseline eligibility in any phase preset, so
       -- restricting it would remove value no source supports removing (docs/research/
       -- exodin-filler-policy.md Q2).
-      -- Inert until nameplate counting lands at M5a: Adapters/Vanilla.lua's state:enemies() returns a
-      -- hardcoded 1, so `enemies min 3` is false everywhere today. A safe no-op, not a bug -- but it
-      -- means this line cannot be verified in game yet.
+      -- M5a-i: `enemies` now counts attackable, in-combat nameplates (Adapters/Vanilla.lua), so this
+      -- fires on a real 3+ pull -- no longer a safe no-op waiting on nameplate counting to land.
       { spell = "CONSECRATION", label = "AoE (3+ targets)", when = { {"enemies", min = 3}, {"resource","MANA", minPct = 40} } },
 
       ---------------------------------------------------------------- BASELINE filler: Judgement when nothing better is ready
@@ -654,8 +656,8 @@ ns.RegisterBuiltinPack("PALADIN", function()
 
       ---------------------------------------------------------------- W5: without T3.5, Consecration is promoted on large pulls
       -- Wowhead: "If you don't yet have T3.5 then you can cast Consecration at a higher priority for
-      -- large pulls, that's it." With T3.5 the AoE rotation makes "zero changes". Inert until nameplate
-      -- counting lands at M5a (state:enemies() is a hardcoded 1 today), exactly like Exodin's AoE line.
+      -- large pulls, that's it." With T3.5 the AoE rotation makes "zero changes". M5a-i: `enemies`
+      -- now counts real nameplates, exactly like Exodin's AoE line above.
       { spell = "CONSECRATION", label = "AoE, no T3.5",
         when = { {"not", {"set","PALADIN_T35_INQUISITION", min = 2}}, {"enemies", min = 3}, {"resource","MANA", minPct = 40} } },
 
@@ -714,8 +716,7 @@ ns.RegisterBuiltinPack("PALADIN", function()
       { spell = "AVENGING_WRATH", hold = true, label = "Threat burst", when = { {"in_combat"} } },
 
       ---------------------------------------------------------------- AoE (3+): Wowhead's separate AoE list promotes these two
-      -- Inert until nameplate counting lands at M5a (state:enemies() is a hardcoded 1), like every
-      -- `enemies` line in the paladin pack.
+      -- M5a-i: `enemies` counts real nameplates now, like every `enemies` line in the paladin pack.
       { spell = "AVENGERS_SHIELD", label = "AoE", when = { {"enemies", min = 3} } },
       { spell = "CONSECRATION", label = "AoE", when = { {"enemies", min = 3}, {"resource","MANA", minPct = 30} } },
 

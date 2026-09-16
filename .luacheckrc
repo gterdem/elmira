@@ -7,8 +7,11 @@ ignore = {
   "212/self",  -- Ace3 callback methods (OnEnable, OnProfileChanged, ...) often don't need self
 }
 
--- Only two globals may ever be written, anywhere in the addon family.
-globals = { "Elmira", "ElmiraDB" }
+-- Only four globals may ever be written, anywhere in the addon family. The last two are not state --
+-- Bindings.xml (M5a-i-D2) is a Blizzard file format read outside our Lua entirely, and the ONLY way
+-- it can label a binding in the Key Bindings UI is a plain string global with this exact name
+-- (BINDING_HEADER_<category>, BINDING_NAME_<command>); Core/Init.lua sets both once, at file scope.
+globals = { "Elmira", "ElmiraDB", "BINDING_HEADER_ELMIRA", "BINDING_NAME_ELMIRA_CYCLE_ROTATION_MODE" }
 
 -- Top-level read_globals is deliberately minimal. This IS the Core boundary (docs/01-ARCHITECTURE.md): Core never calls
 -- the WoW API. `read_globals` inside a files[...] block below is ADDITIVE to this list, never a
@@ -55,6 +58,10 @@ local WOW_API = {
   -- R2 (D59): the classic-only combo point reader and the FrameXML max-points constant -- see
   -- Adapters/Vanilla.lua's S:power COMBO_POINTS comment for the client sweep that settled both.
   "GetComboPoints", "MAX_COMBO_POINTS",
+  -- M5a-i: enemy count from nameplates, verified against DBM-Core on the live install (docs cite the
+  -- exact modules/*.lua:line-range in Adapters/Vanilla.lua). GetCVar is also how the `nameplates`
+  -- capability reads nameplateShowEnemies.
+  "GetCVar", "C_NamePlate", "UnitIsDeadOrGhost",
 }
 
 -- Core is pure Lua: naming a WoW global anywhere under Elmira/Core/ is a lint ERROR, by omission.
@@ -171,6 +178,8 @@ files["tests/"] = {
     "GameTooltip", "CLOSE",
     -- R2 (D59): the combo-point mock pair.
     "GetComboPoints", "MAX_COMBO_POINTS",
+    -- M5a-i: the nameplate-count mock surface.
+    "GetCVar", "C_NamePlate", "UnitIsDeadOrGhost",
     -- FX2: tests/ace3.lua loads the real AceGUI/AceConfigDialog (tests/spec/options_real_window_spec)
     -- against the mock's frames. These are the client's own table/string extensions and the FrameXML
     -- globals those libraries read: button labels, font objects, the sound a closing window plays,

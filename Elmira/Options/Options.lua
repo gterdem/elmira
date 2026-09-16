@@ -513,12 +513,14 @@ end
 
 -- Options.importText(str) -> true, key | false. Keeps the text in the box on failure so the user
 -- can fix it, clears it on success, and leaves a one-line result under the box either way.
+-- PF-D7: no longer refuses on a nil pack -- `UserBuilds.importString` itself decides that from the
+-- player's OWN class (`playerClass`, F1a), not from whether a class data pack happens to be loaded.
 function Options.importText(str)
-  local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
-  if not (ns.UserBuilds and pack) then
-    exchangeNote = L["Import: no data pack for your class."]
+  if not ns.UserBuilds then
+    exchangeNote = L["Import: the rotation editor is not loaded."]
     return false
   end
+  local pack = ns.Display and ns.Display.currentPack and ns.Display.currentPack()
   -- The second return is the count of ability settings that came WITH the rotation (AB2-D5) on
   -- success, and the failure reason otherwise.
   local key, extra = ns.UserBuilds.importString(str, pack, {

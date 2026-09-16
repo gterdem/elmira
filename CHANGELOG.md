@@ -1,5 +1,32 @@
 # Changelog
 ## Unreleased
+- **Fixed: Choosing "stacks at least/at most" or a seconds test in a condition no longer snaps back
+  to "is up" before the amount is typed.**
+- **Changed: the condition Value dropdown and the line's Ability select show each spell's icon and
+  id next to its name.**
+- **Added: "Debuff on the target" conditions can say "stacks at most", passing when the debuff is
+  absent, so "Scorch until 3 stacks" is one row.**
+- **Changed: the Fire rotation's Scorch maintenance is one line.**
+- **Added: Elmira counts the enemies your group is fighting from their nameplates**, so the AoE
+  lines in every playstyle can fire. `/elm mode <auto|single|cleave|aoe>` and a keybinding (Key
+  Bindings > Elmira) force Single, Cleave or AoE for testing a line or fighting something nameplates
+  cannot see; the mode resets to Auto at login. `/elm debug enemies` shows plates seen, attackable
+  and engaged, for calibrating in a dungeon.
+- **Changed: an Enemies condition no longer has a Range field** — nameplate distance is a client
+  setting, not something any build could ever have honoured per line, and nothing used it.
+- **Added: any class can build and play a rotation from its spellbook; a class data pack is no
+  longer required.** Register a couple of spells, build a line or two in the Rotations panel and
+  play it — no shipped pack needed. A copy of a shipped template still says so when its class's
+  pack is not loaded. Compiles once, not on every update tick.
+- **Removed: the "running with a null state" startup warning.** A class with no shipped data pack
+  is a normal state now, not a problem worth flagging.
+- **Fixed: a seal or self-buff you cast at a different rank than the pack expects is detected now**
+  — Seal of Righteousness stayed in the queue after you cast it, and the Judgement lines behind it
+  never showed.
+- **Fixed: the Rotations page no longer shows the recommended playstyle as in use before you have
+  chosen one** — every card offers Use until you pick.
+- **Fixed: Mage — the Hot Streak Pyroblast line and Frost's Fingers of Frost lines fire now.** The
+  pack watched the runes' own ids instead of the proc buffs the client applies.
 - **Changed: the texture picker shows every texture in the blend mode the ability uses, and has its
   own Blend mode control** — Blizzard's icons and runes are drawn for Glow, which is why they showed
   a black square under Opaque; categories that need WeakAuras stay listed, greyed, instead of

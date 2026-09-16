@@ -63,6 +63,17 @@ describe("Core/Spells (the registry)", function()
       assert.equal(Spells.merged(pack), Spells.merged(pack))
     end)
 
+    -- PF2: the same identity contract for a pack-less class (`pack == nil` on every tick) --
+    -- `pack = pack or {}` used to hand every call a brand-new table, so `mergedSpells[pack]` never
+    -- hit and Display/Slash's identity-keyed caches recompiled on every tick.
+    it("returns the SAME table across calls for a nil pack too, exactly as any other pack", function()
+      ns.db.char.spells = { SLICE = { key = "SLICE", id = 900 } }
+      local a = Spells.merged(nil)
+      local b = Spells.merged(nil)
+      assert.equal(a, b)
+      assert.equal(900, b.SLICE.id, "the shared slot is still refilled from the registry")
+    end)
+
     -- Keyed by PACK, not a single shared slot: a class switch (or two specs sharing a process)
     -- must never see one pack's merge bleed into another's.
     it("keeps a separate table per pack, never one shared across every pack", function()

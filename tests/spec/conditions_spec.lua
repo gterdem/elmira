@@ -107,7 +107,7 @@ describe("Core.Conditions", function()
     target_type = { "present" },
     buff = { "present", "min", "max", "maxRemaining", "minRemaining" },
     no_buff = { "present" },
-    debuff = { "present", "min", "maxRemaining", "minRemaining" },
+    debuff = { "present", "min", "max", "maxRemaining", "minRemaining" },
     no_debuff = { "present" },
     seal = { "present" },
     no_seal = { "present" },
@@ -437,6 +437,16 @@ describe("Core.Conditions", function()
                   Conditions.fromRows(model.match, model.rows))
     end)
 
+    -- VL3-D2(f): the converter itself is UNCHANGED by VL3 -- a numeric op with no value still
+    -- converts to the bare condition. `Rotation.setCondition` seeds the amount before this is ever
+    -- called (Options/Rotation.lua's `FIELDS_SET_DIRECTLY` branch), so this pins that the seeding is
+    -- provably the EDITOR's job: `condOf` must never invent data, which is the "silent partial
+    -- write" this whole file exists to make impossible.
+    it("writes a numeric op with no value as the bare condition, rather than inventing one", function()
+      local rows = { { kind = "debuff", key = "FIRE_VULNERABILITY", op = "max" } }
+      assert.same({ { "debuff", "FIRE_VULNERABILITY" } }, Conditions.fromRows("all", rows))
+    end)
+
     it("takes a value typed as text, because an AceConfig input hands back a string", function()
       local rows = { { kind = "enemies", op = "min", value = "3" } }
       assert.same({ { "enemies", min = 3 } }, Conditions.fromRows("all", rows))
@@ -573,6 +583,9 @@ describe("Core.Conditions", function()
         { { "debuff", "VINDICATION_DEBUFF", min = 3 }, "vindication debuff on the target at 3 stacks or more" },
         { { "debuff", "VINDICATION_DEBUFF", maxRemaining = 4 },
           "vindication debuff on the target with 4s left or less" },
+        -- VL2-D4: `max` mirrors `buff`'s own "also passes on absence" op and wording.
+        { { "debuff", "FIRE_VULNERABILITY", max = 2 },
+          "fire vulnerability on the target at 2 stacks or fewer (or not on the target)" },
         { { "no_debuff", "VINDICATION_DEBUFF" }, "vindication debuff is not on the target" },
         { { "seal", "SEAL_OF_MARTYRDOM" }, "seal of martyrdom is the active seal" },
         { { "no_seal" }, "no seal is up" },

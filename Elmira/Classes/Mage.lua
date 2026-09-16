@@ -8,12 +8,17 @@
 --   docs/research/sod-mage-dossier.md               — builds, priority lists, runes by slot
 --   docs/research/mage-ids-verified-2026-09-14.md   — id verification pass + the 2026-09-14 follow-up note
 --                                                      addendum at the end, which settles the aura ids
---                                                      (Hot Streak 48108, Fingers of Frost 400647 =
---                                                      the rune's own id, Brain Freeze 400730, Fire
---                                                      Vulnerability 22959, Glaciate 1218345, the
---                                                      Enigma 2pc buff 1213317) and the Balefire Bolt
---                                                      self-aura mechanic (same id as the ability,
---                                                      428878, 5 stacks max, 30s, fatal at 5 stacks)
+--                                                      (Brain Freeze 400730, Fire Vulnerability 22959,
+--                                                      Glaciate 1218345, the Enigma 2pc buff 1213317)
+--                                                      and the Balefire Bolt self-aura mechanic (same
+--                                                      id as the ability, 428878, 5 stacks max, 30s,
+--                                                      fatal at 5 stacks). A RUNE'S OWN PASSIVE id is
+--                                                      NEVER its proc buff's id: the "Correction
+--                                                      2026-09-14 (late)" section at the end of that
+--                                                      file (MG3) found Hot Streak's own buff is
+--                                                      400625, not the rune 400624 or the WoWSims
+--                                                      ActionID 48108; Fingers of Frost's own buff is
+--                                                      400669, not the rune 400647.
 --   docs/research/mage-set-bonus-auras.md           — which set bonuses are auras vs pure passives
 --   docs/research/wowsims-mage-p8/README.md         — decoded P8 BiS Single Target sim APLs (Fire
 --                                                      13830 DPS, Frost Spellfrost 13440 DPS)
@@ -74,6 +79,8 @@ ns.RegisterBuiltinPack("MAGE", function()
     CONE_OF_COLD     = { id = 10161,  src = "https://www.wowhead.com/classic/spell=10161" },   -- rank 5, level 54
     -- AT9-D3: puts a shield buff on the caster — see Paladin.lua's header comment on `buff` for what
     -- the flag opens (buff-only moments/warning seconds before the ability has ever been cast).
+    -- Ships as rank 4 (level 58); a lower-rank cast is covered by SL1's name fallback in
+    -- Adapters/Vanilla.lua findAura, not by renumbering this id.
     ICE_BARRIER      = { id = 13033,  src = "https://www.wowhead.com/classic/spell=13033", buff = true }, -- rank 4, level 58
     COLD_SNAP        = { id = 12472,  src = "https://www.wowhead.com/classic/spell=12472" },
     COMBUSTION       = { id = 11129,  src = "https://www.wowhead.com/classic/spell=11129", buff = true },
@@ -201,10 +208,16 @@ ns.RegisterBuiltinPack("MAGE", function()
     -- ------------------------------------------------------------------------- procs / debuffs
     -- `proc = true` (docs/02 Simulation semantics): false for every simulated slot past t=0, since a
     -- proc is unpredictable and Schema must not pretend the virtual future knows it will be up.
-    HOT_STREAK_BUFF       = { id = 48108,  src = "https://www.wowhead.com/classic/spell=48108", proc = true },
-    -- Same id as its own rune (wowsims/sod runes.go:191, cited by the follow-up note) — the
-    -- proc IS the rune's own aura, not a separate spell.
-    FINGERS_OF_FROST_BUFF = { id = 400647, src = "https://www.wowhead.com/classic/spell=400647", proc = true },
+    HOT_STREAK_BUFF       = { id = 400625, src = "https://www.wowhead.com/classic/spell=400625", proc = true,
+                               note = "client-verified 2026-09-14 (/dump on a level 45 Mage); 48108 is the " ..
+                                 "WoWSims ActionID and never appears on the player; 400624 is the passive rune" },
+    -- FoF's OWN proc buff, not the passive rune (400647, "Apply Aura: Proc Trigger Spell", named as
+    -- RUNE_FINGERS_OF_FROST above) or its ids: 400670 is the 1-charge dummy twin, 401741 the teach
+    -- spell. `verify = "in-game"` until the MG3 checklist's `/dump` confirms it client-side.
+    FINGERS_OF_FROST_BUFF = { id = 400669, src = "https://www.wowhead.com/classic/spell=400669", proc = true,
+                               verify = "in-game",
+                               note = "FoF's own proc buff; 400647 is the passive rune (Proc Trigger Spell), " ..
+                                 "400670 the 1-charge dummy twin, 401741 the teach spell" },
     -- Wowhead names the buff "Fireball!", not "Brain Freeze" — the addendum fetched the page
     -- directly under that title; kept here under the descriptive key the dossier and the build use.
     BRAIN_FREEZE_BUFF     = { id = 400730, src = "https://www.wowhead.com/classic/spell=400730", proc = true },
@@ -374,7 +387,7 @@ ns.RegisterBuiltinPack("MAGE", function()
     version = 2, flavor = "SoD", phase = "P8",  -- bumped for MG2's fourth entry (MAGE_ARCANE_HEALER); the wizard re-offers once
     MAGE = {
       { build = "MAGE_FIRE", available = true, playstyle = "Fire — Hot Streak / Overheat proc chain", difficulty = "medium", recommended = true,
-        updated = "2026-09-14", phase = "SoD P8",
+        updated = "2026-09-15", phase = "SoD P8",
         source = "https://www.icy-veins.com/wow-classic/fire-mage-dps-season-of-discovery-pve-rotation-cooldowns-abilities",
         summary = "Fire Blast (Overheat) weaves a guaranteed crit into Hot Streak Pyroblasts, Scorch keeps 5 stacks of Fire Vulnerability up, Living Bomb and Balefire Bolt fill the gaps. 13.8k in the P8 BiS single-target sim.",
         requires = { runes = { "RUNE_HOT_STREAK", "RUNE_OVERHEAT", "RUNE_ENLIGHTENMENT", "RUNE_BALEFIRE_BOLT",
@@ -454,8 +467,8 @@ ns.RegisterBuiltinPack("MAGE", function()
   -- Builds
   -- ---------------------------------------------------------------------------------------------
   -- ADR-0006 order: baseline first, gated upgrades ranked above the baseline entries they outrank.
-  -- AoE lines are gated `{"enemies", min = 3}` exactly like Paladin's — Adapters/Vanilla.lua's
-  -- state:enemies() is hardcoded to 1 until M5a, so these are a safe no-op today, not a bug.
+  -- AoE lines are gated `{"enemies", min = 3}` exactly like Paladin's — M5a-i: Adapters/Vanilla.lua's
+  -- state:enemies() now counts real, attackable, in-combat nameplates.
   D.Builds = D.Builds or {}
 
   -- Mage — Fire. Baseline: Icy Veins SoD Fire rotation (dossier S1). BiS upgrade lines: WoWSims P8
@@ -473,9 +486,13 @@ ns.RegisterBuiltinPack("MAGE", function()
       { spell = "FIRE_BLAST", hold = true, when = { {"rune","RUNE_OVERHEAT"} }, label = "Overheat" },
 
       ---------------------------------------------------------------- 3: Improved Scorch / Fire Vulnerability maintenance
-      { spell = "SCORCH", when = { {"no_debuff","FIRE_VULNERABILITY"} }, label = "Stack Scorch" },
-      { spell = "SCORCH", when = { {"debuff","FIRE_VULNERABILITY", maxRemaining = 4} }, label = "Refresh Scorch" },
-      { spell = "SCORCH", when = { {"not", {"debuff","FIRE_VULNERABILITY", min = 5}} }, label = "5 stacks" },
+      -- VL2-D7: one entry, not three — `max = 4` covers "absent" and "1-4 stacks" (what the old
+      -- "Stack Scorch"/"5 stacks" lines did between them, `max`'s absence-passes reading is VL2-D4),
+      -- the `maxRemaining = 4` half keeps refreshing at 5 stacks with 4s or less left (the old
+      -- "Refresh Scorch" line). Identical behaviour, same position in the list.
+      { spell = "SCORCH", when = { {"any", {"debuff","FIRE_VULNERABILITY", max = 4},
+                                            {"debuff","FIRE_VULNERABILITY", maxRemaining = 4}} },
+        label = "Scorch to 5, refresh under 4s" },
 
       ---------------------------------------------------------------- 4: Living Bomb maintenance
       { spell = "LIVING_BOMB", when = { {"no_debuff","LIVING_BOMB"} } },

@@ -439,11 +439,10 @@ return {
 
     ---------------------------------------------------------------- W5: Consecration promoted, no T3.5
     -- tests/fake_state.lua's `enemies` field lets this fixture express "3+ enemies" directly (`t.enemies`
-    -- feeds FakeState:enemies() -- see the `enemies` condition in Core/Schema.lua), even though the
-    -- REAL Adapters/Vanilla.lua hardcodes state:enemies() to 1 today (nameplate counting lands at
-    -- M5a) -- so this scenario proves the BUILD's W5 line is wired correctly, not that a live character
-    -- would see it fire before M5a ships. No sets, no soul: not-T3.5-2-set passes, enemies=3 passes,
-    -- mana defaults to 100% (>=40%).
+    -- feeds FakeState:enemies() -- see the `enemies` condition in Core/Schema.lua); M5a-i gave the REAL
+    -- Adapters/Vanilla.lua the same reading, counted from nameplates -- so this scenario proves the
+    -- BUILD's W5 line is wired correctly, and adapter_vanilla_spec.lua proves the count itself.
+    -- No sets, no soul: not-T3.5-2-set passes, enemies=3 passes, mana defaults to 100% (>=40%).
     -- Labels: slot 1 is entry 7 ("AoE, no T3.5"), not entry 13 -- entry 7 is earlier and its own
     -- `enemies` gate now passes. Slot 3's EXORCISM is entry 10 (no soul bonus).
     { name = "no_t35_large_pull", sets = {}, enemies = 3, seal = "SEAL_OF_MARTYRDOM",
@@ -1242,7 +1241,7 @@ return {
       runes = { RUNE_HOT_STREAK = true, RUNE_OVERHEAT = true, RUNE_ENLIGHTENMENT = true, RUNE_BALEFIRE_BOLT = true,
                 RUNE_LIVING_BOMB = true, RUNE_FROSTFIRE_BOLT = true, RUNE_ICY_VEINS = true, RUNE_SPELL_POWER = true },
       expect = { "FIRE_BLAST", "SCORCH", "FIRE_BLAST" },
-      expectLabels = { "Overheat", "Stack Scorch", "Overheat" } },
+      expectLabels = { "Overheat", "Scorch to 5, refresh under 4s", "Overheat" } },
 
     -- Hot Streak is a proc (`proc = true` on HOT_STREAK_BUFF): Simulation suppresses it for every
     -- virtual slot past t=0, so it can only ever win slot 1 — exactly Paladin's VENGEANCE_BUFF shape.
@@ -1275,30 +1274,30 @@ return {
       expect = { "FIRE_BLAST" },
       expectLabels = { "Overheat" } },
 
-    -- Scorch at 0 stacks (debuff entirely absent): entry 3 ("Stack Scorch") wins over entry 5's
-    -- "not(min=5)" (also true when absent) purely by list position — expectLabels proves it.
+    -- Scorch at 0 stacks (debuff entirely absent): VL2-D7's single entry passes via its `max = 4`
+    -- child, which also reads true on absence (VL2-D4).
     { name = "scorch_zero_stacks_applies",
       usable = { PYROBLAST = false, FIRE_BLAST = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
                  COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
                  FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
       expect = { "SCORCH", "SCORCH", "SCORCH" },
-      expectLabels = { "Stack Scorch", "Stack Scorch", "Stack Scorch" } },
+      expectLabels = { "Scorch to 5, refresh under 4s", "Scorch to 5, refresh under 4s",
+                        "Scorch to 5, refresh under 4s" } },
 
-    -- 4 stacks, 3s left: entry 4 ("Refresh Scorch", maxRemaining = 4) wins over entry 3 (fails,
-    -- debuff present) and entry 5 (fails, stacks < 5 so `not(min=5)` sees the inner test false... no,
-    -- inner is false so `not` is true — entry 5 is ALSO eligible here, but entry 4 is listed first).
+    -- 4 stacks, 3s left: the entry's `max = 4` child alone already passes (4 <= 4, no remaining
+    -- check on that branch) -- the `maxRemaining = 4` child would too, but only one entry exists now.
     { name = "scorch_four_stacks_refreshed",
       debuffs = { FIRE_VULNERABILITY = { stacks = 4, remaining = 3, mine = true } },
       usable = { PYROBLAST = false, FIRE_BLAST = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
                  COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
                  FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
       expect = { "SCORCH", "SCORCH", "SCORCH" },
-      expectLabels = { "Refresh Scorch", "Refresh Scorch", "Refresh Scorch" } },
+      expectLabels = { "Scorch to 5, refresh under 4s", "Scorch to 5, refresh under 4s",
+                        "Scorch to 5, refresh under 4s" } },
 
-    -- 5 stacks, 20s left (nowhere near expiring): all three Scorch entries fail (present, not <=4s
-    -- left, and stacks >= 5 makes entry 5's `not(min=5)` false too) — the queue correctly falls
-    -- through to Living Bomb instead, proving the cap actually stops Scorch rather than merely
-    -- relabelling it.
+    -- 5 stacks, 20s left (nowhere near expiring): both `any` children fail (`max = 4`: 5 > 4;
+    -- `maxRemaining = 4`: 20 > 4) — the queue correctly falls through to Living Bomb instead,
+    -- proving the cap actually stops Scorch rather than merely relabelling it.
     { name = "scorch_five_stacks_skips_to_living_bomb",
       debuffs = { FIRE_VULNERABILITY = { stacks = 5, remaining = 20, mine = true } },
       usable = { PYROBLAST = false, FIRE_BLAST = false, COMBUSTION = false, ICY_VEINS = false, COLD_SNAP = false,
@@ -1306,28 +1305,28 @@ return {
                  FROSTFIRE_BOLT = false, FIREBALL = false },
       expect = { "LIVING_BOMB", "LIVING_BOMB", "LIVING_BOMB" } },
 
-    -- 3 stacks, 20s left: entry 3 fails (present), entry 4 fails (remaining = 20 > 4), and entry 5
-    -- ("not(min=5)") is the ONLY one of the three that can distinguish this from the 5-stacks/full-
-    -- duration case above — its inner `debuff(...,min=5)` sees 3 < 5 (false), so `not` is true and
-    -- it fires. Deleting entry 5 alone would not change the 5-stacks scenario above at all; this is
-    -- the scenario that actually needs it.
+    -- 3 stacks, 20s left: the `max = 4` child passes (3 <= 4) even though `maxRemaining = 4` alone
+    -- would not (20 > 4) — this is the scenario that actually needs the `max` half of the `any`
+    -- rather than just the `maxRemaining` half.
     { name = "scorch_below_five_stacks_keeps_refreshing",
       debuffs = { FIRE_VULNERABILITY = { stacks = 3, remaining = 20, mine = true } },
       usable = { PYROBLAST = false, FIRE_BLAST = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
                  COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
                  FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
       expect = { "SCORCH", "SCORCH", "SCORCH" },
-      expectLabels = { "5 stacks", "5 stacks", "5 stacks" } },
+      expectLabels = { "Scorch to 5, refresh under 4s", "Scorch to 5, refresh under 4s",
+                        "Scorch to 5, refresh under 4s" } },
 
-    -- 5 stacks but only 2s left: entry 4's plain `maxRemaining = 4` does not check stack count, so
-    -- it fires regardless — refreshing even a maxed stack before it falls off.
+    -- 5 stacks but only 2s left: the `maxRemaining = 4` child does not check stack count, so it
+    -- fires regardless — refreshing even a maxed stack before it falls off.
     { name = "scorch_five_stacks_expiring_still_refreshed",
       debuffs = { FIRE_VULNERABILITY = { stacks = 5, remaining = 2, mine = true } },
       usable = { PYROBLAST = false, FIRE_BLAST = false, LIVING_BOMB = false, COMBUSTION = false, ICY_VEINS = false,
                  COLD_SNAP = false, BALEFIRE_BOLT = false, LIVING_FLAME = false, BLAST_WAVE = false,
                  FLAMESTRIKE = false, FROSTFIRE_BOLT = false, FIREBALL = false },
       expect = { "SCORCH", "SCORCH", "SCORCH" },
-      expectLabels = { "Refresh Scorch", "Refresh Scorch", "Refresh Scorch" } },
+      expectLabels = { "Scorch to 5, refresh under 4s", "Scorch to 5, refresh under 4s",
+                        "Scorch to 5, refresh under 4s" } },
 
     -- Living Bomb absent -> maintained; present -> the reapply line is skipped (falls through to a
     -- filler), proving `no_debuff` actually gates it rather than firing unconditionally.

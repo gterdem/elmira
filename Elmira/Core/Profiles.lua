@@ -28,9 +28,12 @@ local function catalogFor(pack)
   return nil
 end
 
+-- PF: `pack` is nil for a class with no shipped data pack -- guarded here (rather than assuming a
+-- caller already checked) so a pinned `USER_*` key can still resolve through `UserBuilds.find`,
+-- which is itself pack-optional (F1a).
 local function buildExists(pack, key)
   if type(key) ~= "string" then return false end -- mutants: equivalent a non-string key misses pack.builds and UserBuilds.find alike
-  if type(pack.builds) == "table" and pack.builds[key] ~= nil then return true end
+  if type(pack) == "table" and type(pack.builds) == "table" and pack.builds[key] ~= nil then return true end
   -- A pinned key may name one of the user's forks (ADR-0010).
   return ns.UserBuilds ~= nil and ns.UserBuilds.find(pack, key) ~= nil
 end
@@ -87,17 +90,26 @@ end
 local NO_CTX = {}
 
 function Profiles.resolve(pack, profile, ctx)
-  if type(pack) ~= "table" or type(pack.builds) ~= "table" then return nil, "no data pack" end
   ctx = ctx or NO_CTX
+  local packOk = type(pack) == "table" and type(pack.builds) == "table"
 
-  -- 1. Explicit user choice. `false` is the DB's "unset" sentinel, not a key.
+  -- 1. Explicit user choice. `false` is the DB's "unset" sentinel, not a key. Checked BEFORE the
+  -- pack-shape guard below: PF-D1 wants a pack-less call (every class but the one that ships a pack)
+  -- to still resolve a pinned `USER_*` fork through `buildExists` -> `UserBuilds.find`, which needs
+  -- no pack at all.
   local pinned = profile and profile.activeBuild
   if pinned and pinned ~= false then
     if buildExists(pack, pinned) then return pinned, "pinned" end
     -- A pinned key that no longer resolves means the pack changed under the user (a build was
-    -- renamed, or a class pack was downgraded). Fall through rather than showing nothing, but say so.
-    return Profiles.fallback(pack, "pinned build '" .. tostring(pinned) .. "' is not in this pack")
+    -- renamed, or a class pack was downgraded), OR there never was a pack to begin with. Fall
+    -- through to the catalog only when there IS a pack to fall back into; otherwise say so plainly.
+    if packOk then
+      return Profiles.fallback(pack, "pinned build '" .. tostring(pinned) .. "' is not in this pack")
+    end
+    return nil, "pinned build '" .. tostring(pinned) .. "' could not be found"
   end
+
+  if not packOk then return nil, "no data pack" end
 
   -- 2. What the player's loadout addon says they are wearing.
   local byOverride, overrideReason = fromOverride(pack, profile, ctx.override)

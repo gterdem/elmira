@@ -130,7 +130,14 @@ end
 -- collision -- see `Spells.merged`'s own comment for why the merge lives there rather than here.
 -- `ns.Spells` is absent in a few specs that dofile this file on its own; falling back to the pack's
 -- table alone is the pre-R2b behaviour, not a silent narrowing of it.
+--
+-- PF: `pack` is nil for a class with no shipped data pack. `Spells.merged` already tolerates a nil
+-- pack (it answers with the registry alone), so the only thing this function has to do for that case
+-- is stop indexing `pack.sets` etc. on a nil `pack` -- `pack = pack or {}` below. `ctx.spells` is
+-- therefore NEVER nil, even pack-less: `Schema.validate` treats a missing `ctx.spells` as "do not
+-- check", and a typo'd spell key must still be caught with no pack at all (PF-D3).
 local function ctxFor(pack)
+  pack = pack or {}
   local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or pack.spells
   return { spells = spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
 end
@@ -141,7 +148,11 @@ end
 -- becomes the fork key: Schema errors then name the fork, not the shipped build it came from.
 function UserBuilds.importString(str, pack, opts)
   opts = opts or {}
-  if not (pack and pack.class) then return nil, "no data pack for your class" end
+  -- PF-D7: the class check is F1a's own (`playerClass`, the player's `db.keys.class`, falling back
+  -- to `pack.class` for the handful of callers that build a synthetic pack) -- not "does a pack
+  -- exist". A pack-less class can still import a fork of their own.
+  local class = playerClass(pack)
+  if not class then return nil, "no data pack for your class" end
   local s = store()
   if not s then return nil, "saved variables are not loaded" end
   if not ns.Serialize then return nil, "serializer is not loaded" end
@@ -149,17 +160,17 @@ function UserBuilds.importString(str, pack, opts)
   if not bundle then return nil, err end
   local build = bundle.build
   if type(build) ~= "table" then return nil, "no build in string" end
-  if build.class and build.class ~= pack.class then
-    return nil, string.format("that build is for %s, not %s", tostring(build.class), tostring(pack.class))
+  if build.class and build.class ~= class then
+    return nil, string.format("that build is for %s, not %s", tostring(build.class), tostring(class))
   end
 
-  local parent = (pack.builds and pack.builds[build.key]) and build.key or nil
+  local parent = (pack and pack.builds and pack.builds[build.key]) and build.key or nil
   local key = uniqueKey(s, UserBuilds.slug(opts.name or build.name or build.key))
   local name = opts.name or build.name or key
   build.key = key
   build.name = name
   s[key] = {
-    build = build, class = pack.class, name = name,
+    build = build, class = class, name = name,
     derivedFrom = parent, derivedAt = parent and catalogUpdated(pack, parent) or nil,
     importedAt = opts.today,
   }
@@ -240,7 +251,11 @@ function UserBuilds.create(pack, name)
   if not class then return nil, "no data pack for your class" end
 
   local key = uniqueKey(s, UserBuilds.slug(name))
-  local build = { key = key, name = name, class = class, entries = {} }
+  -- PF-D3: without this an empty fork failed `Schema.validate`'s own version check on its FIRST
+  -- save ("schema must be 1 (got nil)") -- `fork()` never hit this because `deepCopy` carries the
+  -- template's own `schema` field along with everything else.
+  local build = { key = key, name = name, class = class, entries = {},
+                  schema = ns.Schema and ns.Schema.VERSION }
   s[key] = { build = build, class = class, name = name }
   return key
 end
@@ -320,11 +335,12 @@ UserBuilds.ENTRY_FIELDS = ENTRY_FIELDS
 -- pass at load, and either all of it lands or none of it does.
 --
 -- `reasons` is always a list, so a caller can print them without asking which shape it got.
+--
+-- PF-D1: no longer refuses outright on a nil `pack` -- `ctxFor` (above) always hands
+-- `Schema.validate` a `spells` table built from the registry (`Spells.merged`, pack optional), so a
+-- typo'd key is still caught with no data pack at all. `UserBuilds.find` is itself nil-pack-safe
+-- (F1a), so a pack-less class's own fork is found exactly as a shipped-pack class's is.
 function UserBuilds.replaceEntries(pack, key, entries)
-  -- Refused rather than validated against an empty ctx: without the pack's tables `Schema.validate`
-  -- cannot check a single symbolic key, so it would accept a rotation naming spells that do not
-  -- exist and the failure would surface as an empty queue much later.
-  if not (pack and pack.class) then return false, { "no data pack for your class" } end
   local build, origin = UserBuilds.find(pack, key)
   if origin ~= "fork" then return false, { "not one of your rotations" } end
   if type(entries) ~= "table" then return false, { "a rotation is a list of lines" } end

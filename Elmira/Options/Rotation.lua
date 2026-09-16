@@ -23,15 +23,38 @@ local function pack()
   return ns.Display and ns.Display.currentPack and ns.Display.currentPack()
 end
 
+-- READING falls back to the shipped defaults, so the panel renders correctly if it is ever built
+-- before AceDB has handed over a profile.
+local function profile()
+  return (ns.db and ns.db.profile) or (ns.DB and ns.DB.defaults.profile) or {}
+end
+
+-- WRITING must never fall back. `DB.defaults.profile` is one shared table that every future profile
+-- is copied from, so a setter reaching it would not lose the click -- it would silently change the
+-- default for every character made afterwards, for the rest of the session.
+local function writableProfile()
+  return ns.db and ns.db.profile
+end
+
 -- What is selected, and whether it is actually going. THREE states, not two: nothing selected, a
 -- build selected that could not be loaded, and a build running. `Display.activeBuild` answers
 -- compiled, key, reason -- and the KEY SURVIVES A COMPILE FAILURE (Display/Driver.lua:75-77 returns
 -- `nil, key, "...failed to compile"`), so reading the key on its own prints "Running: Exodin" while
 -- nothing is queued at all. That is the exact shape this panel exists to stop.
 --
+-- RP1-D1 (2026-09-14 bug round): `Display.activeBuild()` is the ENGINE's answer, and the engine
+-- falls back to the catalog's recommended entry the moment nothing is pinned (Core/Profiles.resolve's
+-- override -> detection -> catalog chain, by design -- correct for the strip, which has to suggest
+-- something). This panel's own "which card is gold" is a different question -- "did the PLAYER choose
+-- this" -- and `profile.activeBuild` (`false` = unset) is its one answer: the SAME test
+-- `Wizard.wantsFirstRun` (Setup/Wizard.lua) and `Queue.wantsPlaceholder` (Display/Queue.lua) already
+-- make. Nothing pinned means nothing selected, full stop -- the resolver is not even asked, so a
+-- catalog fallback can never be mistaken for a running build here.
+--
 -- Not `local a, b = cond and f()` either: in Lua an `and` expression is adjusted to ONE value, so
 -- every return past the first silently arrives as nil. luacheck caught that twice in this file.
 local function activeState()
+  if not profile().activeBuild then return nil, false, nil end
   if not (ns.Display and ns.Display.activeBuild) then return nil end
   local compiled, key, reason = ns.Display.activeBuild()
   return key, compiled ~= nil, reason
@@ -99,19 +122,6 @@ local FROM_REL = 0.1875       -- "copied from <template>", beside a fork's name
 local function findBuild(p, key)
   if not (ns.UserBuilds and ns.UserBuilds.find) then return nil end
   return ns.UserBuilds.find(p, key)
-end
-
--- READING falls back to the shipped defaults, so the panel renders correctly if it is ever built
--- before AceDB has handed over a profile.
-local function profile()
-  return (ns.db and ns.db.profile) or (ns.DB and ns.DB.defaults.profile) or {}
-end
-
--- WRITING must never fall back. `DB.defaults.profile` is one shared table that every future profile
--- is copied from, so a setter reaching it would not lose the click -- it would silently change the
--- default for every character made afterwards, for the rest of the session.
-local function writableProfile()
-  return ns.db and ns.db.profile
 end
 
 -- ---------------------------------------------------------------- the tree (R1, ADR-0015 amendment)
@@ -923,9 +933,13 @@ end
 -- widening it here is what makes the two agree. The `ns.Spells and ... or p.spells` fallback is
 -- for the handful of specs that load this file without `Core/Spells.lua`, exactly as `ctxFor`'s own
 -- comment explains -- not a silent narrowing for anyone else.
+--
+-- PF-D6: `ns.Spells.merged` is called even with `p == nil` (it takes an optional pack, PF), so a
+-- pack-less class's D65 pre-save warning still resolves a registry spell's name instead of greying
+-- every line as unrecognised.
 local function wordCtx()
   local p = pack()
-  local spells = (p and ns.Spells and ns.Spells.merged and ns.Spells.merged(p)) or (p and p.spells)
+  local spells = (ns.Spells and ns.Spells.merged and ns.Spells.merged(p)) or (p and p.spells)
   return { L = L, name = Rotation.spellLabel, slotName = slotLabel,
            spells = spells, sets = p and p.sets,
            souls = p and p.souls, bonuses = p and p.bonuses }
@@ -1225,9 +1239,12 @@ function Rotation.actionChoices(entry)
   -- The icon travels in the LABEL, not as a separate arg: a dropdown button's text is an ordinary
   -- FontString, which renders a `|T...|t` escape exactly as any other description on this page does
   -- -- the same trick D84's header needed once the icon could no longer sit beside a plain label.
+  -- VL2-D1: the SAME helper the Value dropdown uses (`Rotation.spellChoiceLabel`, below), so a
+  -- spell reads "(id)" in both places -- a palette row's own `row.label` overrides the helper's
+  -- default name (it may be rank-qualified, e.g. the palette's own wording, where `spellLabel`
+  -- alone would not be), so the icon+id rule stays in exactly one place.
   for _, row in ipairs(Rotation.paletteSpells()) do
-    local icon = ns.Display and ns.Display.spellIcon and ns.Display.spellIcon(row.key)
-    values["spell:" .. row.key] = (icon and ("|T" .. tostring(icon) .. ":0|t ") or "") .. row.label
+    values["spell:" .. row.key] = Rotation.spellChoiceLabel(row.key, row.label)
   end
   for _, row in ipairs(Rotation.paletteItems()) do
     local icon = ns.Display and ns.Display.itemIcon and ns.Display.itemIcon(row.slot)
@@ -1235,9 +1252,7 @@ function Rotation.actionChoices(entry)
   end
   paletteSearch = savedSearch
   if entry and entry.spell and values["spell:" .. entry.spell] == nil then
-    local icon = ns.Display and ns.Display.spellIcon and ns.Display.spellIcon(entry.spell)
-    values["spell:" .. entry.spell] =
-      (icon and ("|T" .. tostring(icon) .. ":0|t ") or "") .. Rotation.spellLabel(entry.spell)
+    values["spell:" .. entry.spell] = Rotation.spellChoiceLabel(entry.spell)
   end
   if entry and entry.item and values["item:" .. entry.item] == nil then
     values["item:" .. entry.item] = slotLabel(entry.item)
@@ -1274,16 +1289,21 @@ end
 -- spellbook -- exactly as D58 already lets the palette append one (D86). Only `spells` differs from
 -- `pack()` itself; every other table (sets/souls/bonuses, which have no registry of their own)
 -- passes through untouched.
+--
+-- PF-D6: a class with no shipped pack at all (`pack()` is nil) used to answer nil here too, which
+-- made `Conditions.keys` answer `{}` for every spell-shaped source and the Value dropdown looked
+-- enabled and permanently empty. `ns.Spells.merged(nil)` is the registry alone, so this now
+-- synthesises `{ spells = <registry> }` -- a pack-less class's own added/spellbook spells, and
+-- nothing else (there is no pack-less `sets`/`souls`/`bonuses` registry, PF "not in scope").
 local function mergedPack()
   local p = pack()
-  if not p then return p end
-  local spells = (ns.Spells and ns.Spells.merged and ns.Spells.merged(p)) or p.spells
-  if spells == p.spells then return p end -- mutants: equivalent an early return here only SKIPS
+  local spells = (ns.Spells and ns.Spells.merged and ns.Spells.merged(p)) or (p and p.spells)
+  if p and spells == p.spells then return p end -- mutants: equivalent an early return here only SKIPS
   -- building a copy whose `spells` field would end up holding this exact same value anyway --
   -- every reader below asks for FIELDS, never for `p`'s own identity, so the allocated copy and `p`
   -- itself answer every one of those questions alike; this is a pure allocation-avoidance line.
   local merged = {}
-  for k, v in pairs(p) do merged[k] = v end
+  if p then for k, v in pairs(p) do merged[k] = v end end
   merged.spells = spells
   return merged
 end
@@ -1377,6 +1397,20 @@ function Rotation.setCondition(index, at, field, value)
     model.rows[at] = fresh
   elseif FIELDS_SET_DIRECTLY[field] then
     row[field] = value
+    -- VL3-D1: picking a numeric Test ("stacks at most", a seconds op, ...) on a row that has no
+    -- number yet must survive the write/read round trip. `Conditions.fromRows` -> `condOf`
+    -- (Core/Conditions.lua ~:323-326) only writes the qualifier when `tonumber(row.value)` is not
+    -- nil, so a bare op switch with nothing to carry wrote the valueless condition back out, and
+    -- the very next `toRows` read it as `present` -- the Test snapping back before the Amount box
+    -- (which only op.arg == "number" renders, below) ever appeared. Seeding here, not in `condOf`,
+    -- keeps the converter pure: it never invents data, the editor does.
+    if field == "op" then
+      local rowField = ns.Conditions.field(row.kind)
+      local op = rowField and (ns.Conditions.op(rowField, value) or rowField.ops[1])
+      if op and op.arg == "number" and not tonumber(row.value) then
+        row.value = 1
+      end
+    end
   else
     return false
   end
@@ -1690,8 +1724,19 @@ function Rotation.contextLine()
   local hp
   if hasTarget then hp = ask(state.targetHPPct) end
   if type(hp) == "number" then parts[#parts + 1] = string.format(L["target HP %d%%"], hp) end
+  -- M5a-i-D4: "Enemies: nameplates off" only when the ADAPTER positively says nameplates are off --
+  -- a state that cannot answer `enemies` at all (missing accessor, a broken fake, an error) leaves
+  -- the reading out entirely, same as every other line above, rather than naming a cause nothing
+  -- confirmed.
   local enemies = ask(state.enemies)
-  if type(enemies) == "number" then parts[#parts + 1] = string.format(L["enemies %d"], enemies) end
+  if type(enemies) == "number" then
+    parts[#parts + 1] = string.format(L["Enemies: %d"], enemies)
+  else
+    local caps = ns.Adapter and ns.Adapter.capabilities and ns.Adapter.capabilities()
+    if caps and caps.nameplates == false then
+      parts[#parts + 1] = L["Enemies: nameplates off"]
+    end
+  end
   -- Not through `ask`: `power` answers current AND maximum, and a helper that returns one value
   -- truncates the pair to the first -- so the cap would always arrive nil and the mana reading
   -- would never be printed. luacheck has caught this exact truncation twice in this file.
@@ -1894,10 +1939,50 @@ local function isSpellShaped(source)
   return source == "spells" or source == "seals" or source == "runes" or source == "castables"
 end
 
+-- PF-D5: `set`/`bonus`/`enchant` (keySource "sets"/"bonuses"/"souls") have no pack-less registry --
+-- unlike a spell, a set piece or a shoulder soul is never something a player "adds" by hand, so with
+-- no class data pack there is nothing at all to offer in the Value dropdown. Detecting effects
+-- rather than causes (rule 5) already covers this character: the aura the bonus grants shows up as
+-- a plain Buff condition.
+local function isPackOnlySource(source)
+  return source == "sets" or source == "souls" or source == "bonuses"
+end
+
+local function packOnlyReason()
+  return L["Needs a class data pack. Most set bonuses and procs show as a buff on you, so use Buff "
+           .. "instead."]
+end
+
+-- VL1-D1/VL2-D1: the owner's report, in BOTH the condition Value dropdown and a line's Ability
+-- select -- a spell-shaped key (buff/debuff/seal/rune/castable, or a palette spell) reads
+-- "<icon> Name (<id>)", the same shape the spellbook picker (Options/Spells.lua
+-- `spellbookChoices`) already uses. The icon is `Display.spellIcon` (D81's merged-registry lookup)
+-- -- never `GetSpellTexture` from this file (hard rule 3) -- and the id is THIS file's own
+-- `mergedPack`, so a spell added by id, by name or from the spellbook (D86) carries its id too, and
+-- a pack entry wins a collision exactly as `mergedPack` already decides. No id at all (an unresolved
+-- key, or a registry/pack entry with a non-numeric id) drops the parentheses instead of printing
+-- them empty. `nameOverride`, when given, replaces `spellLabel(key)` as the name part -- the palette
+-- may show a rank-qualified name `spellLabel` alone would not -- so `actionChoices` and `keyLabel`
+-- share this ONE rule for the `(id)` suffix rather than each growing its own copy of it. A table
+-- field (`Rotation.spellChoiceLabel`), not a `local`, because `actionChoices` is defined earlier in
+-- this file and needs to call it too.
+function Rotation.spellChoiceLabel(key, nameOverride)
+  local icon = ns.Display and ns.Display.spellIcon and ns.Display.spellIcon(key)
+  local prefix = icon and ("|T" .. tostring(icon) .. ":0|t ") or ""
+  local name = nameOverride or Rotation.spellLabel(key)
+  local p = mergedPack()
+  local data = p and p.spells and p.spells[key]
+  local id = data and data.id
+  if type(id) == "number" then
+    return prefix .. name .. " (" .. id .. ")"
+  end
+  return prefix .. name
+end
+
 local function keyLabel(source, key)
   -- Only the spell-shaped sources get a client name; a mode, a creature type or a power kind IS
   -- its own label, and running "AoE" through the spell lookup would answer "AoE" the long way.
-  if isSpellShaped(source) then return Rotation.spellLabel(key) end
+  if isSpellShaped(source) then return Rotation.spellChoiceLabel(key) end
   local p = mergedPack()
   if source == "bonuses" then
     local bonus = p and p.bonuses and p.bonuses[key]
@@ -2028,10 +2113,18 @@ local function conditionArgs(model, index)
         -- dropdown of the row before it. A "full" control takes a row to itself in Flow
         -- (AceGUI-3.0.lua:761-770), which puts the label back over its own box; it is also the width
         -- PE3-D3 now needs, since a bonus's label is a whole sentence rather than a key.
+        -- PF-D5: never hidden and never left enabled-and-empty. With no class data pack, a
+        -- `set`/`bonus`/`enchant` row's Value dropdown has nothing to offer (there is no pack-less
+        -- registry for gear); it is disabled instead, with the reason as its tooltip.
+        local packOnlyNoPack = isPackOnlySource(field.keySource) and not pack()
         group.args.key = {
           type = "select", order = 7, width = "full", name = L["Value"],
           values = keyChoices(row.kind),
-          desc = function() return keySourceText(field.keySource, row.key) end,
+          desc = function()
+            if packOnlyNoPack then return packOnlyReason() end
+            return keySourceText(field.keySource, row.key)
+          end,
+          disabled = packOnlyNoPack,
           get = function() return row.key end,
           set = function(_, v) Rotation.setCondition(index, at, "key", v) end,
         }

@@ -51,7 +51,12 @@ function Vanilla.capabilities()
     -- must make `/elm debug perf` say so rather than quietly fall back to the whole-heap number.
     addonMemory = (UpdateAddOnMemoryUsage or (C_AddOns and C_AddOns.UpdateAddOnMemoryUsage)) ~= nil,
     inspect = false,
-    nameplates = false,
+    -- M5a-i: does this client's nameplates actually show enemies? Live, like `engraving` above --
+    -- it can change at any time (the player toggling nameplates in the Interface options, no reload
+    -- needed) -- and `false` when GetCVar itself is missing, never `true`: a client that cannot be
+    -- asked is a client that cannot be counted on. The count itself is then unknown, NOT 1
+    -- (Adapters/Vanilla.lua's `S:enemies()` below).
+    nameplates = GetCVar ~= nil and GetCVar("nameplateShowEnemies") ~= "0",
     -- D25/D49: does this client have the FrameXML helper that answers "does this chat window show
     -- System messages?" Display/Announcers picks the windows to print in with it, and falls back --
     -- to the frame's own method, then to the raw `messageTypeList`, then to DEFAULT_CHAT_FRAME --
@@ -379,6 +384,20 @@ function Vanilla.spellNameByID(id)
   return name
 end
 
+-- SL1-D1: id -> name, cached once per id for the life of the session. Unlike knownCache/costAmount
+-- below (which owe an answer to level, rank, gear or talent and get cleared on the events that
+-- move those), a spell's NAME never changes for its id, so nothing ever needs to invalidate this
+-- and no `clear()` call anywhere touches it. `false` (not nil) marks "asked, no answer" so a client
+-- that will not say is not re-asked every frame `findAura`'s name fallback runs.
+local spellNameCache = {} -- mutants: equivalent deletion only makes it a global
+local function nameOf(id)
+  local cached = spellNameCache[id]
+  if cached ~= nil then return cached or nil end
+  local name = Vanilla.spellNameByID(id)
+  spellNameCache[id] = name or false
+  return name
+end
+
 -- R2 (D53/D54c, capability `spellNameLookup`): "By name" resolves ONLY a name this client's own
 -- cache already holds -- GetSpellInfo answers nil for anything it has never seen, which is exactly
 -- the "this character has not seen it" boundary the add row is required to respect. The exact-match
@@ -512,6 +531,65 @@ function Vanilla.forgetSpellbook()
   forgetCharacter()
   return true
 end
+
+-- M5a-i: enemy count from nameplates, the DBM way -- DBM-Core's modules/ZoneCombatScanner.lua:103-
+-- 105 and modules/CombatDetection.lua:130-134, read on the same live install, count
+-- C_NamePlate.GetNamePlates() -> frame.namePlateUnitToken filtered by UnitAffectingCombat (a
+-- friendly plate is filtered by UnitIsFriend there). Elmira also requires UnitCanAttack (a friendly
+-- nameplate is never an enemy here either) and `not UnitIsDeadOrGhost` (a corpse mid-loot is not
+-- still engaged) -- an un-pulled pack drops out on its own, and aggro sets the combat flag at the
+-- pull, so there is no first-hit lag.
+--
+-- Cached, never scanned on the read path (`S:enemies()` below): GetNamePlates() allocates a table
+-- every call, and the read path is asked on every render tick (10 Hz) and by every `enemies`/`mode`
+-- condition in the active build. Core/Init.lua forwards NAME_PLATE_UNIT_ADDED/REMOVED, UNIT_FLAGS
+-- and PLAYER_REGEN_DISABLED/ENABLED here -- the only events that can move the answer -- the same way
+-- it forwards RUNE_UPDATED to forgetSpellbook above.
+local enemyCounted = nil -- last recount's answer: a number, or nil (unknown -- no plates, or off)
+local enemyDebug = { seen = 0, attackable = 0, inCombat = 0 }
+
+local function nameplatesEnabled()
+  return GetCVar ~= nil and GetCVar("nameplateShowEnemies") ~= "0"
+end
+
+-- Rebuilds the cached count. Called from Core/Init's event forwarding, and from
+-- `Vanilla.enemyDebugCounts` below for `/elm debug enemies`'s on-demand fresh scan; nothing on the
+-- render path calls this.
+function Vanilla.recountEnemies()
+  if not (C_NamePlate and C_NamePlate.GetNamePlates and nameplatesEnabled()) then
+    enemyCounted = nil
+    enemyDebug.seen, enemyDebug.attackable, enemyDebug.inCombat = 0, 0, 0
+    return enemyCounted
+  end
+  local seen, attackable, inCombat = 0, 0, 0
+  for _, frame in pairs(C_NamePlate.GetNamePlates()) do
+    local unit = frame.namePlateUnitToken
+    if unit then
+      seen = seen + 1
+      if UnitCanAttack("player", unit) and not UnitIsDeadOrGhost(unit) then
+        attackable = attackable + 1
+        if UnitAffectingCombat(unit) then inCombat = inCombat + 1 end
+      end
+    end
+  end
+  enemyDebug.seen, enemyDebug.attackable, enemyDebug.inCombat = seen, attackable, inCombat
+  enemyCounted = inCombat
+  return enemyCounted
+end
+
+-- `/elm debug enemies`: a fresh scan on demand, unlike the cached read path -- a diagnostic asked
+-- for once is exactly the case the "never per tick" rule does not cover, and the owner calibrating
+-- mid-dungeon wants the current pull, not whatever the last qualifying event left cached.
+function Vanilla.enemyDebugCounts()
+  Vanilla.recountEnemies()
+  return { seen = enemyDebug.seen, attackable = enemyDebug.attackable, inCombat = enemyDebug.inCombat,
+           nameplatesOn = nameplatesEnabled() }
+end
+
+-- The manual override (M5a-i-D2): under a forced mode, `enemies()`/`mode()` answer the same fixed
+-- reading regardless of what nameplates actually show. `ns.RotationMode` owns the DB storage and the
+-- cycle order; read here the same way `ns.Spells`/`ns.Swing` are read elsewhere in this file.
+local FORCED_ENEMY_COUNT = { Single = 1, Cleave = 2, AoE = 3 }
 
 function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   spells, sets, souls = spells or {}, sets or {}, souls or {}
@@ -718,7 +796,7 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   -- seen in: an aura that has dropped simply carries an old stamp. The first version of this scan
   -- allocated a table per aura per frame, which with fifteen buffs up in a city was 4 KB per
   -- recompute -- a fifth of everything the loop allocated.
-  local auraCache = {}   -- [unit][filter] = { stamp = <frame>, byID = { [spellID] = record } }
+  local auraCache = {}   -- [unit][filter] = { stamp = <frame>, byID = { [spellID] = record }, byName = { [name] = record } }
 
   local function auraScan(unit, filter)
     local stamp = frame()
@@ -729,11 +807,11 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
     end
     local held = byUnit[filter]
     if not held then
-      held = { stamp = nil, byID = {} }
+      held = { stamp = nil, byID = {}, byName = {} }
       byUnit[filter] = held
     end
-    local byID = held.byID
-    if held.stamp == stamp then return byID, stamp end
+    local byID, byName = held.byID, held.byName
+    if held.stamp == stamp then return byID, stamp, byName end
 
     for i = 1, 40 do
       local name, _, count, _, duration, expires, source, _, _, spellID = UnitAura(unit, i, filter)
@@ -749,18 +827,40 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
         if rec.stamp ~= stamp then
           rec.stamp, rec.count, rec.duration, rec.expires, rec.source = stamp, count, duration, expires, source
         end
+        -- SL1-D1: indexed by NAME too, so a castable's own aura can be found across ranks (a
+        -- character below the shipped rank's level applies a different id under the same name).
+        -- Checked against THIS stamp, same as byID above, and for the same reason: an old entry
+        -- from a rank no longer up must not shadow the current one just for being visited first
+        -- on a previous scan. Same record object as byID -- no extra table per aura.
+        local named = byName[name]
+        if not (named and named.stamp == stamp) then
+          byName[name] = rec
+        end
       end
     end
     held.stamp = stamp
-    return byID, stamp
+    return byID, stamp, byName
   end
 
   local function findAura(unit, key, filter, mineOnly)
     local id = resolve(key)
     if not id then return nil end
-    local byID, stamp = auraScan(unit, filter)
+    local byID, stamp, byName = auraScan(unit, filter)
     local aura = byID[id]
-    if not (aura and aura.stamp == stamp) then return nil end
+    if not (aura and aura.stamp == stamp) then
+      aura = nil
+      -- SL1-D1: name fallback only for a CASTABLE's own aura -- a record that is not flagged
+      -- `proc` or `aura`. Those two flags name something the client can apply under an id the pack
+      -- never expected for reasons that have nothing to do with rank (the Enigma 2pc proc is named
+      -- "Fire Blast"), and matching by name there would misreport a proc as the ability itself.
+      local record = spells[key]
+      if record and not (record.proc or record.aura) then
+        local name = nameOf(id)
+        local named = name and byName[name]
+        if named and named.stamp == stamp then aura = named end
+      end
+      if not aura then return nil end
+    end
     if mineOnly and aura.source ~= "player" then return nil end
     local remaining = aura.expires and (aura.expires - GetTime()) or 0
     local count = aura.count
@@ -1104,8 +1204,28 @@ function Vanilla.newState(spells, sets, souls, bonusDefs, sealLingerWindow)
   end
 
   function S:ttd() return nil end
-  function S:enemies() return 1 end
-  function S:mode() return "Single" end
+
+  -- M5a-i: Auto reads the cached nameplate count (nil when nameplates are off -- "unknown", not 1);
+  -- a forced mode (RotationMode.set/`/elm mode`/the keybinding) answers the same fixed count either
+  -- way, so a build's `{"enemies", min = 3}` line can be drilled on a single dummy.
+  function S:enemies()
+    local forced = ns.RotationMode and ns.RotationMode.get()
+    if forced and forced ~= "Auto" then return FORCED_ENEMY_COUNT[forced] end
+    return enemyCounted
+  end
+
+  -- Auto derives Single/Cleave/AoE from the same count `enemies()` reads, at the AoE threshold every
+  -- build's `{"enemies", min = 3}` line already uses (M5a-i-D2: unchanged, no build line moves). An
+  -- unknown count (nameplates off) reads Single -- the conservative answer, never assumed AoE.
+  function S:mode()
+    local forced = ns.RotationMode and ns.RotationMode.get()
+    if forced and forced ~= "Auto" then return forced end
+    local n = enemyCounted
+    if type(n) ~= "number" then return "Single" end
+    if n >= 3 then return "AoE" end
+    if n >= 2 then return "Cleave" end
+    return "Single"
+  end
 
   -- Round-trip to the world server, in ms. Used as the reaction lead on swing timing: the player
   -- needs to know when to PRESS, which is earlier than when the server swings. GetNetStats is

@@ -37,6 +37,11 @@ describe("Display.Driver", function()
     ns.log = function(fmt, ...) logged[#logged + 1] = string.format(fmt, ...) end
     helper.load("Elmira/Core/Ticker.lua")
     helper.load("Elmira/Core/Visibility.lua")
+    -- PF: `Display.activeBuild()` always asks `ns.Profiles.resolve` now (a pack-less class is a
+    -- normal state, not a guard Driver raises itself before ever reaching it), so this needs to be
+    -- loaded here exactly as it is in production (Core loads before Display in the TOC) -- otherwise
+    -- `Display.stats()` errors on ANY tick that never rendered (most of a hidden/no-pack session).
+    helper.load("Elmira/Core/Profiles.lua")
     Display = helper.load("Elmira/Display/Driver.lua")
     ns.db = { profile = { enabled = true, depth = 3, visibility = "always" } }
     stubState(false, false)
@@ -229,6 +234,28 @@ describe("Display.Driver", function()
       assert.is_true(#compiled.entries > 10)
     end)
 
+    -- Defensive fallback: `Core/UserBuilds.lua` itself not loaded at all is not a case a fork can
+    -- ever reach (there is nothing to look one up WITH), but a SHIPPED key must still resolve
+    -- straight off `pack.builds`, exactly as it did before ADR-0010 added forks at all.
+    it("resolves a shipped (non-fork) key straight off pack.builds with UserBuilds not loaded", function()
+      helper.load("Elmira/Adapters/Interface.lua")
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Profiles.lua")
+      ns.compileBuild = ns.compileBuild or function(b, ctx) return ns.Schema.compile(b, ctx) end
+      local pack = helper.classPack("Paladin")
+      ns.API = { GetProvider = function(kind, class)
+        return kind == "dataPacks" and class == "PALADIN" and pack or nil
+      end }
+      ns.Adapter = { playerClass = function() return "PALADIN" end }
+      ns.db = { profile = { activeBuild = "PALADIN_EXODIN" } }
+      ns.UserBuilds = nil
+      local compiled, key, reason = Display.activeBuild()
+      assert.equal("PALADIN_EXODIN", key)
+      assert.equal("pinned", reason)
+      assert.is_table(compiled)
+      assert.equal("PALADIN_EXODIN", compiled.key)
+    end)
+
     -- R2b (D75/D76): Save validating a registry-key line is not the whole story -- the ACTIVE
     -- build is what the render loop shows, and before this pass `packContext` still handed
     -- `Schema.compile` the pack's OWN spells table alone, so a saved rotation naming a registered
@@ -257,15 +284,79 @@ describe("Display.Driver", function()
       assert.is_table(compiled, tostring(reason))
       assert.equal(900, compiled.entries[1].data.id)
     end)
+
+    -- PF-D2: a COPY of a shipped template (a fork with `derivedFrom`) fails to compile with no pack
+    -- loaded, because its authored keys only resolve through the class pack it was written against
+    -- -- a self-built rotation has no such keys and never hits this path at all.
+    it("warns once, by name, that a copied template needs its class data pack, which is not loaded", function()
+      helper.load("Elmira/Core/Spells.lua")
+      helper.load("Elmira/Adapters/Interface.lua")
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Profiles.lua")
+      helper.load("Elmira/Core/UserBuilds.lua")
+      ns.compileBuild = ns.compileBuild or function(b, ctx) return ns.Schema.compile(b, ctx) end
+      ns.API = { GetProvider = function() return nil end } -- no pack registered for this class
+      ns.Adapter = { playerClass = function() return "ROGUE" end }
+      local said = {}
+      ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat = cat, text = text } end }
+      ns.db = { keys = { class = "ROGUE", char = "Arthorion - Realm" },
+                profile = { activeBuild = "USER_MINE" },
+                global = { userBuilds = { USER_MINE = {
+                  class = "ROGUE", derivedFrom = "ROGUE_TEMPLATE", name = "My copy",
+                  build = { schema = 1, key = "USER_MINE", name = "My copy", class = "ROGUE",
+                            entries = { { spell = "SINISTER_STRIKE" } } },
+                } } } }
+      local compiled, key, reason = Display.activeBuild()
+      assert.is_nil(compiled)
+      assert.equal("USER_MINE", key)
+      assert.truthy(reason:find("failed to compile", 1, true))
+      assert.equal(1, #said)
+      assert.equal("warning", said[1].cat)
+      assert.truthy(said[1].text:find("My copy", 1, true), said[1].text)
+      assert.truthy(said[1].text:find("ROGUE", 1, true), said[1].text)
+      assert.truthy(said[1].text:find("not loaded", 1, true), said[1].text)
+      -- Called again, exactly as the render loop would ten times a second: still just the one.
+      Display.activeBuild()
+      Display.activeBuild()
+      assert.equal(1, #said, "the warning is named once per build, not per tick")
+    end)
+
+    -- The mirror case: a self-built rotation (no `derivedFrom` at all) failing to compile for some
+    -- other reason must never be mistaken for "needs a pack" -- there is no template it is a copy of.
+    it("says nothing about a missing pack for a self-built rotation with no template at all", function()
+      helper.load("Elmira/Core/Spells.lua")
+      helper.load("Elmira/Adapters/Interface.lua")
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Profiles.lua")
+      helper.load("Elmira/Core/UserBuilds.lua")
+      ns.compileBuild = ns.compileBuild or function(b, ctx) return ns.Schema.compile(b, ctx) end
+      ns.API = { GetProvider = function() return nil end }
+      ns.Adapter = { playerClass = function() return "ROGUE" end }
+      local said = {}
+      ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat = cat, text = text } end }
+      ns.db = { keys = { class = "ROGUE", char = "Arthorion - Realm" },
+                profile = { activeBuild = "USER_MINE" },
+                global = { userBuilds = { USER_MINE = {
+                  class = "ROGUE", name = "Mine",
+                  -- No `schema` field: Schema.validate refuses it for a wholly different reason.
+                  build = { key = "USER_MINE", name = "Mine", class = "ROGUE",
+                            entries = { { spell = "UNKNOWN_SPELL" } } },
+                } } } }
+      local compiled = Display.activeBuild()
+      assert.is_nil(compiled)
+      assert.equal(0, #said)
+    end)
   end)
 
   describe("stats() build resolution", function()
     it("resolves a build via activeBuild() when nothing has rendered yet, carrying the reason", function()
-      -- No tick() has run: lastBuildKey is unset. ns.API is unset by default (before_each only sets
-      -- ns.db), so the real activeBuild() takes the "no data pack for this class" path.
+      -- No tick() has run: lastBuildKey is unset. ns.API has no GetProvider (currentPack() answers
+      -- nil), and nothing is pinned, so the real activeBuild() falls through to Profiles.resolve's
+      -- own "no data pack" reason -- PF: a pack-less class is a normal state Driver no longer
+      -- intercepts with a guard of its own.
       local s = Display.stats()
       assert.is_nil(s.build)
-      assert.equal("no data pack for this class", s.buildReason)
+      assert.equal("no data pack", s.buildReason)
     end)
 
     it("reports the RENDERED build key once a tick has painted, with no buildReason attached", function()
@@ -1168,6 +1259,68 @@ describe("Display.Driver", function()
     it("says so when the API cannot look a provider up", function()
       ns.API = { GetProviders = function() return { PALADIN = pack } end }
       assert.is_nil(Display.currentPack())
+    end)
+  end)
+
+  -- PF2: the twin of "resolving the pack..." above, for a class with NO shipped data pack at all
+  -- (`Display.currentPack()` answers nil). `packContext`'s identity cache is keyed on the pack, but
+  -- `Spells.merged(nil)` used to hand back a brand-new table on every call -- no cache slot exists
+  -- for a nil pack -- so `held.spells == spells` never held and every tick rebuilt the ctx and
+  -- recompiled the build behind it, exactly the per-frame allocation the style rule forbids.
+  describe("resolving a pack-less class's compile context without allocating (PF2)", function()
+    local UserBuilds, key
+
+    before_each(function()
+      helper.load("Elmira/Adapters/Interface.lua")
+      helper.load("Elmira/Core/Schema.lua")
+      helper.load("Elmira/Core/Spells.lua")
+      helper.load("Elmira/Core/Profiles.lua")
+      UserBuilds = helper.load("Elmira/Core/UserBuilds.lua")
+      helper.load("Elmira/Core/Slash.lua")        -- the real compile cache
+      ns.API = { GetProvider = function() return nil end, GetProviders = function() return {} end }
+      ns.Adapter = { playerClass = function() return "ROGUE" end }
+      ns.db = { keys = { class = "ROGUE", char = "Arthorion - Realm" },
+                char = { spells = {} }, global = { userBuilds = {} },
+                profile = {} }
+      local sinister = ns.Spells.add(ns.db.char.spells, { id = 1752, name = "Sinister Strike", source = "id" })
+      local newKey = UserBuilds.create(nil, "My rogue rotation")
+      local ok = UserBuilds.replaceEntries(nil, newKey, { { spell = sinister } })
+      assert.is_true(ok)
+      ns.db.profile.activeBuild = newKey
+      key = newKey
+    end)
+
+    it("resolves the pinned build with no pack loaded at all", function()
+      local compiled, resolvedKey, reason = Display.activeBuild()
+      assert.equal(key, resolvedKey)
+      assert.equal("pinned", reason)
+      assert.equal(1, #compiled.entries)
+    end)
+
+    it("hands the compile cache the same context every tick, so the compile is a hit", function()
+      local a = Display.activeBuild()
+      local b = Display.activeBuild()
+      assert.equal(a, b, "same compiled table: the ctx was reused, so the cache hit")
+      -- The FIRST call anywhere into a pack-less build's resolution chain (a fork, ADR-0010, one
+      -- nested call deeper than the with-pack twin above -- `UserBuilds.find`'s own visibility
+      -- check) pays a one-time allocation the with-pack twin never shows. The two direct
+      -- `Display.activeBuild()` calls above already paid it, same as they already paid the
+      -- compile-cache miss, so the measured loop below is clean.
+      local kb = helper.allocatedKB(function() for _ = 1, 10 do Display.activeBuild() end end)
+      assert.is_true(kb == nil or kb < 0.05, string.format("ten resolutions allocated %.3f KB", kb or 0))
+    end)
+
+    -- The observable PF2-D2 actually asks for: not "merged was called" but that the compile CACHE
+    -- served a hit. `ns.compileBuild` itself runs on every tick whether it hits or not (it is the
+    -- cache); `ns.Schema.compile` is what it calls out to on a MISS, so counting compiles there is
+    -- what actually distinguishes "compiled once" from "compiled every tick".
+    it("compiles the build exactly once across two frames with no pack loaded", function()
+      local calls = 0
+      local real = ns.Schema.compile
+      ns.Schema.compile = function(...) calls = calls + 1; return real(...) end
+      Display.activeBuild()
+      Display.activeBuild()
+      assert.equal(1, calls)
     end)
   end)
 

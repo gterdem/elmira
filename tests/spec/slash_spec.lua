@@ -50,10 +50,22 @@ describe("Core.Slash", function()
       assert.equal("ELM1:", lines[2]:sub(1, 5))
     end)
 
-    it("export names a missing key, and says so without a pack", function()
+    it("export names a missing key", function()
       assert.truthy(Slash.run("export GHOST")[1]:find("GHOST", 1, true))
+    end)
+
+    -- PF-D7: export has no pack precondition of its own any more -- with no pack it still resolves
+    -- the active key and asks UserBuilds, which is what actually names the failure.
+    it("works with no pack for the class, reporting UserBuilds' own failure rather than a blanket refusal", function()
+      ns.Display.currentPack = function() return nil end
+      local lines = Slash.run("export")
+      assert.is_falsy(lines[1]:find("no data pack", 1, true))
+      assert.truthy(lines[1]:find("PALADIN_EXODIN", 1, true))
+    end)
+
+    it("still says there is no active build once the Display module itself is gone", function()
       ns.Display = nil
-      assert.truthy(Slash.run("export")[1]:find("no data pack", 1, true))
+      assert.truthy(Slash.run("export")[1]:find("no active build", 1, true))
     end)
 
     -- AB4-D5: how many ability settings came with the rotation, the way the options window has
@@ -85,7 +97,13 @@ describe("Core.Slash", function()
       local lines = Slash.run("import " .. str .. " my wrath")
       assert.truthy(lines[1]:find("Imported as USER_MY_WRATH", 1, true))
       assert.equal("2026-09-03", ns.db.global.userBuilds.USER_MY_WRATH.importedAt)
-      assert.truthy(table.concat(Slash.run("profile"), "\n"):find("USER_MY_WRATH", 1, true))
+      -- The FIRST line only ("Builds: ..."): the second line ("Active: PALADIN_EXODIN (...)") names
+      -- PALADIN_EXODIN regardless of this list, which would make that assertion pass even with the
+      -- shipped-builds loop deleted outright.
+      local builds = Slash.run("profile")[1]
+      assert.truthy(builds:find("USER_MY_WRATH", 1, true))
+      -- The shipped builds themselves, from pack.builds -- not only the user's own fork.
+      assert.truthy(builds:find("PALADIN_EXODIN", 1, true), builds)
       assert.truthy(Slash.run("profile USER_MY_WRATH")[1]:find("Pinned to USER_MY_WRATH", 1, true))
       assert.equal("USER_MY_WRATH", ns.db.profile.activeBuild)
     end)
@@ -748,6 +766,106 @@ describe("Core.Slash", function()
     end)
   end)
 
+  -- M5a-i-D4: the reading every `enemies`/`mode` condition and Auto mode currently see.
+  describe("'debug state' shows the enemy count (M5a-i-D4)", function()
+    before_each(function()
+      _G.__ELM_NS.Adapter = { describe = function()
+        return { project = 2, version = "1.15.7", interface = 11509, caps = {}, state = "ready" }
+      end }
+    end)
+
+    it("adds no Enemies line at all when there is no live state to ask", function()
+      assert.is_false(hasLineMatching(Slash.run("debug state"), "^Enemies"))
+    end)
+
+    it("shows the count when the state answers a number", function()
+      local ns = helper.ns()
+      ns.API = { GetState = function() return { enemies = function() return 3 end } end }
+      assert.is_true(hasLineMatching(Slash.run("debug state"), "^Enemies: 3$"))
+    end)
+
+    it("says nameplates off rather than a number when the state cannot answer", function()
+      local ns = helper.ns()
+      ns.API = { GetState = function() return { enemies = function() return nil end } end }
+      assert.is_true(hasLineMatching(Slash.run("debug state"), "^Enemies: nameplates off$"))
+    end)
+
+    it("says nameplates off rather than erroring when the accessor itself errors", function()
+      local ns = helper.ns()
+      ns.API = { GetState = function() return { enemies = function() error("nope") end } end }
+      local lines
+      assert.has_no.errors(function() lines = Slash.run("debug state") end)
+      assert.is_true(hasLineMatching(lines, "^Enemies: nameplates off$"))
+    end)
+  end)
+
+  describe("'debug enemies'", function()
+    it("says the adapter is not loaded when it has no enemyDebugCounts", function()
+      assert.equal("enemies: adapter not loaded", Slash.run("debug enemies")[1])
+    end)
+
+    it("reports plates seen, attackable and in combat", function()
+      local ns = helper.ns()
+      ns.Adapter = { enemyDebugCounts = function()
+        return { seen = 5, attackable = 4, inCombat = 3, nameplatesOn = true }
+      end }
+      local lines = Slash.run("debug enemies")
+      assert.is_true(hasLineMatching(lines, "^enemies: 5 plate%(s%) seen, 4 attackable, 3 in combat$"))
+      assert.equal(2, #lines)
+      assert.is_true(hasLineMatching(lines, "in combat.* is the number every"))
+    end)
+
+    it("says nameplates are off instead of a zeroed-out count", function()
+      local ns = helper.ns()
+      ns.Adapter = { enemyDebugCounts = function()
+        return { seen = 0, attackable = 0, inCombat = 0, nameplatesOn = false }
+      end }
+      local line = Slash.run("debug enemies")[1]
+      assert.is_true(line:find("nameplates are off", 1, true) ~= nil)
+    end)
+  end)
+
+  describe("'mode' (M5a-i-D2)", function()
+    it("says it is not loaded when RotationMode is not loaded", function()
+      assert.equal("mode: not loaded", Slash.run("mode")[1])
+    end)
+
+    describe("with RotationMode loaded", function()
+      local ns
+      before_each(function()
+        ns = helper.ns()
+        ns.db = { char = {} }
+        ns.RotationMode = helper.load("Elmira/Core/RotationMode.lua")
+      end)
+
+      it("reports the current mode and usage with no argument", function()
+        local line = Slash.run("mode")[1]
+        assert.is_true(line:find("Rotation mode: Auto", 1, true) ~= nil)
+        assert.is_true(line:find("Usage", 1, true) ~= nil)
+      end)
+
+      it("forces a mode, case-insensitively, and confirms it", function()
+        assert.equal("Rotation mode: AoE.", Slash.run("mode aoe")[1])
+        assert.equal("AoE", ns.db.char.rotationMode)
+        assert.equal("Rotation mode: Cleave.", Slash.run("mode CLEAVE")[1])
+        assert.equal("Cleave", ns.db.char.rotationMode)
+      end)
+
+      it("returns to Auto", function()
+        Slash.run("mode single")
+        assert.equal("Rotation mode: Auto.", Slash.run("mode auto")[1])
+        assert.equal("Auto", ns.db.char.rotationMode)
+      end)
+
+      it("rejects an unrecognised mode and changes nothing", function()
+        ns.db.char.rotationMode = "Cleave"
+        local line = Slash.run("mode nonsense")[1]
+        assert.is_true(line:find("No mode", 1, true) ~= nil)
+        assert.equal("Cleave", ns.db.char.rotationMode)
+      end)
+    end)
+  end)
+
   it("verb matching is case-insensitive", function()
     local lower = table.concat(Slash.run("debug state"), "\n")
     local upper = table.concat(Slash.run("DEBUG state"), "\n")
@@ -778,9 +896,21 @@ describe("Core.Slash", function()
     assert.equal("Opening your rotations.", lines[1])
   end)
 
-  it("'profile' and 'advise' degrade the same way rather than erroring", function()
-    assert.equal("profile: no data pack for your class", Slash.run("profile")[1])
+  -- PF-D7: 'profile' dropped its pack precondition -- with no pack and no Display module at all it
+  -- still lists (empty) rather than refusing outright. 'advise' reads pack-only gear data and keeps
+  -- its own, earlier refusal (the advisor module is not loaded here at all).
+  it("'profile' lists rather than refusing with no pack, and 'advise' still degrades without erroring", function()
+    assert.equal("Builds: ", Slash.run("profile")[1])
     assert.equal("advise: the advisor is not loaded", Slash.run("advise")[1])
+  end)
+
+  -- PF-D7: gear advice lives on the pack's own `advice` table, so 'advise' keeps its refusal on a
+  -- pack-less class once past its EARLIER "advisor not loaded" guard -- only the wording changed.
+  it("'advise' needs a class data pack once the advisor itself is loaded", function()
+    local ns = helper.ns()
+    ns.Advisor, ns.Detect, ns.API = {}, {}, {}
+    ns.Display = { currentPack = function() return nil end }
+    assert.equal("advise: needs a class data pack", Slash.run("advise")[1])
   end)
 
   it("'sim' names a non-integer milestone label correctly", function()
@@ -982,6 +1112,16 @@ describe("Core.Slash", function()
       assert.equal("4of9-t3", ns.Recorder.marks()[1].label)
     end)
 
+    -- PF-D7: a mark captures PACK-ONLY data (Collector.snapshot's comparisons), so it keeps its
+    -- refusal on a pack-less class -- only the wording changed.
+    it("needs a class data pack to record a mark", function()
+      local ns = helper.ns()
+      ns.Recorder = helper.load("Elmira/Core/Recorder.lua")
+      ns.Recorder.reset(); ns.Recorder.start(0)
+      ns.API = { GetProviders = function() return {} end }
+      assert.equal("rec: needs a class data pack", Slash.run("rec mark")[1])
+    end)
+
     -- The first live run was started mid-combat, so its baseline mark was a combat snapshot and
     -- meant something different from every mark after it.
     it("refuses to start recording while in combat", function()
@@ -1010,6 +1150,18 @@ describe("Core.Slash", function()
     it("lists queue as an available debug subcommand", function()
       local out = table.concat(Slash.run("debug"), "\n")
       assert.truthy(out:find("queue", 1, true), out)
+    end)
+  end)
+
+  -- PF-D7: `/elm debug dump` reads PACK-ONLY data (Collector.snapshot's comparisons), so it keeps
+  -- its refusal on a pack-less class -- only the wording changed.
+  describe("debug dump", function()
+    it("needs a class data pack", function()
+      local ns = helper.ns()
+      ns.Collector = { snapshot = function() return {} end }
+      ns.Adapter = { playerClass = function() return "ROGUE" end }
+      ns.API = { GetProviders = function() return {} end }
+      assert.equal("dump: needs a class data pack", Slash.run("debug dump")[1])
     end)
   end)
 

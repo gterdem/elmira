@@ -124,8 +124,13 @@ DB.defaults = {
   -- AT6-D4 removed `textures.anchor` with the indicator row it positioned: a texture now sits at
   -- the centre of the screen plus its own stored offset, and that offset lives in the ability's own
   -- settings row (`abilities[key].texture.x/y`) where every other thing about it lives.
+  -- M5a-i-D2: the manual Single/Cleave/AoE override (Core/RotationMode.lua), per character like the
+  -- rest of this table. Reset to "Auto" on every PLAYER_ENTERING_WORLD (Core/Init.lua) -- login and
+  -- /reload both -- so a forced mode never silently outlives the session that set it; it lives here
+  -- rather than in memory only so `/elm mode` (no display argument) and the Rotation panel read the
+  -- one stored answer instead of two copies that could disagree.
   char = { setupDone = 0, pinnedBuild = false, snoozed = {}, firstRunDismissed = false, spells = {},
-           abilities = {}, sounds = { enabled = false } },
+           abilities = {}, sounds = { enabled = false }, rotationMode = "Auto" },
 }
 
 -- Ordered migration lists. Each entry: { version = N, apply = function(target) end }. Empty at M0;

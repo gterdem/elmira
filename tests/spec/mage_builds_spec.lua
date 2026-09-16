@@ -110,44 +110,73 @@ describe("Elmira/Classes/Mage.lua — independent build-derivation coverage", fu
   end)
 
   -- ============================================================================================
-  -- 3. Fire: Fire Vulnerability / Scorch stack maintenance (the three SCORCH entries).
+  -- 3. Fire: Fire Vulnerability / Scorch stack maintenance (VL2-D7: one SCORCH entry, an `any` of
+  --    `max = 4` (absent or 1-4 stacks) and `maxRemaining = 4` (refresh at 5 stacks, 4s or less
+  --    left) -- the same four states the old three-entry version covered, same outcomes.
   -- ============================================================================================
-  describe("MAGE_FIRE Scorch stack maintenance (entries 3-5)", function()
-    -- Isolated to just the Scorch chain: no Hot Streak, no Overheat, so entries 1-2 never preempt it.
+  describe("MAGE_FIRE Scorch stack maintenance (entry 3)", function()
+    local SCORCH_LABEL = "Scorch to 5, refresh under 4s"
+    -- Isolated to just the Scorch line: no Hot Streak, no Overheat, so entries 1-2 never preempt it.
     local ISOLATED = { runes = {}, buffs = {} }
 
-    it("0 stacks (debuff absent): 'Stack Scorch' fires", function()
+    it("0 stacks (debuff absent): Scorch fires", function()
       local state = stateOf(ISOLATED)
       local first = Engine.pick(fireBuild, state, 0)
       assert.equal("SCORCH", first.spell)
-      assert.equal("Stack Scorch", first.label)
+      assert.equal(SCORCH_LABEL, first.label)
     end)
 
-    it("5 stacks, 10s remaining: none of the three Scorch entries are eligible", function()
+    it("5 stacks, 10s remaining: the Scorch entry is not eligible", function()
       local state = stateOf{ runes = {}, buffs = {},
                               debuffs = { FIRE_VULNERABILITY = { stacks = 5, remaining = 10, mine = true } } }
-      assert.is_false(Engine.eligible(findEntry(fireBuild, "SCORCH", "Stack Scorch"), state, 0))
-      assert.is_false(Engine.eligible(findEntry(fireBuild, "SCORCH", "Refresh Scorch"), state, 0))
-      assert.is_false(Engine.eligible(findEntry(fireBuild, "SCORCH", "5 stacks"), state, 0))
+      assert.is_false(Engine.eligible(findEntry(fireBuild, "SCORCH", SCORCH_LABEL), state, 0))
       -- and the actual pick falls through past Scorch entirely, to Living Bomb maintenance.
       local first = Engine.pick(fireBuild, state, 0)
       assert.equal("LIVING_BOMB", first.spell)
     end)
 
-    it("5 stacks, 3s remaining: 'Refresh Scorch' fires", function()
+    it("5 stacks, 3s remaining: Scorch fires (refresh before it falls off)", function()
       local state = stateOf{ runes = {}, buffs = {},
                               debuffs = { FIRE_VULNERABILITY = { stacks = 5, remaining = 3, mine = true } } }
       local first = Engine.pick(fireBuild, state, 0)
       assert.equal("SCORCH", first.spell)
-      assert.equal("Refresh Scorch", first.label)
+      assert.equal(SCORCH_LABEL, first.label)
     end)
 
-    it("4 stacks (comfortable remaining): '5 stacks' fires (keep stacking to the cap)", function()
+    it("4 stacks (comfortable remaining): Scorch fires (keep stacking to the cap)", function()
       local state = stateOf{ runes = {}, buffs = {},
                               debuffs = { FIRE_VULNERABILITY = { stacks = 4, remaining = 10, mine = true } } }
       local first = Engine.pick(fireBuild, state, 0)
       assert.equal("SCORCH", first.spell)
-      assert.equal("5 stacks", first.label)
+      assert.equal(SCORCH_LABEL, first.label)
+    end)
+  end)
+
+  -- ============================================================================================
+  -- 3b. VL2-D5: the `debuff` `max` op in isolation, through a synthetic one-entry build -- not the
+  --     shipped Fire build's own combined `any` line (VL2-D7, which uses `max = 4`), so this is
+  --     independent proof the op itself suggests Scorch through the cap and stops past it.
+  -- ============================================================================================
+  describe("debuff max op in isolation (VL2-D5)", function()
+    local function stackBuild()
+      return compile{ schema = 1, key = "VL2_D5_SCORCH_MAX", name = "VL2-D5 test", class = "MAGE",
+        entries = { { spell = "SCORCH", when = { { "debuff", "FIRE_VULNERABILITY", max = 2 } } } } }
+    end
+
+    for _, stacks in ipairs({ 0, 1, 2 }) do
+      it("suggests Scorch at " .. stacks .. " stacks", function()
+        local debuffs = stacks > 0
+          and { FIRE_VULNERABILITY = { stacks = stacks, remaining = 10, mine = true } } or nil
+        local state = stateOf{ debuffs = debuffs }
+        local first = Engine.pick(stackBuild(), state, 0)
+        assert.is_not_nil(first, "expected Scorch to be suggested at " .. stacks .. " stacks")
+        assert.equal("SCORCH", first.spell)
+      end)
+    end
+
+    it("does not suggest Scorch at 3 stacks", function()
+      local state = stateOf{ debuffs = { FIRE_VULNERABILITY = { stacks = 3, remaining = 10, mine = true } } }
+      assert.is_nil(Engine.pick(stackBuild(), state, 0))
     end)
   end)
 

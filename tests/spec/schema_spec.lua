@@ -211,8 +211,9 @@ describe("Core.Schema (docs/02-CONDITION-SCHEMA.md, ADR-0002)", function()
     end)
 
     -- MG1-D5(b): `min` (stacks at least) mirrors `buff`'s own `min` — Scorch/Fire Vulnerability's
-    -- "5 stacks" check needs it, and unlike `buff`'s `max` there is no absence-passes reading: the
-    -- debuff must be ON THE TARGET for a stack count to mean anything.
+    -- "5 stacks" check needs it. VL2-D4 gave `debuff` its own `max` with `buff`'s absence-passes
+    -- reading (tested below, next to `buff`'s own `max` cases); `min` alone, with no `max` set, still
+    -- requires presence — the debuff must be ON THE TARGET for a stack count to mean anything.
     it("min: fails when present but below the stack floor", function()
       local test = pred({ { "debuff", "SOME_DEBUFF", min = 5 } })
       local s = FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, stacks = 4 } } }
@@ -236,6 +237,51 @@ describe("Core.Schema (docs/02-CONDITION-SCHEMA.md, ADR-0002)", function()
       assert.is_true(test(expiringSoon, 0))
       assert.is_false(test(freshlyApplied, 0))
       assert.is_false(test(FakeState.new{}, 0))
+    end)
+
+    -- VL2-D4: `max` ("stacks at most") gives `debuff` `buff`'s exact absence-passes reading (compare
+    -- the `buff` "max" describe above) — "cast Scorch until 3 stacks" is now one row.
+    describe("max (VL2-D4: stacks at most, passes on absence too, mirrors buff's max)", function()
+      it("passes when the debuff is entirely absent", function()
+        local test = pred({ { "debuff", "SOME_DEBUFF", max = 2 } })
+        assert.is_true(test(FakeState.new{}, 0))
+      end)
+      it("passes at or below the cap", function()
+        local test = pred({ { "debuff", "SOME_DEBUFF", max = 2 } })
+        assert.is_true(test(FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, stacks = 1 } } }, 0))
+        assert.is_true(test(FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, stacks = 2 } } }, 0))
+      end)
+      it("fails once stacks exceed the cap", function()
+        local test = pred({ { "debuff", "SOME_DEBUFF", max = 2 } })
+        assert.is_false(test(FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, stacks = 3 } } }, 0))
+      end)
+      it("combined with min: absence still passes, but presence still enforces the floor", function()
+        local test = pred({ { "debuff", "SOME_DEBUFF", max = 2, min = 1 } })
+        assert.is_true(test(FakeState.new{}, 0), "buff's own max/min combo: absence passes even with min set")
+        assert.is_false(test(FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, stacks = 3 } } }, 0))
+      end)
+      -- Distinct from the case above: stacks = 1 is within the max (3) but below the min (2), so
+      -- only the min half of the combo can reject it -- pins the floor check on its own line.
+      it("combined with min: present but below the floor fails even while within the cap", function()
+        local test = pred({ { "debuff", "SOME_DEBUFF", max = 3, min = 2 } })
+        assert.is_false(test(FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, stacks = 1 } } }, 0))
+        assert.is_true(test(FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, stacks = 2 } } }, 0))
+      end)
+      it("combined with maxRemaining: still requires the window once the debuff is up", function()
+        local test = pred({ { "debuff", "SOME_DEBUFF", max = 2, maxRemaining = 4 } })
+        local s = FakeState.new{ debuffs = { SOME_DEBUFF = { mine = true, stacks = 2, remaining = 10 } } }
+        assert.is_false(test(s, 0))
+      end)
+      -- `mine = false` still routes through `state:debuff(key, false)`: with the default `mine`
+      -- (true) a foreign application of the same debuff reads as ABSENT to this character, which
+      -- `max` would then wrongly excuse; only `mine = false` sees it as present and enforces the cap.
+      it("mine = false still routes through state:debuff(key, false)", function()
+        local foreignOverCap = FakeState.new{ debuffs = { SOME_DEBUFF = { mine = false, stacks = 3 } } }
+        assert.is_true(pred({ { "debuff", "SOME_DEBUFF", max = 2 } })(foreignOverCap, 0),
+          "default mine=true: a foreign debuff reads as absent, and absent passes")
+        assert.is_false(pred({ { "debuff", "SOME_DEBUFF", max = 2, mine = false } })(foreignOverCap, 0),
+          "mine=false: the same debuff is now seen, over the cap, and must fail")
+      end)
     end)
   end)
 

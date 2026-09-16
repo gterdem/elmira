@@ -99,6 +99,11 @@ describe("Options/Rotation (the Rotation section)", function()
                    currentQueue = function() return nil end,
                    gateRows = function() return nil, {} end,
                    refresh = function() end }
+    -- RP1-D1: the panel now gates on the PIN, not on `Display.activeBuild`'s own key -- so a case
+    -- whose default fixture already runs PALADIN_EXODIN (the recommended catalog entry, above) has
+    -- to say the player actually chose it, the same way `Wizard.wantsFirstRun`/`Queue.wantsPlaceholder`
+    -- read `profile.activeBuild`. A case testing the UNPINNED panel sets this back to `false` itself.
+    ns.db = { profile = { activeBuild = "PALADIN_EXODIN" }, char = { setupDone = 0 } }
     helper.load("Elmira/Core/Colors.lua")
     helper.load("Elmira/Core/Schema.lua")
     helper.load("Elmira/Core/Gates.lua")
@@ -275,6 +280,7 @@ describe("Options/Rotation (the Rotation section)", function()
         -- SHOCKADIN is the one running: exercises the active branch of the card, the header and
         -- the fork nested under it (no Use button, badged name) in the same pass as EXODIN's
         -- inactive one above.
+        ns.db.profile.activeBuild = "USER_ACTIVE"
         ns.Display.activeBuild = function() return {}, "USER_ACTIVE", nil end
         installUserBuilds{
           list = function() return { "USER_ACTIVE", "USER_MINE", "USER_SCRATCH" } end,
@@ -863,7 +869,7 @@ describe("Options/Rotation (the Rotation section)", function()
       ns.Display.activeBuild = function() return {}, "THE_KEY", nil end
       ns.Display.refresh = function() end
       ns.Detect = { readableName = function(key) return key end }
-      ns.db = { profile = { paletteAllSlots = false } }
+      ns.db = { profile = { paletteAllSlots = false, activeBuild = "THE_KEY" } }
       installUserBuilds{
         -- Answers on the KEY, like the real find: a fake that hands back a build for a nil key
         -- makes "nothing is active" untestable and hides the guard that handles it.
@@ -1137,6 +1143,7 @@ describe("Options/Rotation (the Rotation section)", function()
                              items = { [13] = {} } }
       ns.API = { GetState = function() return state end }
       forkKey = realUserBuilds.fork(PACK, "TEMPLATE", { name = "Mine" })
+      ns.db.profile.activeBuild = forkKey
 
       ns.Display.currentPack = function() return PACK end
       ns.Display.activeBuild = function() return compiledFork(), forkKey, "pinned" end
@@ -1534,6 +1541,59 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal("zzz-matches-nothing", Rotation.search(), "the search box's own text must survive")
       end)
 
+      -- VL2-D2: the line's Ability select gets the same "(id)" treatment VL1 gave the Value
+      -- dropdown, through the SAME helper (`Rotation.spellChoiceLabel`).
+      it("adds the id in parentheses to a palette spell that carries one (VL2)", function()
+        ns.Display.spellIcon = function(key) return key == "EXORCISM" and "tex:ex" or nil end
+        local values = Rotation.actionChoices()
+        assert.equal("|Ttex:ex:0|t EXORCISM (1)", values["spell:EXORCISM"])
+      end)
+
+      -- A spell with no id at all can never reach the palette (`Rotation.syncSpells` only registers
+      -- a castable spell that HAS one, since the registry is keyed by spell id) -- the reachable
+      -- "no parentheses" case here is a non-numeric one, the same guard case (f) below pins for the
+      -- Value dropdown.
+      it("adds no parentheses to a palette spell with a non-numeric id (VL2)", function()
+        PACK.spells.BAD_ID = { id = "x" }
+        local values = Rotation.actionChoices()
+        assert.is_truthy(values["spell:BAD_ID"])
+        assert.is_nil(values["spell:BAD_ID"]:find("(", 1, true), "non-numeric id: no parentheses")
+      end)
+
+      -- VENGEANCE_BUFF is `proc = true`, which `Palette.castable` excludes from the palette -- the
+      -- current-spell fallback (`entry.spell` not in `values`) is exactly the "fallen out of the
+      -- palette" case the fallback exists for.
+      it("adds the id to the current spell when it has fallen out of the palette (VL2)", function()
+        local values = Rotation.actionChoices{ spell = "VENGEANCE_BUFF" }
+        assert.equal("VENGEANCE_BUFF (7)", values["spell:VENGEANCE_BUFF"])
+      end)
+
+      it("adds no parentheses to an item row's label (VL2)", function()
+        local values = Rotation.actionChoices()
+        assert.is_truthy(values["item:13"])
+        assert.is_nil(values["item:13"]:find("(", 1, true), "an inventory slot has no spell id")
+      end)
+
+      -- The one test that pins "one helper": the Value dropdown and the Ability select must agree,
+      -- not just look alike, for the same pack key.
+      it("gives the Value dropdown and the Ability select the same label for the same key (VL2)", function()
+        ns.Display.spellIcon = function(key) return key == "EXORCISM" and "tex:ex" or nil end
+        Rotation.addCondition(1, "buff")
+        local valueLabel = builder().list.args.r1.args.body.args.conditions.args.c2.args.key.values.EXORCISM
+        local abilityLabel = Rotation.actionChoices()["spell:EXORCISM"]
+        assert.equal(valueLabel, abilityLabel)
+      end)
+
+      -- VL1 reviewer's non-blocking gap (folded into VL2-D2f): a non-numeric id must not weaken the
+      -- `type(id) == "number"` guard to something a truthy string would also satisfy.
+      it("drops the parentheses for a non-numeric id in the Value dropdown (VL2-D2f)", function()
+        PACK.spells.BAD_ID = { id = "x" }
+        Rotation.addCondition(1, "buff")
+        local values = builder().list.args.r1.args.body.args.conditions.args.c2.args.key.values
+        assert.is_truthy(values.BAD_ID)
+        assert.is_nil(values.BAD_ID:find("(", 1, true))
+      end)
+
       -- A hand-edited SavedVariables entry can bind to neither -- `encodeAction` must still answer
       -- something the select can hold rather than erroring.
       it("shows a blank action for a line bound to neither a spell nor an item", function()
@@ -1777,6 +1837,9 @@ describe("Options/Rotation (the Rotation section)", function()
           Rotation.addCondition(1, "buff")
           local values = builder().list.args.r1.args.body.args.conditions.args.c2.args.key.values
           assert.is_truthy(values[key], "a registry-only spell must be offered as a condition key")
+          -- VL1: the registry's own numeric id, not just the pack's.
+          assert.is_truthy(values[key]:find(" (9002)", 1, true),
+            "a registry-only spell keeps its own id: " .. tostring(values[key]))
         end)
 
         it("still offers the pack's own keys when the registry is not loaded at all", function()
@@ -1839,6 +1902,64 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.equal("target_hp", Rotation.draft().entries[1].when[1][1])
         body().conditions.args.c1.args.category.set(nil, "state")
         assert.same({ { "in_combat" } }, Rotation.draft().entries[1].when)
+      end)
+
+      -- VL2-D5: `debuff` gained `max` ("stacks at most") alongside `min` -- the Test dropdown offers
+      -- it and setting it stores the qualifier the same way `min`/`maxPct`/etc. already do above.
+      -- `op.arg == "number"` already renders the amount box from the ops table (Rotation.lua ~:2131),
+      -- so no widget code change is needed; this proves that by test rather than by assumption.
+      --
+      -- VL3-D1/D2 (a,b,c,e): a fresh row's default op ("is on the target") carries no value, and
+      -- `Rotation.setCondition` round-trips the row through storage on every single call, so an op
+      -- switch straight to a numeric one had nothing to carry and the write silently dropped it --
+      -- the very next read saw a bare condition and reset the Test to "is on the target" before the
+      -- Amount box ever appeared (mock repro `scratchpad/oploss.lua`). This rewrites VL2-D5's
+      -- pre-seed workaround (`Rotation.draft().entries[3].when[1] = {..., min = 5}`) into the
+      -- natural flow the fix makes possible: pick the Test FIRST, then type the number.
+      it("seeds the amount to 1 on a fresh debuff row's numeric Test, keeps a value already there across a Test switch, and drops it cleanly back to the valueless default (VL3)", function()
+        Rotation.selectRow(3)
+        assert.is_true(Rotation.addCondition(3, "debuff"))
+        local body = function() return builder().list.args.r3.args.body.args end
+        local key = Rotation.draft().entries[3].when[1][2]
+        local ops = body().conditions.args.c1.args.op.values
+        assert.equal("stacks at most", ops.max)
+
+        -- (a) fresh row, nothing typed yet: op -> max seeds 1, and the amount box shows it
+        body().conditions.args.c1.args.op.set(nil, "max")
+        assert.same({ "debuff", key, max = 1 }, Rotation.draft().entries[3].when[1])
+        assert.equal("max", body().conditions.args.c1.args.op.get())
+        assert.equal("1", body().conditions.args.c1.args.amount.get())
+
+        -- (b) typing a number overwrites the seed
+        body().conditions.args.c1.args.amount.set(nil, "3")
+        assert.equal(3, Rotation.draft().entries[3].when[1].max)
+
+        -- (e) a row that already has a value keeps it across another Test switch, no reseed
+        body().conditions.args.c1.args.op.set(nil, "min")
+        local cond = Rotation.draft().entries[3].when[1]
+        assert.equal(3, cond.min, "the value carries across the op switch, same as resource's own")
+        assert.is_nil(cond.max, "changing the test must move the qualifier, not add one")
+
+        -- (c) op back to the valueless default: the bare condition, no amount box left behind
+        body().conditions.args.c1.args.op.set(nil, "present")
+        assert.same({ "debuff", key }, Rotation.draft().entries[3].when[1])
+        assert.is_nil(body().conditions.args.c1.args.amount,
+          "the valueless op has nothing to type a number into")
+      end)
+
+      -- VL3-D2(d): the same seeding for `buff`'s "stacks at least" (a valueless-first field like
+      -- `debuff`), and for a seconds op (`maxRemaining`) picked directly on a fresh row.
+      it("seeds a fresh buff row's stacks test and a seconds test the same way (VL3)", function()
+        Rotation.selectRow(3)
+        assert.is_true(Rotation.addCondition(3, "buff"))
+        local body = function() return builder().list.args.r3.args.body.args end
+        body().conditions.args.c1.args.op.set(nil, "min")
+        assert.equal(1, Rotation.draft().entries[3].when[1].min)
+
+        assert.is_true(Rotation.addCondition(3, "buff"))
+        body = function() return builder().list.args.r3.args.body.args end
+        body().conditions.args.c2.args.op.set(nil, "maxRemaining")
+        assert.equal(1, Rotation.draft().entries[3].when[2].maxRemaining)
       end)
 
       it("offers only the fields of the chosen category", function()
@@ -2663,16 +2784,42 @@ describe("Options/Rotation (the Rotation section)", function()
                                  and "seconds" or "")
       end)
 
-      it("labels a spell key with its readable name and a plain value with itself", function()
+      -- VL1-D1: icon + "Name (id)" for every spell-shaped key source.
+      it("labels a spell key with its icon, readable name and id, and a plain value with itself", function()
         ns.BarGlow = { spellName = function(id) return id == 7 and "Vengeance" or nil end }
+        ns.Display.spellIcon = function(key) return key == "VENGEANCE_BUFF" and "tex:v" or nil end
         Rotation.addCondition(3, "buff")
         local body = function() return builder().list.args.r3.args.body.args end
         local values = body().conditions.args.c1.args.key.values
-        assert.equal("Vengeance", values.VENGEANCE_BUFF)
-        assert.equal("EXORCISM", values.EXORCISM, "no client name: the key is its own label")
+        assert.equal("|Ttex:v:0|t Vengeance (7)", values.VENGEANCE_BUFF)
+        assert.equal("EXORCISM (1)", values.EXORCISM,
+          "no client name: the pack name and its id, no icon and no leading space")
         Rotation.setCondition(3, 1, "kind", "mode")
         local modes = body().conditions.args.c1.args.key.values
         assert.equal("AoE", modes.AoE, "a mode IS its own label")
+      end)
+
+      it("drops the parentheses entirely when a spell key has no resolvable id (VL1)", function()
+        PACK.spells.NO_ID = {}
+        Rotation.addCondition(3, "buff")
+        local values = builder().list.args.r3.args.body.args.conditions.args.c1.args.key.values
+        assert.equal("NO_ID", values.NO_ID)
+        assert.is_nil(values.NO_ID:find("(", 1, true), "no id at all: no parentheses")
+      end)
+
+      it("labels seal/rune/castable keys with the same icon+id shape as a spell key (VL1)", function()
+        Rotation.addCondition(3, "buff")
+        Rotation.setCondition(3, 1, "kind", "seal")
+        local seals = builder().list.args.r3.args.body.args.conditions.args.c1.args.key.values
+        assert.equal("SEAL_OF_TESTING (6)", seals.SEAL_OF_TESTING)
+
+        Rotation.setCondition(3, 1, "kind", "rune")
+        local runes = builder().list.args.r3.args.body.args.conditions.args.c1.args.key.values
+        assert.equal("RUNE_PURIFYING_POWER (8)", runes.RUNE_PURIFYING_POWER)
+
+        Rotation.setCondition(3, 1, "kind", "cooldown_ready")
+        local castables = builder().list.args.r3.args.body.args.conditions.args.c1.args.key.values
+        assert.equal("EXORCISM (1)", castables.EXORCISM)
       end)
 
       -- PE3-D3 (2026-09-08 owner ruling, in-game): the Value dropdown listed
@@ -2898,8 +3045,9 @@ describe("Options/Rotation (the Rotation section)", function()
         assert.is_nil(Rotation.contextLine():find("mana", 1, true), "a zero cap is not a percentage")
       end)
 
-      -- A capability the adapter does not implement at all -- `enemies` needs nameplates, which
-      -- this client does not have. Absent is not the same as an error, and neither is an answer.
+      -- A state whose `enemies` accessor is entirely missing (an incomplete fake, not a real
+      -- client) -- absent is not the same as an error, and neither is an answer, so nothing about
+      -- nameplates being off is claimed either (that needs the ADAPTER to say so -- see below).
       it("leaves out a reading the state has no accessor for", function()
         ns.API = { GetState = function()
           return { targetExists = function() return true end,
@@ -2907,7 +3055,7 @@ describe("Options/Rotation (the Rotation section)", function()
         end }
         local line = Rotation.contextLine()
         assert.is_truthy(line:find("target HP 40%", 1, true))
-        assert.is_nil(line:find("enemies", 1, true))
+        assert.is_nil(line:find("nemies", 1, true), "neither casing of Enemies belongs on this line")
         assert.is_nil(line:find("mana", 1, true))
       end)
 
@@ -2916,7 +3064,23 @@ describe("Options/Rotation (the Rotation section)", function()
         state._enemies = 4
         local line = Rotation.contextLine()
         assert.is_truthy(line:find("target HP 18%", 1, true))
-        assert.is_truthy(line:find("enemies 4", 1, true))
+        assert.is_truthy(line:find("Enemies: 4", 1, true))
+      end)
+
+      -- M5a-i-D4: "Enemies: nameplates off" only when the ADAPTER's own capability flag says so --
+      -- this is the real client's shape (nameplateShowEnemies is "0"), not merely "could not tell".
+      it("says nameplates off when the adapter's capability flag says they are", function()
+        state._enemies = nil
+        ns.Adapter = { capabilities = function() return { nameplates = false } end }
+        local line = Rotation.contextLine()
+        assert.is_truthy(line:find("Enemies: nameplates off", 1, true))
+      end)
+
+      it("says nothing about nameplates when the adapter has not declared the capability at all", function()
+        state._enemies = nil
+        ns.Adapter = { capabilities = function() return {} end }
+        local line = Rotation.contextLine()
+        assert.is_nil(line:find("nemies", 1, true))
       end)
 
       it("refuses a list edit when the active rotation is a template", function()
@@ -4457,6 +4621,46 @@ describe("Options/Rotation (the Rotation section)", function()
       assert.is_false(rows[2].active)
     end)
 
+    -- RP1-D1/D2 (2026-09-14 bug round): a fresh character has nothing pinned, but
+    -- `Display.activeBuild()` (the ENGINE's own resolver) still falls back to the catalog's
+    -- `recommended` entry -- correct for the strip, which has to suggest something, and wrong here.
+    -- Every row must read `active = false`, the recommended row must still carry a Use action, and
+    -- `Rotation.use` on it is what actually turns the badge on -- proved on the ARGS TABLES the panel
+    -- builds, never on whether `activeKey` was called.
+    it("does not paint the catalog fallback as active when nothing is pinned", function()
+      installPack()
+      ns.db.profile.activeBuild = false
+      -- The resolver's own fallback: nothing pinned, so it hands back the recommended entry anyway.
+      ns.Display.activeBuild = function() return {}, "PALADIN_EXODIN", nil end
+      installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", recommended = true,
+                       fits = true },
+                     { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
+      local rows = Rotation.templateRows()
+      assert.is_false(rows[1].active, "the recommended row must not be painted as running")
+      assert.is_false(rows[2].active)
+      local card1 = cards().card1
+      assert.is_false(card1.arg.active)
+      assert.is_not_nil(card1.arg.actions.use, "the recommended card must still offer Use")
+      local header = detailOf("PALADIN_EXODIN").header.args
+      assert.is_not_nil(header.use, "the header must still offer Use too")
+      assert.is_falsy(header.name.name:find("in use", 1, true), "no badge before anything is chosen")
+      assert.equal("PALADIN_EXODIN", Rotation.selected(),
+        "the detail area falls back to the first template, not to nothing")
+
+      -- Pressing that Use is what actually pins it -- and only then does the same row read active.
+      card1.arg.actions.use.func()
+      assert.equal("PALADIN_EXODIN", ns.db.profile.activeBuild)
+      ns.Display.activeBuild = function() return {}, "PALADIN_EXODIN", nil end
+      local rowsAfter = Rotation.templateRows()
+      assert.is_true(rowsAfter[1].active)
+      local card1After = cards().card1
+      assert.is_true(card1After.arg.active)
+      assert.is_nil(card1After.arg.actions.use, "Use disappears once the card is actually running")
+      local headerAfter = detailOf("PALADIN_EXODIN").header.args
+      assert.is_nil(headerAfter.use)
+      assert.is_truthy(headerAfter.name.name:find("in use", 1, true))
+    end)
+
     -- W1 (try/card-widget, 2026-09-07): the root card is now ONE control -- a `dialogControl`d
     -- `description`, at a RELATIVE width, its content handed through `arg` -- rather than an
     -- AceGUI inline group of its own (D69's shape, which AceConfigDialog-3.0.lua:1131-1142 forces
@@ -5010,7 +5214,10 @@ describe("Options/Rotation (the Rotation section)", function()
         installPack()
         installWizard{ { build = "PALADIN_EXODIN", playstyle = "Exodin", fits = true },
                        { build = "PALADIN_SHOCKADIN", playstyle = "Shockadin", fits = true } }
-        -- No ns.db in this describe block's default state, so Rotation.use refuses with "no profile".
+        -- RP1-D1's default fixture now hands every case a `ns.db` (so the panel has a pin to read);
+        -- this test's whole point is `Rotation.use` refusing with "no profile", so it un-sets that
+        -- default rather than relying on one that no longer happens to be absent.
+        ns.db = nil
         local said = {}
         ns.Announce = { emit = function(cat, text) said[#said + 1] = { cat, text } end }
         cards().card2.arg.actions.use.func()
@@ -6089,6 +6296,85 @@ describe("Options/Rotation (the Rotation section)", function()
       ns.UserBuilds = nil
       assert.equal("PALADIN_EXODIN", Rotation.displayName("PALADIN_EXODIN"))
       assert.equal("?", Rotation.displayName(nil))
+    end)
+  end)
+
+  -- PF-D5/D6: a class with NO shipped data pack at all (`pack()` is nil throughout, matching the
+  -- top before_each's own default `currentPack`) still builds a rotation from the spellbook, and the
+  -- condition editor has to cope with that -- a spell-shaped Value dropdown from the registry, and a
+  -- pack-only source (set/soul/bonus) that is disabled with a reason rather than enabled and empty.
+  describe("PF: the condition editor with no class data pack", function()
+    local key
+
+    local function installPackless()
+      helper.load("Elmira/Core/Slash.lua") -- owns ns.forgetCompiled, which every save invalidates
+      ns.db.keys = { class = "ROGUE", char = "Arthorion - Realm" }
+      ns.db.global = { userBuilds = {} }
+      ns.UserBuilds = realUserBuilds
+      ns.db.char.spells = { SINISTER_STRIKE = { key = "SINISTER_STRIKE", id = 1752,
+                                                 name = "Sinister Strike", source = "id" } }
+      key = realUserBuilds.create(nil, "My rotation")
+      assert(realUserBuilds.replaceEntries(nil, key, { { spell = "SINISTER_STRIKE" } }))
+      ns.db.profile.activeBuild = key
+      ns.Display.activeBuild = function()
+        local build = realUserBuilds.find(nil, key)
+        return ns.Schema.compile(build, { spells = ns.Spells.merged(nil) }), key, "pinned"
+      end
+    end
+
+    before_each(function() installPackless() end)
+
+    local function builder() return Rotation.group().args.builder.args end
+
+    -- D6: mergedPack() used to answer nil for a pack-less class, so Conditions.keys answered {} for
+    -- every spell-shaped source and the Value dropdown was permanently, silently empty.
+    it("lists a registry-only spell in the Value dropdown for a spell-shaped source", function()
+      assert.is_true(Rotation.addCondition(1, "buff"))
+      local values = builder().list.args.r1.args.body.args.conditions.args.c1.args.key.values
+      assert.is_not_nil(values.SINISTER_STRIKE)
+    end)
+
+    -- D6: the same registry ctx feeds the D65 pre-save diagnostic sentence (wordCtx()), which used
+    -- to fall silent (no pack, no spells table) for every pack-less line.
+    it("describes a registry-only spell's condition in words, not as a raw key", function()
+      assert.is_true(Rotation.addCondition(1, "buff"))
+      Rotation.setCondition(1, 1, "key", "SINISTER_STRIKE")
+      local line = Rotation.diagnosticLines()
+      -- Not asserting a specific diagnostic (there may be none): the point is that resolving the
+      -- word for the condition does not throw, and the row's own sentence names the spell.
+      assert.is_table(line)
+      local sentence = Rotation.headerSentence(realUserBuilds.find(nil, key).entries[1])
+      assert.is_string(sentence)
+    end)
+
+    -- D5: never hidden, never left enabled-and-empty. There is no pack-less registry for gear.
+    it("disables the Value dropdown for a pack-only source (set/soul/bonus) and names the reason", function()
+      assert.is_true(Rotation.addCondition(1, "set"))
+      local keyArgs = builder().list.args.r1.args.body.args.conditions.args.c1.args.key
+      assert.is_true(keyArgs.disabled)
+      assert.truthy(keyArgs.desc():find("class data pack", 1, true))
+
+      Rotation.setCondition(1, 1, "kind", "enchant") -- keySource "souls"
+      keyArgs = builder().list.args.r1.args.body.args.conditions.args.c1.args.key
+      assert.is_true(keyArgs.disabled)
+
+      Rotation.setCondition(1, 1, "kind", "bonus") -- keySource "bonuses"
+      keyArgs = builder().list.args.r1.args.body.args.conditions.args.c1.args.key
+      assert.is_true(keyArgs.disabled)
+    end)
+
+    -- The field itself stays offered (never hidden) -- only its Value control is disabled.
+    it("still lists set/soul/bonus in the Field dropdown", function()
+      assert.is_true(Rotation.addCondition(1, "set"))
+      local fields = builder().list.args.r1.args.body.args.conditions.args.c1.args.field.values
+      assert.is_string(fields.set)
+    end)
+
+    -- A spell-shaped source is never disabled: the registry covers it.
+    it("leaves a spell-shaped Value dropdown enabled", function()
+      assert.is_true(Rotation.addCondition(1, "buff"))
+      local keyArgs = builder().list.args.r1.args.body.args.conditions.args.c1.args.key
+      assert.is_falsy(keyArgs.disabled)
     end)
   end)
 end)

@@ -34,6 +34,10 @@ local watched, watchedVersion, watchedPack, trackPrev, lastNowKey = {}, nil, nil
 -- Which spells were statically live, and for which build (ADR-0015 amendment). One declaration:
 -- separately, deleting either only makes it a global, which no test can see.
 local gateSnapshot, gateKey
+-- PF-D2: a fork of a shipped template fails to compile with no pack loaded (its authored keys only
+-- resolve through the class pack it was written against). Named once per build key, not per tick --
+-- `activeBuild` runs at the render loop's own rate.
+local warnedMissingPack = {}
 
 -- Renderers subscribe rather than the driver naming them: the queue strip, the bar glow and the
 -- overlay all want the same queue and must never each run their own loop.
@@ -78,6 +82,12 @@ end
 -- so the ctx must carry the pack's CURRENT tables: a pack whose tables were swapped underneath it
 -- gets a fresh ctx, and with it a fresh compile. Weak keys let a replaced pack go.
 local ctxByPack = setmetatable({}, { __mode = "k" })
+-- `ctxByPack` cannot be keyed on `nil` (a pack-less class): every pack-less resolution shares this
+-- one sentinel slot instead. `Spells.merged(nil)` builds a fresh table per call rather than one
+-- reused per "pack" (there being no pack object to key its own cache on), so this slot never
+-- actually hits its `held` comparison below for a pack-less class -- a known, accepted cost (the
+-- registry it merges is normally small), not something PF was asked to fix.
+local NIL_PACK = {}
 -- R2b (D76): `spells` widens to the merged registry+pack view (`Spells.merged`, pack wins on a
 -- collision) so the ACTIVE build compiles a registry-key entry's `data` (cooldown seconds, cost,
 -- cdVolatile) exactly as it would a pack one -- without this, a saved rotation naming a registered
@@ -87,30 +97,58 @@ local ctxByPack = setmetatable({}, { __mode = "k" })
 -- it did comparing `pack.spells` to itself -- the cache still serves one ctx per pack, not a fresh
 -- one every tick.
 local function packContext(pack)
-  local held = ctxByPack[pack]
-  local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or pack.spells
-  if held and held.spells == spells and held.sets == pack.sets
-     and held.souls == pack.souls and held.bonuses == pack.bonuses then
+  local slot = pack or NIL_PACK
+  local held = ctxByPack[slot]
+  local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or (pack and pack.spells)
+  if held and held.spells == spells and held.sets == (pack and pack.sets)
+     and held.souls == (pack and pack.souls) and held.bonuses == (pack and pack.bonuses) then
     return held
   end
-  local ctx = { spells = spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses }
-  ctxByPack[pack] = ctx
+  local ctx = { spells = spells, sets = pack and pack.sets, souls = pack and pack.souls,
+                bonuses = pack and pack.bonuses }
+  ctxByPack[slot] = ctx
   return ctx
+end
+
+-- The fork lookup, isolated so `Display.activeBuild` can capture all three of `UserBuilds.find`'s
+-- returns in one statement (declaration and assignment together -- a bare `local build, origin,
+-- fork` on its own line, populated two lines later, silently becomes three real Lua globals the
+-- moment it is deleted, which no single-call test would ever notice). `pack.builds[key]` is a
+-- defensive fallback for the (untested-in-practice) case where `Core/UserBuilds.lua` itself is not
+-- loaded at all -- `UserBuilds.find` already checks `pack.builds` first when it IS loaded.
+local function findBuild(pack, key)
+  if ns.UserBuilds then return ns.UserBuilds.find(pack, key) end
+  return nil -- mutants: equivalent Lua returns nil implicitly at the end of a function
 end
 
 -- Compiled build + key + why it was chosen. The reason is carried so `/elm debug` can answer "why
 -- is it showing this build?" for a choice the user did not make.
+--
+-- PF-D1: a nil `pack` (a class with no shipped data pack) is a normal state, not a guard Driver
+-- raises itself -- `Profiles.resolve` and `packContext` are both pack-optional, and `UserBuilds.find`
+-- is what actually locates a pack-less class's own fork.
 function Display.activeBuild()
   local pack = Display.currentPack()
-  if not pack then return nil, nil, "no data pack for this class" end
   local profile = ns.db and ns.db.profile
   local key, reason = ns.Profiles.resolve(pack, profile)
   if not key then return nil, nil, reason end
   local ctx = packContext(pack)
   -- A pinned key may name one of the user's forks (ADR-0010); UserBuilds.find is the one lookup.
-  local build = ns.UserBuilds and ns.UserBuilds.find(pack, key) or pack.builds[key]
+  local build, origin, fork = findBuild(pack, key)
+  if build == nil and pack then build = pack.builds[key] end
   local compiled, errors = ns.compileBuild(build, ctx)
   if not compiled then
+    -- PF-D2: a COPY of a shipped template (a fork with `derivedFrom`) fails to compile with no pack
+    -- loaded because its authored keys (spells.FIREBALL) only resolve through the class pack the
+    -- template was written against -- a self-built rotation has no such keys and never hits this.
+    if not pack and origin == "fork" and fork and fork.derivedFrom and not warnedMissingPack[key] then
+      warnedMissingPack[key] = true
+      local class = ns.Adapter and ns.Adapter.playerClass and ns.Adapter.playerClass()
+      local template = (ns.L and ns.L["%s needs the %s data pack, which is not loaded."])
+        or "%s needs the %s data pack, which is not loaded."
+      local text = string.format(template, ns.UserBuilds.displayName(pack, key), tostring(class))
+      if ns.Announce then ns.Announce.emit("warning", text) else ns.log("%s", text) end
+    end
     return nil, key, "build '" .. key .. "' failed to compile (" .. #(errors or {}) .. " problem(s))"
   end
   return compiled, key, reason
@@ -157,15 +195,18 @@ end
 
 -- The pack tables Core/Gates needs to turn a condition into a sentence: a set's name, a bonus's
 -- note. Built here rather than in Gates because only Display knows which pack is loaded.
+-- PF-D1: pack-optional, same as `packContext` -- a gate naming a registry key must still resolve
+-- with no class data pack at all. `ctx.sets`/`ctx.souls`/`ctx.bonuses` stay nil (Core/Gates already
+-- guards every read of them), which is correct: there is no pack-less registry for those (PF, "not
+-- in scope").
 function Display.gateContext()
   local pack = Display.currentPack()
   local caps = ns.Adapter and ns.Adapter.capabilities and ns.Adapter.capabilities()
-  if not pack then return { capabilities = caps } end
   -- R2b (D76): same merge as packContext, so a gate naming a registry key ("this row needs X")
   -- resolves it rather than reporting it as absent from the pack.
-  local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or pack.spells
-  return { spells = spells, sets = pack.sets, souls = pack.souls, bonuses = pack.bonuses,
-           capabilities = caps }
+  local spells = ns.Spells and ns.Spells.merged and ns.Spells.merged(pack) or (pack and pack.spells)
+  return { spells = spells, sets = pack and pack.sets, souls = pack and pack.souls,
+           bonuses = pack and pack.bonuses, capabilities = caps }
 end
 
 -- Has this character's gear, runes or level just changed which rows of the build can fire? Called

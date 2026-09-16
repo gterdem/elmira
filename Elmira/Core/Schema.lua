@@ -81,16 +81,25 @@ C.debuff = { make = function(cond)
   local key = cond[2]
   local mine = cond.mine
   if mine == nil then mine = true end -- docs/02: defaults to true
-  -- MG1-D5(b): `min` (stacks at least) and `maxRemaining` (seconds left at most) mirror `buff`'s
-  -- own ops. Unlike `buff`'s `max`, a debuff has no "absent passes" reading — the entries that need
-  -- it (Scorch stack maintenance) ask "is it on the target AND below N stacks", which is exactly
-  -- the plain presence check `not stacks` already enforces.
-  local min = cond.min
+  -- VL2-D4 (amends MG1-D5(b), which said the opposite): `max` ("stacks at most") now mirrors
+  -- `buff`'s own `max` exactly (C.buff.make above) — the one op that ALSO passes on ABSENCE, so
+  -- "cast Scorch until 3 stacks" is one row rather than a "missing" row plus a "not at least 3" row.
+  -- `min` (stacks at least) and `maxRemaining`/`minRemaining` (seconds left) still mean what they did
+  -- and still apply once the aura IS present — including alongside `max`, resolved the same order
+  -- `buff` uses, so an absent aura with `maxRemaining` also set answers exactly as `buff` does
+  -- (`remaining` is nil too, so that check still fails it — no third rule here). Without `max`, the
+  -- path is unchanged from before: presence is required outright.
+  local min, max = cond.min, cond.max
   local minRem, maxRem = cond.minRemaining, cond.maxRemaining
   return function(state)
     local stacks, remaining = state:debuff(key, mine)
-    if not stacks then return false end
-    if min and stacks < min then return false end
+    if max then
+      if stacks and stacks > max then return false end
+      if stacks and min and stacks < min then return false end
+    else
+      if not stacks then return false end
+      if min and stacks < min then return false end
+    end
     if minRem and (remaining == nil or remaining < minRem) then return false end
     if maxRem and (remaining == nil or remaining > maxRem) then return false end
     return true
@@ -241,9 +250,13 @@ C.ttd = { make = function(cond)
   return function(state) return inRange(state:ttd(), min, max) end -- nil (unknown) never passes
 end }
 
+-- M5a-i-D3: no `range` field any more. Nameplate distance is a client cvar (nameplateMaxDistance),
+-- not a per-line setting any adapter could honour, and no build ever used it -- Conditions.lua's
+-- `enemies` field already offers only min/max (conditions_spec.lua's "enemies range" case proves a
+-- stored `range` was always rejected by the Builder, never read back by it).
 C.enemies = { make = function(cond)
-  local min, max, range = cond.min, cond.max, cond.range
-  return function(state) return inRange(state:enemies(range), min, max) end
+  local min, max = cond.min, cond.max
+  return function(state) return inRange(state:enemies(), min, max) end
 end }
 
 C.mode = {

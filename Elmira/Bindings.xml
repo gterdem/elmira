@@ -1,0 +1,20 @@
+<Bindings>
+	<!--
+		M5a-i-D2. The client auto-loads a file literally named Bindings.xml from an addon's own
+		folder: no line in Elmira_Vanilla.toc names it, and none should: adding one would load it a
+		second time. This is Blizzard's own special binding format, not a generic Ui\ file, which is
+		why it has no <Ui> wrapper.
+
+		BINDING_HEADER_ELMIRA and BINDING_NAME_ELMIRA_CYCLE_ROTATION_MODE are plain string globals,
+		set once at Core/Init.lua's file scope (the composition root); this is what the Key Bindings
+		panel reads for the section header and this binding's own label, and there is no L[...] seam a
+		file in this format can be routed through.
+
+		Calls Elmira:CycleRotationMode() directly (Core/Init.lua) rather than naming a bare global
+		function: `Elmira` is already the one WoW global this addon ever publishes, so the keybinding
+		needs no second one just to be reachable from XML.
+	-->
+	<Binding name="ELMIRA_CYCLE_ROTATION_MODE" header="BINDING_HEADER_ELMIRA">
+		Elmira:CycleRotationMode()
+	</Binding>
+</Bindings>

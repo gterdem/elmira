@@ -8,7 +8,6 @@
 -- ns.Adapter; Init must not grow beyond composition.
 local ADDON, ns = ...
 ns = ns or _G.__ELM_NS or {}
-local L = ns.L or setmetatable({}, { __index = function(_, k) return k end })
 
 local NA = LibStub("AceAddon-3.0"):NewAddon(ADDON, "AceEvent-3.0", "AceTimer-3.0", "AceConsole-3.0")
 ns.addon = NA
@@ -20,6 +19,14 @@ ns.addon = NA
 -- use `## LoadWith:`.
 Elmira = NA
 Elmira.API = ns.API
+
+-- M5a-i-D2. Bindings.xml (loaded by the client with no TOC line, next to it in this folder) reads
+-- these two by name for the Key Bindings UI: BINDING_HEADER_<category> labels the section,
+-- BINDING_NAME_<command> labels the one binding in it. Plain string globals are the only interface
+-- that file format has -- there is no L[...] seam to route them through, so English is set directly
+-- here, the same way every other user-facing string in this addon still only ships in enUS (v1).
+BINDING_HEADER_ELMIRA = "Elmira"
+BINDING_NAME_ELMIRA_CYCLE_ROTATION_MODE = "Cycle rotation mode (Auto/Single/Cleave/AoE)"
 
 -- Overrides the no-op set in Core/API.lua, so a rejected registration is now visible in chat.
 -- AceConsole hardcodes `|cff33ff99<name>|r:` as its prefix (Libs/AceConsole-3.0:37), which is the
@@ -149,6 +156,18 @@ function NA:OnInitialize()
     self:RegisterEvent(event, function() if ns.Display then ns.Display.invalidate() end end)
   end
 
+  -- M5a-i: the enemy count behind every AoE line. Forwarded exactly like RUNE_UPDATED above --
+  -- `state:enemies()` only returns whatever the adapter last cached and never scans on its own, so
+  -- these are the only events that can move the answer. PLAYER_REGEN_DISABLED/ENABLED are NOT in
+  -- this list for the reason the comment above already gives: OnCombatStart/OnCombatEnd recount for
+  -- themselves, below.
+  for _, event in ipairs({ "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_FLAGS" }) do
+    self:RegisterEvent(event, function()
+      if ns.Adapter and ns.Adapter.recountEnemies then ns.Adapter.recountEnemies() end
+      if ns.Display then ns.Display.invalidate() end
+    end)
+  end
+
   -- The bar map, separately: these change which BUTTON holds a spell, not whether to suggest it.
   -- UPDATE_SHAPESHIFT_FORM is in this list because a stance, form or Shadowform swap repages the
   -- bars. The bar-provider addon used to watch it while core did not, so a stance change dropped the
@@ -164,6 +183,24 @@ function NA:OnInitialize()
       -- HERE rather than a second time by name, for the AceEvent reason above.
       if fired == "PLAYER_ENTERING_WORLD" and ns.Adapter and ns.Adapter.forgetSpellbook then
         ns.Adapter.forgetSpellbook()
+      end
+      -- M5a-i-D2: a forced Single/Cleave/AoE never survives a login or a /reload -- both fire this
+      -- same event, and RotationMode.set already marks the display stale, so nothing else here has
+      -- to react to the reset.
+      if fired == "PLAYER_ENTERING_WORLD" and ns.RotationMode then
+        ns.RotationMode.set(ns.RotationMode.DEFAULT)
+      end
+      -- M5a-i-D4: a one-time nudge, not a nag -- `self._nameplateWarned` is a fresh field on a
+      -- fresh addon object every session, so this can only ever fire once per login.
+      if fired == "PLAYER_ENTERING_WORLD" and not self._nameplateWarned then
+        local nameplateCaps = ns.Adapter and ns.Adapter.capabilities and ns.Adapter.capabilities()
+        if nameplateCaps and nameplateCaps.nameplates == false then
+          self._nameplateWarned = true
+          if ns.Announce then
+            ns.Announce.emit("status",
+              ns.L["Elmira counts enemies from nameplates; press V to show them"])
+          end
+        end
       end
       -- D37: 2s after the world is actually up, never sooner -- a popup competing with the loading
       -- screen fading out is not "shown", it is "missed". A second AceTimer per world-enter, not a
@@ -223,6 +260,10 @@ local SUGGEST_POLL = 1
 -- Combat is the worst moment to be left with a mouse-enabled frame across the middle of the
 -- screen, so move mode ends whether or not the panel is still open.
 function NA:OnCombatStart()
+  -- M5a-i: the pull is the moment aggro sets every engaged plate's combat flag, all at once -- the
+  -- exact recount NAME_PLATE_UNIT_ADDED/REMOVED and UNIT_FLAGS exist to catch, but this one is not
+  -- in that list (see the comment above it) because it is already registered by name.
+  if ns.Adapter and ns.Adapter.recountEnemies then ns.Adapter.recountEnemies() end
   if ns.Display then ns.Display.invalidate() end
   if ns.Announcers then ns.Announcers.StopMoving() end
   self:RecordAuto("combat-start")
@@ -301,6 +342,8 @@ function NA:OnCastSucceeded(_, unit, _, spellID)
 end
 
 function NA:OnCombatEnd()
+  -- M5a-i: the pack is no longer engaged (or is dead), which is exactly the count going down.
+  if ns.Adapter and ns.Adapter.recountEnemies then ns.Adapter.recountEnemies() end
   if ns.Display then ns.Display.invalidate() end
   if self._combatTimer then
     self:CancelTimer(self._combatTimer, true)
@@ -356,6 +399,19 @@ function NA:OnProfileChanged()
   ns.DB.migrateProfile(self.db.profile)
 end
 
+-- M5a-i-D2: the keybinding's entry point (Bindings.xml: `Elmira:CycleRotationMode()`), Auto ->
+-- Single -> Cleave -> AoE -> Auto. `ns.RotationMode` owns the cycle order and the DB write; this is
+-- only the on-screen/chat feedback a keypress has no other way to give, through the existing
+-- Announce "status" route -- the same one the nameplates-off nudge above uses.
+function NA:CycleRotationMode()
+  if not ns.RotationMode then return end
+  local nextMode = ns.RotationMode.next(ns.RotationMode.get())
+  if not ns.RotationMode.set(nextMode) then return end
+  if ns.Announce then
+    ns.Announce.emit("status", string.format(ns.L["Rotation mode: %s"], nextMode))
+  end
+end
+
 -- Order matters: both pack sources must have run before the adapter is given data, so attaching
 -- earlier would silently bind an empty pack and every symbolic key would resolve to nil forever.
 --
@@ -380,16 +436,12 @@ function NA:OnEnable()
     ns.log("%s claims %s but did not load (%s).", tostring(name), tostring(class), tostring(reason))
   end
 
+  -- PF-D2: a class with no shipped pack is a normal state now, not a warning -- `attachPack` is
+  -- called UNCONDITIONALLY (PF-D1) and tolerates a nil pack (Adapters/Vanilla.lua). Only a broken
+  -- ADAPTER (too old to take a pack at all) is still worth a log line; that is a real defect, and
+  -- distinct from "no pack" so the next reader hunts the right problem.
   local pack = class and ns.API.GetProviders("dataPacks")[class]
-  if not pack then
-    -- D26 (2026-09-07 Notifications pass): a warning, not a plain print -- running with a null
-    -- state is exactly the kind of thing the panel's "Problems" category exists to surface.
-    local text = string.format(
-      L["no data pack registered for %s; running with a null state."], tostring(class))
-    if ns.Announce then ns.Announce.emit("warning", text) else ns.log("%s", text) end
-  elseif not ns.Adapter.attachPack then
-    -- Distinct from "no pack": the data arrived but the adapter is too old to take it. Reporting
-    -- both as "no data pack" would send the next reader hunting the wrong problem.
+  if not ns.Adapter.attachPack then
     ns.log("adapter cannot accept a data pack (no attachPack); running with a null state.")
   else
     ns.Adapter.attachPack(pack)

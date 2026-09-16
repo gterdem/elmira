@@ -156,3 +156,65 @@ describe("custom TOC keys", function()
       "a TOC key nothing reads is inert; add the reader, drop the key, or document it in EXTERNAL")
   end)
 end)
+
+-- Bindings.xml (M5a-i-D2) is read by the client's XML parser, never by our Lua, so no other spec
+-- opens it. In game on 2026-09-15 it failed with "not well-formed (invalid token)": a `--` inside
+-- a comment, which XML forbids. The addon loaded, the keybinding did not. This is a minimal
+-- well-formedness pass over every shipped XML file — comments, then tag balance — because the
+-- test box has no xmllint and the mock loads no XML.
+describe("shipped XML files", function()
+  local function xmlFiles()
+    local pipe = assert(io.popen("find Elmira -name '*.xml' -not -path 'Elmira/Libs/*' | sort"),
+      "cannot enumerate XML files")
+    local found = {}
+    for path in pipe:lines() do found[#found + 1] = path end
+    pipe:close()
+    return found
+  end
+
+  local function wellFormed(body)
+    -- Comments first: a `--` inside one is the token the client rejected.
+    local pos = 1
+    while true do
+      local s, e, inner = body:find("<!%-%-(.-)%-%->", pos)
+      if not s then break end
+      if inner:find("%-%-") then return false, "comment contains '--'" end
+      pos = e + 1
+    end
+    body = body:gsub("<!%-%-.-%-%->", "")
+    if body:find("<!%-%-") then return false, "unterminated comment" end
+    -- Then tag balance, ignoring the prolog and self-closing tags.
+    local stack = {}
+    for closing, name, rest in body:gmatch("<(/?)([%w_:%-]+)(.-)>") do
+      if closing == "/" then
+        if stack[#stack] ~= name then return false, "unexpected </" .. name .. ">" end
+        stack[#stack] = nil
+      elseif not rest:find("/$") then
+        stack[#stack + 1] = name
+      end
+    end
+    if #stack > 0 then return false, "unclosed <" .. stack[#stack] .. ">" end
+    return true
+  end
+
+  it("lists Bindings.xml and embeds.xml", function()
+    assert.same({ "Elmira/Bindings.xml", "Elmira/embeds.xml" }, xmlFiles())
+  end)
+
+  it("are well-formed", function()
+    for _, path in ipairs(xmlFiles()) do
+      local f = assert(io.open(path, "r"), "missing " .. path)
+      local body = f:read("*a")
+      f:close()
+      local ok, why = wellFormed(body)
+      assert.is_true(ok, path .. ": " .. tostring(why))
+    end
+  end)
+
+  it("rejects what the client rejects", function()
+    assert.is_false((wellFormed("<A><!-- x -- y --></A>")))
+    assert.is_false((wellFormed("<A><B></A>")))
+    assert.is_false((wellFormed("<A><!-- open")))
+    assert.is_true((wellFormed('<A><!-- fine --><B/><C x="1">t</C></A>')))
+  end)
+end)

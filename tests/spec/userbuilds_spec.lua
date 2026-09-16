@@ -276,8 +276,12 @@ describe("Core.UserBuilds", function()
                    reasonsFor(pack, "USER_MAGE_THING", { { spell = "EXORCISM" } }))
       assert.is_truthy(reasonsFor(pack, key, "not a list"):find("list of lines", 1, true))
       assert.is_truthy(reasonsFor(pack, key, { "not a line" }):find("line 1", 1, true))
-      -- Without the pack's tables Schema cannot check a single symbolic key, so a rotation naming
-      -- spells that do not exist would be accepted and fail much later as an empty queue.
+      -- PF-D1/D3: replaceEntries no longer refuses outright on a nil pack -- but `ctxFor` still hands
+      -- Schema.validate a `spells` table built from the registry alone (Spells.merged(nil), empty
+      -- here), so "EXORCISM" -- a symbolic key ONLY this pack, not the registry, knows -- is still
+      -- caught, with no pack's tables to check against at all. `db.keys.class` stands in for the
+      -- player's own class (F1a), which is what keeps the fork visible with `pack` gone.
+      ns.db.keys = { class = "PALADIN", char = "Arthorion - Realm" }
       assert.is_truthy(reasonsFor(nil, key, { { spell = "EXORCISM" } }):find("data pack", 1, true))
       assert.equal("PALADIN_EXODIN", pack.builds.PALADIN_EXODIN.key)
     end)

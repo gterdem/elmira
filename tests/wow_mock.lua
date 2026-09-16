@@ -43,6 +43,14 @@ local function defaults()
     itemInfo = {},           -- [itemID] = { name, equipLoc, speed }
     runes = {},              -- [slot] = { name =, learnedAbilitySpellIDs = {...} }
     engravingEnabled = true,
+    -- M5a-i: one entry per VISIBLE nameplate, keyed by its unit token ("nameplate1", ...).
+    -- `canAttack` defaults to true (hostile), `dead`/`inCombat` default to false, matching a plate
+    -- that just came on screen and has not been tagged yet.
+    namePlates = {},
+    -- Client cvars, read through GetCVar. `nameplateShowEnemies` defaults "1" (on): the M0-onward
+    -- default for every OTHER mock field is "the ordinary case", and nameplates being off is the
+    -- exception a spec opts into.
+    cvars = { nameplateShowEnemies = "1" },
     creatureType = nil,
     attackSpeed = { 2.1, nil },
     level = 60,
@@ -90,6 +98,15 @@ function M.reset()
   for _, key in ipairs(NIL_DEFAULTS) do M[key] = nil end
   for key, value in pairs(defaults()) do M[key] = value end
   return M
+end
+
+-- Convenience: one nameplate, with the three flags Vanilla.recountEnemies actually reads.
+-- `opts.canAttack`/`opts.dead`/`opts.inCombat` default to the "hostile, alive, not yet engaged"
+-- shape most scenarios want; a spec that needs the client's own filter names spells them out.
+function M.namePlate(token, opts)
+  opts = opts or {}
+  M.namePlates[token] = { canAttack = opts.canAttack ~= false, dead = opts.dead == true,
+                          inCombat = opts.inCombat == true }
 end
 
 -- Convenience: makes a spell known AND gives it a cooldown/cost in one call, so a spec's intent
@@ -188,10 +205,40 @@ function UnitExists(u)
 end
 -- Answers false when there is no target at all, exactly as the client does -- which is what lets
 -- the adapter use this one reading instead of pairing it with UnitExists.
+--
+-- M5a-i: also the nameplate path (`UnitCanAttack("player", "nameplateN")`). Unmodeled units (a
+-- token no test ever registered with M.namePlate) fall through to the pre-M5a-i default of `true`,
+-- so every scenario written before this feature existed still passes unmodified.
 function UnitCanAttack(unit, other)
-  if other ~= "target" then return true end
-  return M.targetExists == true and M.targetAttackable == true
+  if other == "target" then
+    return M.targetExists == true and M.targetAttackable == true
+  end
+  local plate = M.namePlates[other]
+  if plate then return plate.canAttack ~= false end
+  return true
 end
+
+-- M5a-i: is this nameplate unit a corpse? False for anything not registered as a nameplate at all
+-- (the player, the target, an untracked token) -- nothing in this mock's world is ever a ghost.
+function UnitIsDeadOrGhost(unit)
+  local plate = M.namePlates[unit]
+  return plate ~= nil and plate.dead == true
+end
+
+-- The client cvar Adapters/Vanilla.lua reads for the `nameplates` capability and the enemy count.
+function GetCVar(name) return M.cvars[name] end
+
+-- Every VISIBLE nameplate, in DBM-Core's own shape (frame.namePlateUnitToken). The mock does not
+-- model a real Frame here -- Vanilla.recountEnemies reads only that one field.
+C_NamePlate = {
+  GetNamePlates = function()
+    local frames = {}
+    for token in pairs(M.namePlates) do
+      frames[#frames + 1] = { namePlateUnitToken = token }
+    end
+    return frames
+  end,
+}
 function UnitHealth(u) return M.health[1] end
 function UnitHealthMax(u) return M.health[2] end
 function UnitLevel(u) return M.level end
@@ -232,7 +279,14 @@ function InCombatLockdown() return M.inCombat end
 -- Distinct from lockdown on purpose: the adapter must use this one, and a mock that aliased them
 -- would let the wrong API keep passing. `combatLockdown` defaults to inCombat unless a spec splits
 -- them, which is the case that reproduces PLAYER_REGEN_DISABLED firing before lockdown is set.
-function UnitAffectingCombat(unit) return M.affectingCombat end
+-- M5a-i: a nameplate unit answers its OWN flag (a pulled pack's plates, independent of whatever the
+-- player's own combat state is); anything else (the player, an untracked token) keeps the single
+-- shared flag every spec written before this feature already relies on.
+function UnitAffectingCombat(unit)
+  local plate = M.namePlates[unit]
+  if plate then return plate.inCombat == true end
+  return M.affectingCombat
+end
 
 function GetItemInfo(id)
   local info = M.itemInfo[id]
@@ -301,6 +355,11 @@ local function newRegion(kind, parent)
   function r:GetStringWidth() return #tostring(self.__text or "") * 6 end
   function r:SetTexture(t) self.__texture = t end
   function r:GetTexture() return self.__texture end
+  -- TX1-D2: the texture picker's grid repaints every cell in the ability's blend mode, so the
+  -- picker's own additive art (Runes, Sparks...) previews the way it will actually draw rather
+  -- than under the client's default BLEND.
+  function r:SetBlendMode(v) self.__blendMode = v end
+  function r:GetBlendMode() return self.__blendMode end
   -- A solid-colour texture rather than a file, e.g. the dark plate under an indicator's art or a
   -- gold selection border. Four returns, matching the real client (r, g, b, a).
   function r:SetColorTexture(cr, cg, cb, ca) self.__colorTexture = { cr, cg, cb, ca } end
@@ -355,11 +414,6 @@ function CreateFrame(frameType, name, parent, template)
   function frame:SetFrameLevel(v) self.__level = v end
   -- Counted, not swallowed: "this window opened above the one that was already there" is the only
   -- difference between a button that works and one that looks like it did nothing.
-  -- TX1-D2: the texture picker's grid repaints every cell in the ability's blend mode, so the
-  -- picker's own additive art (Runes, Sparks...) previews the way it will actually draw rather
-  -- than under the client's default BLEND.
-  function r:SetBlendMode(v) self.__blendMode = v end
-  function r:GetBlendMode() return self.__blendMode end
   function frame:Raise() self.__raised = (self.__raised or 0) + 1 end
   function frame:GetFrameLevel() return self.__level or 1 end
   function frame:GetRegions() return unpack(self.__regions) end

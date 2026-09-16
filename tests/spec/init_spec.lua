@@ -71,7 +71,7 @@ describe("Core.Init", function()
     return ldb, dbicon
   end
 
-  local ns, NA, logged, order
+  local ns, NA, logged, order, lastAttachedPack
   local barLayoutCallback
 
   -- `order` is a single shared list several fakes below push onto, so a test can assert RELATIVE
@@ -81,7 +81,7 @@ describe("Core.Init", function()
     return {
       playerClass = function() return "PALADIN" end,
       loadClassPack = function(class) order[#order + 1] = "loadClassPack:" .. tostring(class) end,
-      attachPack = function(pack) order[#order + 1] = "attachPack" end,
+      attachPack = function(pack) order[#order + 1] = "attachPack"; lastAttachedPack = pack end,
     }
   end
 
@@ -161,6 +161,14 @@ describe("Core.Init", function()
 
   before_each(loadInit)
   after_each(function() _G.LibStub = nil end)
+
+  -- M5a-i-D2: Bindings.xml's ONLY interface to a label is these two plain string globals -- there is
+  -- no L[...] seam a file in that format can be routed through, so Core/Init.lua sets them directly
+  -- at file scope, which loadInit() above has already run by the time this test asks.
+  it("labels the keybinding for the Key Bindings UI", function()
+    assert.equal("Elmira", _G.BINDING_HEADER_ELMIRA)
+    assert.is_true(_G.BINDING_NAME_ELMIRA_CYCLE_ROTATION_MODE:find("Cycle rotation mode", 1, true) ~= nil)
+  end)
 
   -- The second half of the library-ownership probe (Adapters/LibOwner.lua) is sealed by ONE line at
   -- this file's file scope. Delete it and every LibOwner unit test stays green while `/elm debug
@@ -300,6 +308,28 @@ describe("Core.Init", function()
         AceEvent.events:Fire(event)
         assert.same({ "Display.invalidate" }, order, event .. " should invalidate the display")
       end
+    end)
+
+    -- M5a-i: the only events that can move the cached enemy count outside a combat transition
+    -- (OnCombatStart/OnCombatEnd recount for themselves, tested alongside them below).
+    it("recounts enemies and invalidates the display on nameplate/combat-flag events", function()
+      NA:OnInitialize()
+      local AceEvent = LibStub("AceEvent-3.0")
+      local counted = 0
+      ns.Adapter.recountEnemies = function() counted = counted + 1 end
+      for _, event in ipairs({ "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_FLAGS" }) do
+        order, counted = {}, 0
+        AceEvent.events:Fire(event)
+        assert.equal(1, counted, event .. " should recount enemies")
+        assert.same({ "Display.invalidate" }, order, event .. " should invalidate the display")
+      end
+    end)
+
+    it("does not error on a nameplate event when the adapter cannot recount", function()
+      NA:OnInitialize()
+      assert.has_no.errors(function()
+        LibStub("AceEvent-3.0").events:Fire("NAME_PLATE_UNIT_ADDED")
+      end)
     end)
 
     it("fires ns.BarGlow.Invalidate() and ns.Display.refresh() when the bar map changes", function()
@@ -657,6 +687,128 @@ describe("Core.Init", function()
       NA:OnEnable()
       assert.has_no.errors(function() NA:OnCombatEnd() end)
     end)
+
+    -- M5a-i: the pull (and the wipe) is exactly when the engaged count moves, so both handlers
+    -- recount rather than waiting for the next NAME_PLATE_UNIT_ADDED/REMOVED or UNIT_FLAGS.
+    it("recounts enemies on combat start and combat end", function()
+      withAnnounce()
+      local counted = 0
+      ns.Adapter.recountEnemies = function() counted = counted + 1 end
+      NA:OnInitialize()
+      NA:OnEnable()
+      NA:OnCombatStart()
+      assert.equal(1, counted)
+      NA:OnCombatEnd()
+      assert.equal(2, counted)
+    end)
+
+    it("does not error on combat start or end when the adapter cannot recount", function()
+      withAnnounce()
+      NA:OnInitialize()
+      NA:OnEnable()
+      assert.has_no.errors(function() NA:OnCombatStart() end)
+      assert.has_no.errors(function() NA:OnCombatEnd() end)
+    end)
+
+    -- M5a-i-D2: a forced mode never survives a login or a /reload, both of which fire this event.
+    it("resets a forced rotation mode to Auto on PLAYER_ENTERING_WORLD", function()
+      withAnnounce()
+      ns.RotationMode = helper.load("Elmira/Core/RotationMode.lua")
+      NA:OnInitialize()
+      -- AceDB:New only exists after OnInitialize, and it replaces ns.db wholesale -- so the forced
+      -- mode is set on the REAL db, the same way a player would set it mid-session with /elm mode.
+      ns.db.char.rotationMode = "AoE"
+      assert.equal("AoE", ns.db.char.rotationMode)
+      LibStub("AceEvent-3.0").events:Fire("PLAYER_ENTERING_WORLD")
+      assert.equal("Auto", ns.db.char.rotationMode)
+    end)
+
+    it("does not error entering the world when RotationMode is not loaded", function()
+      withAnnounce()
+      NA:OnInitialize()
+      assert.has_no.errors(function()
+        LibStub("AceEvent-3.0").events:Fire("PLAYER_ENTERING_WORLD")
+      end)
+    end)
+
+    -- M5a-i-D4: a one-time nudge (never a nag) the moment the client says nameplates are off.
+    describe("the nameplates-off login nudge (M5a-i-D4)", function()
+      it("announces once when the capability says nameplates are off", function()
+        local said = withAnnounce()
+        ns.Adapter.capabilities = function() return { nameplates = false } end
+        NA:OnInitialize()
+        LibStub("AceEvent-3.0").events:Fire("PLAYER_ENTERING_WORLD")
+        local found = 0
+        for _, e in ipairs(said) do
+          if type(e) == "table" and e[1] == "status"
+             and e[2]:find("nameplates", 1, true) then found = found + 1 end
+        end
+        assert.equal(1, found)
+        -- Not a nag: a second world-enter in the same session must not repeat it.
+        LibStub("AceEvent-3.0").events:Fire("PLAYER_ENTERING_WORLD")
+        found = 0
+        for _, e in ipairs(said) do
+          if type(e) == "table" and e[1] == "status"
+             and e[2]:find("nameplates", 1, true) then found = found + 1 end
+        end
+        assert.equal(1, found, "the nudge repeated on a second login event")
+      end)
+
+      it("says nothing when nameplates are on", function()
+        local said = withAnnounce()
+        ns.Adapter.capabilities = function() return { nameplates = true } end
+        NA:OnInitialize()
+        LibStub("AceEvent-3.0").events:Fire("PLAYER_ENTERING_WORLD")
+        for _, e in ipairs(said) do
+          assert.is_false(type(e) == "table" and e[2]:find("nameplates", 1, true) ~= nil)
+        end
+      end)
+
+      it("does not error when the adapter has no capabilities at all", function()
+        withAnnounce()
+        NA:OnInitialize()
+        assert.has_no.errors(function()
+          LibStub("AceEvent-3.0").events:Fire("PLAYER_ENTERING_WORLD")
+        end)
+      end)
+    end)
+
+    -- M5a-i-D2: the keybinding's entry point (Bindings.xml -> Elmira:CycleRotationMode()).
+    describe("CycleRotationMode() (the keybinding, M5a-i-D2)", function()
+      -- ns.db does not exist until OnInitialize builds the real AceDB object (below), which is why
+      -- this only loads RotationMode -- the DB default (M5a-i-D2, Core/DB.lua) is already "Auto".
+      before_each(function()
+        ns.RotationMode = helper.load("Elmira/Core/RotationMode.lua")
+      end)
+
+      it("cycles Auto -> Single -> Cleave -> AoE -> Auto", function()
+        withAnnounce()
+        NA:OnInitialize()
+        NA:CycleRotationMode()
+        assert.equal("Single", ns.db.char.rotationMode)
+        NA:CycleRotationMode()
+        assert.equal("Cleave", ns.db.char.rotationMode)
+        NA:CycleRotationMode()
+        assert.equal("AoE", ns.db.char.rotationMode)
+        NA:CycleRotationMode()
+        assert.equal("Auto", ns.db.char.rotationMode)
+      end)
+
+      it("announces the new mode through the status route", function()
+        local said = withAnnounce()
+        NA:OnInitialize()
+        NA:CycleRotationMode()
+        assert.same({ "status", "Rotation mode: Single" }, said[#said])
+      end)
+
+      it("does not error, and announces nothing, when RotationMode is not loaded", function()
+        local said = withAnnounce()
+        ns.RotationMode = nil
+        NA:OnInitialize()
+        assert.has_no.errors(function() NA:CycleRotationMode() end)
+        assert.equal(0, #said)
+      end)
+    end)
   end)
 
   describe("the player's own casts reach the strip", function()
@@ -737,32 +889,34 @@ describe("Core.Init", function()
         { order[1], order[2] })
     end)
 
-    it("degrades to a null state when no pack is registered for the class, and still starts the display", function()
+    -- PF-D1/D2: a class with no shipped pack is a normal state now, not a guard OnEnable raises
+    -- itself -- `attachPack` is called UNCONDITIONALLY, with a nil pack, and nothing is logged or
+    -- announced about it (the old "no data pack registered; running with a null state" warning is
+    -- gone with its emit).
+    it("attaches the live State with a nil pack when none is registered for the class, and still starts the display", function()
       -- deliberately no ns.API.RegisterDataPack call
       NA:OnInitialize()
       NA:OnEnable()
 
+      local attached = false
       for _, event in ipairs(order) do
-        assert.are_not.equal("attachPack", event)
+        if event == "attachPack" then attached = true end
       end
-      assert.truthy(table.concat(logged, " "):find("null state", 1, true))
+      assert.is_true(attached, "attachPack was never called")
+      assert.is_nil(lastAttachedPack)
+      assert.is_falsy(table.concat(logged, " "):find("null state", 1, true))
       assert.truthy((function()
         for _, e in ipairs(order) do if e == "register:queue" then return true end end
         return false
       end)())
     end)
 
-    -- D26 (2026-09-07 Notifications pass): once Announce is loaded, the same event is a "Problems"
-    -- announcement, not only a plain print -- observable through the Log, not through ns.log.
-    it("announces the null-state warning through Announce once it is loaded", function()
+    it("says nothing through Announce either, once it is loaded", function()
       local Announce = helper.load("Elmira/Core/Announce.lua")
       NA:OnInitialize()
       Announce.use{ now = function() return 1 end, inCombat = function() return false end }
       NA:OnEnable()
-      local rows = Announce.log()
-      assert.equal(1, #rows)
-      assert.equal("warning", rows[1].category)
-      assert.truthy(rows[1].text:find("null state", 1, true))
+      assert.same({}, Announce.log())
     end)
 
     it("degrades to a null state, with a DIFFERENT message, when the adapter cannot accept a pack", function()

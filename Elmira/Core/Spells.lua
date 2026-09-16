@@ -90,10 +90,21 @@ end
 -- a fresh table on every call would make every one of those caches miss on every tick, recompiling
 -- the active build ten times a second instead of once. `pack.spells` itself is still read FRESH on
 -- every call (never cached here), so a pack whose own table is hot-swapped is still picked up.
+--
+-- PF2: a pack-less class (no shipped data pack) calls this with `pack == nil` on every tick. `nil`
+-- cannot be a weak-table key, and a fresh `{}` substituted per call would key `mergedSpells` on a
+-- brand-new table every time -- the cache could never hit, breaking the very identity contract this
+-- comment promises, and every consumer above would recompile on every tick instead of once. `NIL_PACK`
+-- is the one substitute for every nil call, so `Spells.merged(nil)` gets the SAME cache slot -- and
+-- therefore the same returned table -- as any other pack would. `spells = {}` on the sentinel itself
+-- matters too: without it, `pack.spells` below is nil for every pack-less call and `pack.spells or
+-- {}` allocates a fresh throwaway table on every tick -- a smaller version of the very bug this
+-- sentinel exists to fix. A real pack's own `.spells` table is always truthy, so this never affected it.
+local NIL_PACK = { spells = {} }
 local mergedSpells = setmetatable({}, { __mode = "k" })
 
 function Spells.merged(pack)
-  pack = pack or {}
+  pack = pack or NIL_PACK
   local out = mergedSpells[pack]
   if not out then out = {}; mergedSpells[pack] = out end
   for k in pairs(out) do out[k] = nil end

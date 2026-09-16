@@ -2116,15 +2116,34 @@ describe("Options (the settings pages)", function()
       assert.equal("", Options.exchangeNote())
     end)
 
-    it("keeps the text and shows the reason when the import fails, or when there is no pack", function()
+    it("keeps the text and shows the reason when the import fails", function()
       ns.Display.currentPack = function() return { class = "PALADIN" } end
       ns.UserBuilds = { importString = function() return nil, "corrupted string" end }
       assert.is_false(Options.importText("ELM1:bad"))
       assert.equal("ELM1:bad", box().text.get())
       assert.truthy(box().note.name():find("corrupted string", 1, true))
+    end)
+
+    -- PF-D7: no pack precondition of its own -- UserBuilds.importString decides, from the player's
+    -- own class, not from whether a class data pack happens to be loaded.
+    it("still calls through with a nil pack when there is none, rather than refusing outright", function()
+      local seenPack = "unset"
       ns.Display.currentPack = function() return nil end
-      assert.is_false(Options.importText("ELM1:bad"))
-      assert.truthy(box().note.name():find("no data pack", 1, true))
+      ns.UserBuilds = { importString = function(str, thePack)
+        seenPack = thePack
+        return "USER_Z"
+      end }
+      local ok, key = Options.importText("ELM1:packless")
+      assert.is_true(ok)
+      assert.equal("USER_Z", key)
+      assert.is_nil(seenPack)
+    end)
+
+    -- The only remaining refusal: the module itself missing (not shipped in this test double).
+    it("refuses when the rotation editor module is not loaded", function()
+      ns.UserBuilds = nil
+      assert.is_false(Options.importText("ELM1:x"))
+      assert.truthy(box().note.name():find("not loaded", 1, true))
     end)
   end)
 

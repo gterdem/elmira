@@ -120,6 +120,34 @@ describe("Elmira/Classes/Mage.lua — structural pins (MG1-D8)", function()
     assert.equal(1218345, pack.spells.GLACIATE.id)
   end)
 
+  -- MG3: `findAura` (Adapters/Vanilla.lua) matches by exact spell id, so these two records are only
+  -- as good as the id inside them — a future research paste (or a careless merge) reintroducing the
+  -- rune/ActionID confusion this fix corrected would compile and pass every gear-matrix scenario
+  -- (those drive Hot Streak/FoF by KEY, never by id) while silently never firing again in game.
+  it("pins Hot Streak's proc buff to its own client-verified id, not the rune or the WoWSims ActionID", function()
+    assert.equal(400625, pack.spells.HOT_STREAK_BUFF.id,
+      "client-verified 2026-09-14; 48108 is the WoWSims ActionID and 400624 the passive rune, neither ever appears on the player")
+    assert.is_true(pack.spells.HOT_STREAK_BUFF.proc)
+    assert.is_nil(pack.spells.HOT_STREAK_BUFF.verify, "client-verified — must not read as provisional")
+    assert.equal(
+      "client-verified 2026-09-14 (/dump on a level 45 Mage); 48108 is the WoWSims ActionID and " ..
+        "never appears on the player; 400624 is the passive rune",
+      pack.spells.HOT_STREAK_BUFF.note)
+  end)
+
+  it("pins Fingers of Frost's proc buff to its own id, not the passive rune", function()
+    assert.equal(400669, pack.spells.FINGERS_OF_FROST_BUFF.id,
+      "400647 is the passive rune (Proc Trigger Spell) and was never the buff the client applies")
+    assert.is_true(pack.spells.FINGERS_OF_FROST_BUFF.proc)
+    assert.equal("in-game", pack.spells.FINGERS_OF_FROST_BUFF.verify)
+    assert.equal(
+      "FoF's own proc buff; 400647 is the passive rune (Proc Trigger Spell), " ..
+        "400670 the 1-charge dummy twin, 401741 the teach spell",
+      pack.spells.FINGERS_OF_FROST_BUFF.note)
+    -- The rune record itself is untouched by this fix: its id IS its own passive spell.
+    assert.equal(400647, pack.spells.RUNE_FINGERS_OF_FROST.id)
+  end)
+
   -- D.Sets: item lists are read only by the REAL Vanilla adapter's setCount() (item ids on the
   -- equipped character), never by FakeState (gear_matrix scenarios set `sets = { KEY = count }`
   -- directly) — so nothing exercises `.items` at all otherwise, exactly the shape DP2's Paladin sweep

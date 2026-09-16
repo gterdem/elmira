@@ -328,6 +328,24 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.is_false(Vanilla.capabilities().addonLoaded)
       _G.IsAddOnLoaded, _G.C_AddOns.IsAddOnLoaded = bare, modern
     end)
+
+    -- M5a-i-D1: live, like `engraving` above -- the player can toggle nameplates in the Interface
+    -- options mid-session, no reload needed, and the count is then unknown, NOT 1.
+    it("reports nameplates on when the cvar says so (the mock's ordinary default)", function()
+      assert.is_true(Vanilla.capabilities().nameplates)
+    end)
+
+    it("reports nameplates off when nameplateShowEnemies is 0", function()
+      mock.cvars.nameplateShowEnemies = "0"
+      assert.is_false(Vanilla.capabilities().nameplates)
+    end)
+
+    it("reports nameplates off, never true, on a client with no GetCVar at all", function()
+      local saved = _G.GetCVar
+      _G.GetCVar = nil
+      assert.is_false(Vanilla.capabilities().nameplates)
+      _G.GetCVar = saved
+    end)
   end)
 
   -- ============================================================ 1b. addonLoaded()
@@ -1650,6 +1668,93 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
     end)
   end)
 
+  -- SL1: a level 60 character casting Seal of Righteousness applies rank 8 (20293); the pack shipped
+  -- rank 4 (20289). findAura's exact-id match never saw it. The fallback only opens for a CASTABLE's
+  -- own aura (not `proc`/`aura`), which is what the FAKE_PROC control case below pins.
+  describe("findAura() name fallback across ranks (SL1-D1)", function()
+    local SHIPPED_ID, LOWER_RANK_ID = 900010, 900011
+    local SPELL_NAME = "Seal of Righteousness (fixture)"
+
+    local function spells()
+      return {
+        SEAL_OF_RIGHTEOUSNESS = { id = SHIPPED_ID, seal = true, buff = true },
+        -- Same shape as the Mage Enigma 2pc case cited in the header: a proc named after the record
+        -- it does not belong to must never match by name.
+        FAKE_PROC = { id = 900012, proc = true },
+      }
+    end
+
+    before_each(function()
+      -- GetSpellInfo(id) only answers for an id the mock's spellbook knows about (tests/wow_mock.lua).
+      mock.spellNames[SHIPPED_ID] = SPELL_NAME
+      mock.knownSpells[SHIPPED_ID] = true
+      mock.spellNames[900012] = "Fake Proc Spell (fixture)"
+      mock.knownSpells[900012] = true
+    end)
+
+    it("matches a buff=true record's aura at a DIFFERENT id sharing the shipped id's name", function()
+      mock.auras.player = { { name = SPELL_NAME, spellID = LOWER_RANK_ID, count = 1, expires = mock.time + 10 } }
+      local state = Vanilla.newState(spells())
+      assert.is_not_nil(state:buff("SEAL_OF_RIGHTEOUSNESS"),
+        "a lower-rank cast of the player's own seal must still read as up")
+    end)
+
+    it("still matches by exact id when the shipped rank itself is the one up", function()
+      mock.auras.player = { { name = SPELL_NAME, spellID = SHIPPED_ID, count = 1, expires = mock.time + 10 } }
+      local state = Vanilla.newState(spells())
+      assert.is_not_nil(state:buff("SEAL_OF_RIGHTEOUSNESS"))
+    end)
+
+    it("never falls back by name for a proc=true record", function()
+      -- Named exactly like the record above at a DIFFERENT id: without the proc guard this would
+      -- read as FAKE_PROC being up, the same collision the Enigma 2pc "Fire Blast" proc would cause
+      -- against a real Fire Blast cast.
+      mock.auras.player = { { name = "Fake Proc Spell (fixture)", spellID = 900099, count = 1, expires = mock.time + 10 } }
+      local state = Vanilla.newState(spells())
+      assert.is_nil(state:buff("FAKE_PROC"))
+    end)
+
+    it("mineOnly still refuses a same-name aura from another source", function()
+      mock.auras.target = { { name = SPELL_NAME, spellID = LOWER_RANK_ID, count = 1,
+                               expires = mock.time + 10, source = "npc" } }
+      local state = Vanilla.newState(spells())
+      assert.is_nil(state:debuff("SEAL_OF_RIGHTEOUSNESS", true),
+        "a name match from a source that is not the player must not satisfy mineOnly")
+    end)
+
+    it("a name shared with no known spell (client will not say) still returns nil, not an error", function()
+      mock.spellNames[SHIPPED_ID] = nil
+      mock.knownSpells[SHIPPED_ID] = nil
+      mock.auras.player = { { name = SPELL_NAME, spellID = LOWER_RANK_ID, count = 1, expires = mock.time + 10 } }
+      local state = Vanilla.newState(spells())
+      assert.is_nil(state:buff("SEAL_OF_RIGHTEOUSNESS"))
+    end)
+
+    it("caches the id -> name lookup instead of asking the client every frame", function()
+      mock.auras.player = { { name = SPELL_NAME, spellID = LOWER_RANK_ID, count = 1, expires = mock.time + 1000 } }
+      local state = Vanilla.newState(spells())
+      local calls, real = 0, _G.GetSpellInfo
+      _G.GetSpellInfo = function(...) calls = calls + 1; return real(...) end
+      state:buff("SEAL_OF_RIGHTEOUSNESS")
+      mock.time = mock.time + 1 -- a new frame: auraScan rescans, but the id -> name answer should not be re-asked
+      state:buff("SEAL_OF_RIGHTEOUSNESS")
+      _G.GetSpellInfo = real
+      assert.equal(1, calls, "the shipped id's name should be resolved once, not once per frame")
+    end)
+
+    it("keeps the FIRST same-named aura's record when two ids share a name in one scan", function()
+      -- Same rule byID already follows (line above the loop): first writer wins, so a longer-lived
+      -- duplicate cannot be masked by a later stack.
+      mock.auras.player = {
+        { name = SPELL_NAME, spellID = LOWER_RANK_ID, count = 1, expires = mock.time + 10 },
+        { name = SPELL_NAME, spellID = LOWER_RANK_ID + 1, count = 9, expires = mock.time + 999 },
+      }
+      local state = Vanilla.newState(spells())
+      local stacks = state:buff("SEAL_OF_RIGHTEOUSNESS")
+      assert.equal(1, stacks, "the first aura visited under this name must win the name index")
+    end)
+  end)
+
   describe("debuff() — mine filters by aura source (docs/01 §2)", function()
     it("finds a player-sourced debuff on the target when mine=true", function()
       mock.time = 50
@@ -1811,6 +1916,29 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
     it("returns nil when no seal aura is active", function()
       local state = Vanilla.newState(spellsFixture(), setsFixture(), soulsFixture())
       assert.is_nil(state:seal())
+    end)
+
+    -- SL1-D3(c): the real ids this fix ships, not synthetic ones -- Seal of Righteousness rank 8
+    -- (20293, the shipped id) and rank 4 (20289, what a leveling character casts instead).
+    describe("Seal of Righteousness across ranks (SL1)", function()
+      local SEALS = { SEAL_OF_RIGHTEOUSNESS = { id = 20293, seal = true, buff = true } }
+
+      before_each(function()
+        mock.spellNames[20293] = "Seal of Righteousness"
+        mock.knownSpells[20293] = true
+      end)
+
+      it("matches when the player's own aura is the shipped rank (20293)", function()
+        mock.auras.player[1] = { name = "Seal of Righteousness", spellID = 20293, expires = mock.time + 10 }
+        local state = Vanilla.newState(SEALS)
+        assert.equal("SEAL_OF_RIGHTEOUSNESS", state:seal())
+      end)
+
+      it("still matches when a leveling character's own aura is rank 4 (20289) instead", function()
+        mock.auras.player[1] = { name = "Seal of Righteousness", spellID = 20289, expires = mock.time + 10 }
+        local state = Vanilla.newState(SEALS)
+        assert.equal("SEAL_OF_RIGHTEOUSNESS", state:seal())
+      end)
     end)
   end)
 
@@ -2108,6 +2236,142 @@ describe("Adapters.Vanilla (State provider, docs/01 §2/§4/§5a, docs/07 §9)",
       assert.is_nil(Vanilla.talents())
     end)
   end)
+
+  -- M5a-i: the DBM-Core filter (modules/ZoneCombatScanner.lua:103-105,
+  -- modules/CombatDetection.lua:130-134 on the live install) plus UnitCanAttack/UnitIsDeadOrGhost,
+  -- cached and rebuilt only by Vanilla.recountEnemies -- never scanned from the read path.
+  describe("enemies()/mode() — the nameplate count and its manual override (M5a-i)", function()
+    local state
+    before_each(function()
+      state = Vanilla.newState({}, {}, {})
+    end)
+
+    it("answers unknown (nil), not 1, in Auto before anything has ever recounted", function()
+      assert.is_nil(state:enemies())
+      assert.equal("Single", state:mode(), "an unknown count is never assumed AoE")
+    end)
+
+    it("counts only attackable, alive, in-combat plates", function()
+      mock.namePlate("nameplate1", { inCombat = true })                     -- hostile, alive, engaged
+      mock.namePlate("nameplate2", { canAttack = false, inCombat = true })  -- friendly: not an enemy
+      mock.namePlate("nameplate3", { dead = true, inCombat = true })        -- a corpse mid-loot
+      mock.namePlate("nameplate4", { inCombat = false })                   -- un-pulled: not engaged
+      Vanilla.recountEnemies()
+      assert.equal(1, state:enemies())
+    end)
+
+    it("counts every qualifying plate, not just the first, and returns what it cached", function()
+      mock.namePlate("nameplate1", { inCombat = true })
+      mock.namePlate("nameplate2", { inCombat = true })
+      mock.namePlate("nameplate3", { inCombat = true })
+      -- recountEnemies()'s own return value is what `Vanilla.enemyDebugCounts` relies on never
+      -- needing a second read of the cache it just wrote.
+      assert.equal(3, Vanilla.recountEnemies())
+      assert.equal(3, state:enemies())
+    end)
+
+    -- The cached count is a MODULE-LOCAL upvalue, not an implicit global. The previous test just
+    -- left a real count behind, and the outer before_each reloads Vanilla.lua fresh for every `it`
+    -- in this file (docs/04's dofile-per-spec convention) -- a stray global would instead leak that
+    -- count straight into this brand new module instance, which never once called recountEnemies.
+    it("starts fresh in a brand new module instance, even right after the previous test counted plates", function()
+      assert.is_nil(state:enemies(),
+        "a leaked global 'enemyCounted' would carry the previous test's count into this one")
+    end)
+
+    it("goes back to unknown, not the last real count, once nameplates are turned off", function()
+      mock.namePlate("nameplate1", { inCombat = true })
+      Vanilla.recountEnemies()
+      assert.equal(1, state:enemies())
+      mock.cvars.nameplateShowEnemies = "0"
+      assert.is_nil(Vanilla.recountEnemies(), "the off-branch must clear the cached count, not keep it")
+      assert.is_nil(state:enemies())
+      assert.equal("Single", state:mode())
+      -- The debug breakdown must not go on reporting the plate that was there before nameplates
+      -- were switched off.
+      local d = Vanilla.enemyDebugCounts()
+      assert.equal(0, d.seen)
+      assert.equal(0, d.attackable)
+      assert.equal(0, d.inCombat)
+    end)
+
+    it("derives Single/Cleave/AoE from the count at the 3-engaged AoE threshold (unchanged, M5a-i-D2)", function()
+      mock.namePlate("nameplate1", { inCombat = true })
+      Vanilla.recountEnemies()
+      assert.equal("Single", state:mode())
+      mock.namePlate("nameplate2", { inCombat = true })
+      Vanilla.recountEnemies()
+      assert.equal("Cleave", state:mode())
+      mock.namePlate("nameplate3", { inCombat = true })
+      Vanilla.recountEnemies()
+      assert.equal("AoE", state:mode())
+    end)
+
+    it("caches the count -- the read path never scans on its own", function()
+      mock.namePlate("nameplate1", { inCombat = true })
+      Vanilla.recountEnemies()
+      mock.namePlates = {} -- the plate vanished, but nothing told the adapter to recount
+      assert.equal(1, state:enemies(), "state:enemies() must read the cache, not GetNamePlates()")
+    end)
+
+    describe("the manual override (M5a-i-D2, ns.RotationMode)", function()
+      local RotationMode
+      before_each(function()
+        helper.ns().db = { char = {} }
+        RotationMode = helper.load("Elmira/Core/RotationMode.lua")
+      end)
+
+      it("forces the same fixed count regardless of what is actually engaged", function()
+        mock.namePlate("nameplate1", { inCombat = true })
+        Vanilla.recountEnemies()
+        RotationMode.set("AoE")
+        assert.equal(3, state:enemies())
+        assert.equal("AoE", state:mode())
+      end)
+
+      it("goes back to the real nameplate count once set back to Auto", function()
+        mock.namePlate("nameplate1", { inCombat = true })
+        Vanilla.recountEnemies()
+        RotationMode.set("Cleave")
+        assert.equal(2, state:enemies())
+        RotationMode.set("Auto")
+        assert.equal(1, state:enemies())
+        assert.equal("Single", state:mode())
+      end)
+    end)
+
+    describe("Vanilla.enemyDebugCounts() (`/elm debug enemies`)", function()
+      it("forces a fresh scan rather than the last cached answer", function()
+        local d1 = Vanilla.enemyDebugCounts()
+        assert.equal(0, d1.seen)
+        mock.namePlate("nameplate1", { inCombat = true })
+        local d2 = Vanilla.enemyDebugCounts()
+        assert.equal(1, d2.seen)
+        assert.equal(1, d2.attackable)
+        assert.equal(1, d2.inCombat)
+        assert.is_true(d2.nameplatesOn)
+      end)
+
+      it("breaks seen/attackable/in-combat apart", function()
+        mock.namePlate("nameplate1", { inCombat = true })                     -- attackable, engaged
+        mock.namePlate("nameplate2", { inCombat = false })                    -- attackable, not yet
+        mock.namePlate("nameplate3", { canAttack = false, inCombat = true })  -- friendly
+        local d = Vanilla.enemyDebugCounts()
+        assert.equal(3, d.seen)
+        assert.equal(2, d.attackable)
+        assert.equal(1, d.inCombat)
+      end)
+
+      it("says nameplates are off and reports zero, rather than the last real scan", function()
+        mock.namePlate("nameplate1", { inCombat = true })
+        mock.cvars.nameplateShowEnemies = "0"
+        local d = Vanilla.enemyDebugCounts()
+        assert.is_false(d.nameplatesOn)
+        assert.equal(0, d.seen)
+      end)
+    end)
+  end)
+
   -- ============================================================ memory round 3: allocate nothing on a warm frame
   --
   -- The first per-frame cache allocated fresh tables on every new frame, the aura scan a table per

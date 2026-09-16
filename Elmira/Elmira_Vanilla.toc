@@ -38,6 +38,7 @@ Core\Simulation.lua
 Core\Profiles.lua
 Core\Advisor.lua
 Core\Visibility.lua
+Core\RotationMode.lua
 Core\Ticker.lua
 Core\MemProbe.lua
 Core\Transition.lua
