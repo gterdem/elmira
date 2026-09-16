@@ -181,17 +181,25 @@ TextureLibrary.GROUPS = {
   { key = "powerauras", name = "PowerAuras",       textures = POWERAURAS, requires = WEAKAURAS },
 }
 
--- TextureLibrary.groups(isLoaded) -> the categories this character can actually see
+-- TextureLibrary.groups(isLoaded) -> every declared category, this character's own marked
 --
 -- `isLoaded(addonName)` is the caller's predicate -- `Display/Textures.addonLoaded` in the addon, a
--- plain function in a spec. A category whose addon is not loaded is DROPPED rather than shown
--- empty: an empty list headed "WeakAuras Shapes" says WeakAuras has no shapes, which is false,
--- where its absence plus the tab's own sentence (AT4-D3) says the true thing.
+-- plain function in a spec. TX1-D6 (owner): a category whose addon is not loaded is no longer
+-- DROPPED -- it is handed back with `unavailable = <addon name>` instead, so the picker's Category
+-- dropdown can still LIST it, greyed out with a reason, rather than making it look as if WeakAuras
+-- simply has no shapes. A group that is available is the SAME table as in `GROUPS` (nothing here
+-- ever copies a texture list); one that is not is a fresh table borrowing that same `textures`
+-- field, so the shared definition itself never carries this session's own WeakAuras state.
 function TextureLibrary.groups(isLoaded)
   local out = {}
   for _, group in ipairs(TextureLibrary.GROUPS) do
     if not group.requires or (isLoaded and isLoaded(group.requires) == true) then
       out[#out + 1] = group
+    else
+      out[#out + 1] = {
+        key = group.key, name = group.name, textures = group.textures,
+        requires = group.requires, unavailable = group.requires,
+      }
     end
   end
   return out

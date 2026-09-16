@@ -66,6 +66,15 @@ describe("the texture picker window", function()
       -- AT8-D5: the real implementation lives in Display/Textures, its own spec; what this window
       -- needs to prove is that it is ASKED, and asked with the source the ability was actually on.
       flipSize = function(key, from, to) flips[#flips + 1] = { key, from, to } end,
+      -- TX1-D1's own real mapping, duplicated here for the same reason `flipSize` above is a stub:
+      -- Display/Textures.lua proves the mapping itself in textures_spec.lua; this window only has
+      -- to prove it ASKS for it, with the ability's own blend field.
+      blendModeFor = function(blend) return blend == "add" and "ADD" or "BLEND" end,
+      -- TX1-D6: AT4-D3's own real logic (Display/Textures.lua, its own spec) -- this window only
+      -- has to prove it reads whatever comes back.
+      missingAddon = function(e)
+        return (e and e.source == "path" and ns.TextureLibrary.requires(e.path)) or nil
+      end,
     }
     ns.Display = { spellName = function(key) return "Name of " .. key end }
 
@@ -88,6 +97,17 @@ describe("the texture picker window", function()
       -- Above the configuration window, which is in the same strata and was already on screen --
       -- AceConfigDialog re-Opens it the instant the Choose… button's own func returns.
       assert.equal(1, Panel.window.frame.__raised, "the picker opened behind the options window")
+      assert.equal("Choosing a texture for Name of EXORCISM", Panel.window.statustext:GetText())
+    end)
+
+    -- TX1-D6: the one sentence a picker full of pictures actually needs, when the file it is
+    -- already pointed at is the one this character cannot see.
+    it("says which addon is missing, in the status line, instead of the usual sentence", function()
+      A.set("EXORCISM", "texture", "source", "path")
+      A.set("EXORCISM", "texture", "path", "Interface\\AddOns\\WeakAuras\\Media\\Textures\\Ring_10px.tga")
+      Panel.Open("EXORCISM")
+      assert.equal("This texture needs WeakAuras enabled on this character.",
+        Panel.window.statustext:GetText())
     end)
 
     it("refuses a key that is not one, and opens no window", function()
@@ -225,9 +245,31 @@ describe("the texture picker window", function()
         names[#names + 1] = item.text:GetText()
         ids[#ids + 1] = item.userdata.value
       end
-      assert.same({ "Shapes", "Beams", "Icons", "PvP Emblems", "Runes", "Sparks", "Target Markers" },
-        names)
-      assert.same({ "1", "2", "3", "4", "5", "6", "7" }, ids)
+      -- TX1-D6: the two categories this fixture's WeakAuras-less character cannot use are still
+      -- LISTED, named with the reason, rather than dropped from the dropdown.
+      assert.same({ "Shapes", "Beams", "Icons", "PvP Emblems", "Runes", "Sparks", "Target Markers",
+                    "WeakAuras Shapes (needs WeakAuras)", "PowerAuras (needs WeakAuras)" }, names)
+      assert.same({ "1", "2", "3", "4", "5", "6", "7", "8", "9" }, ids)
+    end)
+
+    it("greys out a category this character's addons cannot back, rather than hiding it", function()
+      Panel.Open("EXORCISM")
+      local byValue = {}
+      for _, item in ipairs(Panel.categories.pullout.items) do byValue[item.userdata.value] = item end
+      for _, id in ipairs({ "1", "2", "3", "4", "5", "6", "7" }) do
+        assert.falsy(byValue[id].disabled, id .. " must stay clickable")
+      end
+      assert.is_true(byValue["8"].disabled, "WeakAuras Shapes must be disabled without WeakAuras")
+      assert.is_true(byValue["9"].disabled, "PowerAuras must be disabled without WeakAuras")
+    end)
+
+    -- Opening straight onto a stored path never lands the dropdown on a disabled entry, even if
+    -- that path happens to belong to one -- there is nothing the player could pick to leave it.
+    it("never opens on an unavailable category, even if the stored path is one of its files", function()
+      A.set("EXORCISM", "texture", "source", "path")
+      A.set("EXORCISM", "texture", "path", "Interface\\AddOns\\WeakAuras\\Media\\Textures\\Ring_10px.tga")
+      Panel.Open("EXORCISM")
+      assert.equal("1", Panel.categories:GetValue())
     end)
 
     -- AceGUI's own dispatch (`WidgetBase.Fire`) wraps every callback in `safecall`, so an error
@@ -255,12 +297,14 @@ describe("the texture picker window", function()
       Panel.Open("EXORCISM")
       local frame, picker = Panel.window.frame, Panel.grid
       local button = Panel.okay.frame
+      local blendFrame = Panel.blend.frame
       Panel.Close(false)
 
       assert.is_false(frame:IsShown())
       assert.is_nil(picker.onSelect, "a released grid still calls back into a closed window")
       assert.is_nil(picker.textures)
       assert.is_nil(picker.selected)
+      assert.is_nil(picker.blendMode, "a released grid still remembers the blend mode it drew")
       for _, cell in ipairs(picker.cells) do
         assert.is_false(cell:IsShown(), "a cell went back to the pool still drawing a texture")
         assert.is_nil(cell.elmiraPath)
@@ -268,10 +312,12 @@ describe("the texture picker window", function()
       end
       assert.equal(_G.UIParent, button:GetParent(), "a button of ours stayed on the pooled frame")
       assert.equal(_G.UIParent, picker.frame:GetParent())
-      -- Every one of the five child fields itself, not only what it points at, is forgotten -- a
+      assert.equal(_G.UIParent, blendFrame:GetParent(), "the Blend mode dropdown stayed on the pooled frame")
+      -- Every one of the six child fields itself, not only what it points at, is forgotten -- a
       -- stale `TexturePanel.okay` reaching a released Button is exactly the same class of leak.
       assert.is_nil(Panel.grid)
       assert.is_nil(Panel.categories)
+      assert.is_nil(Panel.blend)
       assert.is_nil(Panel.search)
       assert.is_nil(Panel.okay)
       assert.is_nil(Panel.cancel)
@@ -322,7 +368,7 @@ describe("the texture picker window", function()
       Panel.Open("EXORCISM")
       Panel.Close(false)
       Panel.Open("JUDGEMENT")
-      for _, widget in ipairs({ Panel.categories, Panel.search, Panel.okay, Panel.cancel }) do
+      for _, widget in ipairs({ Panel.categories, Panel.blend, Panel.search, Panel.okay, Panel.cancel }) do
         assert.equal(1, widget.frame:GetNumPoints())
       end
       assert.equal(2, Panel.grid.frame:GetNumPoints(), "the grid is anchored on two corners")
@@ -343,18 +389,27 @@ describe("the texture picker window", function()
     end)
   end)
 
-  describe("the WeakAuras categories (AT4-D3)", function()
-    it("are absent on a character without it and present on one with it", function()
+  describe("the WeakAuras categories (AT4-D3, TX1-D6)", function()
+    it("are marked unavailable without it and unmarked on a character with it", function()
       Panel.Open("EXORCISM")
-      local offered = {}
-      for _, group in ipairs(ns.Textures.libraryGroups()) do offered[#offered + 1] = group.key end
-      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers" }, offered)
+      local offered, marks = {}, {}
+      for _, group in ipairs(ns.Textures.libraryGroups()) do
+        offered[#offered + 1] = group.key
+        marks[group.key] = group.unavailable
+      end
+      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers",
+                    "weakauras", "powerauras" }, offered)
+      assert.equal("WeakAuras", marks.weakauras)
+      assert.equal("WeakAuras", marks.powerauras)
 
       Panel.Close(false)
       ns.Textures.libraryGroups = function()
         return ns.TextureLibrary.groups(function(name) return name == "WeakAuras" end)
       end
       Panel.Open("EXORCISM")
+      for _, group in ipairs(ns.Textures.libraryGroups()) do
+        assert.is_nil(group.unavailable, group.key .. " must carry no marker with WeakAuras loaded")
+      end
       Panel.categories:Fire("OnValueChanged", "9")   -- PowerAuras, the last category
       assert.equal(145, #cells())
     end)
@@ -409,7 +464,7 @@ describe("the texture picker window", function()
       local c = Panel.categories
       assert.equal(Panel.window.content, c.frame:GetParent())
       assert.equal("Category", c.label:GetText())
-      assert.equal(260, c.frame:GetWidth())
+      assert.equal(200, c.frame:GetWidth())
       assert.is_true(c.frame:IsShown())
       local _, rel, relPoint, x, y = c.frame:GetPoint(1)
       assert.equal("TOPLEFT", select(1, c.frame:GetPoint(1)))
@@ -423,7 +478,7 @@ describe("the texture picker window", function()
       local s = Panel.search
       assert.equal(Panel.window.content, s.frame:GetParent())
       assert.equal("Search", s.label:GetText())
-      assert.equal(260, s.frame:GetWidth())
+      assert.equal(200, s.frame:GetWidth())
       assert.is_false(s.button:IsShown(), "a search box needs no separate go-button")
       -- The button is already hidden fresh off the pool (AceGUI's own OnAcquire), which is not
       -- evidence of anything -- typing is what would normally reveal it (AceGUIWidget-EditBox.lua's
@@ -439,6 +494,72 @@ describe("the texture picker window", function()
       assert.equal("TOPRIGHT", relPoint)
       assert.same({ 0, 0 }, { x, y })
     end)
+
+    -- TX1-D3: a third control between Category and Search, in the same strip, at 200 px so all
+    -- three fit the 686 px content width.
+    it("labels, sizes and centres the Blend mode dropdown between Category and Search", function()
+      Panel.Open("EXORCISM")
+      local b = Panel.blend
+      assert.equal(Panel.window.content, b.frame:GetParent())
+      assert.equal("Blend mode", b.label:GetText())
+      assert.equal(200, b.frame:GetWidth())
+      assert.is_true(b.frame:IsShown())
+      local point, rel, relPoint, x, y = b.frame:GetPoint(1)
+      assert.equal("TOP", point)
+      assert.equal(Panel.window.content, rel)
+      assert.equal("TOP", relPoint)
+      assert.same({ 0, 0 }, { x, y })
+    end)
+
+    it("opens on the ability's own blend mode, Opaque by default", function()
+      Panel.Open("EXORCISM")
+      assert.equal("blend", Panel.blend:GetValue())
+      Panel.Close(false)
+      A.set("JUDGEMENT", "texture", "blend", "add")
+      Panel.Open("JUDGEMENT")
+      assert.equal("add", Panel.blend:GetValue())
+    end)
+
+    -- D2: the grid's previews follow the same mode, so Runes and other additive art stop showing
+    -- a black square the moment the picker itself is switched to Glow.
+    it("switches every visible cell's preview to the picked blend mode, live", function()
+      Panel.Open("EXORCISM")
+      for _, cell in ipairs(cells()) do
+        assert.equal("BLEND", cell.elmiraIcon:GetBlendMode(), "Opaque previews must draw BLEND")
+      end
+      Panel.blend:Fire("OnValueChanged", "add")
+      assert.equal(8, #cells(), "the grid was not refilled for the new blend mode")
+      for _, cell in ipairs(cells()) do
+        assert.equal("ADD", cell.elmiraIcon:GetBlendMode(), "Glow previews must draw ADD")
+      end
+    end)
+
+    it("repaints the on-screen texture and writes the setting when the dropdown changes", function()
+      Panel.Open("EXORCISM")
+      Panel.blend:Fire("OnValueChanged", "add")
+      assert.equal("add", A.effective("EXORCISM", "texture").blend)
+      assert.equal(1, refreshes, "the on-screen texture did not repaint for the new blend mode")
+    end)
+  end)
+
+  describe("Cancel restores the blend mode too (TX1-D4)", function()
+    it("puts the blend mode back on Cancel, keeps it on Okay", function()
+      A.set("EXORCISM", "texture", "blend", "blend")
+      Panel.Open("EXORCISM")
+      Panel.blend:Fire("OnValueChanged", "add")
+      assert.equal("add", A.effective("EXORCISM", "texture").blend)
+      Panel.cancel.frame:Click()
+      assert.equal("blend", A.effective("EXORCISM", "texture").blend,
+        "Cancel left the blend mode on whatever was last clicked")
+    end)
+
+    it("keeps the new blend mode when Okay closes the window", function()
+      A.set("EXORCISM", "texture", "blend", "blend")
+      Panel.Open("EXORCISM")
+      Panel.blend:Fire("OnValueChanged", "add")
+      Panel.okay.frame:Click()
+      assert.equal("add", A.effective("EXORCISM", "texture").blend)
+    end)
   end)
 
   -- Every widget is CLEARED before it is re-anchored: `SetPoint` only ever ADDS an anchor, so a
@@ -449,7 +570,7 @@ describe("the texture picker window", function()
     Panel.Open("EXORCISM")
     Panel.Close(false)
     Panel.Open("JUDGEMENT")
-    for _, widget in ipairs({ Panel.categories, Panel.search, Panel.okay, Panel.cancel }) do
+    for _, widget in ipairs({ Panel.categories, Panel.blend, Panel.search, Panel.okay, Panel.cancel }) do
       assert.equal(1, widget.frame:GetNumPoints())
     end
     assert.equal(2, Panel.grid.frame:GetNumPoints(), "the grid is anchored on two corners, not a pile of four")

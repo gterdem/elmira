@@ -236,6 +236,15 @@ describe("Display.Textures", function()
       assert.equal("ADD", showing()[1].textures[1].blendMode)
     end)
 
+    -- TX1-D1: the one mapping `paint` above calls, and the only place the picker window
+    -- (Options/TexturePanel.lua) has to resolve the same answer for its own grid.
+    it("blendModeFor maps the setting to the client's own blend mode name", function()
+      assert.equal("ADD", Textures.blendModeFor("add"))
+      assert.equal("BLEND", Textures.blendModeFor("blend"))
+      assert.equal("BLEND", Textures.blendModeFor(nil), "an unset blend must fall back to BLEND")
+      assert.equal("BLEND", Textures.blendModeFor("nonsense"))
+    end)
+
     it("draws the chosen file in the chosen colour at the chosen size", function()
       switchOn("EXORCISM")
       A.setInherit("EXORCISM", "texture", false)
@@ -1227,18 +1236,28 @@ describe("Display.Textures", function()
       assert.is_false(Textures.addonLoaded("WeakAuras"))
     end)
 
-    it("drops the WeakAuras categories on a character that is not running it", function()
-      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers" },
-        keysOf(Textures.libraryGroups()))
-      withAddons({ WeakAuras = true })
+    -- TX1-D6 (owner): a category whose addon this character lacks stays in the list, marked
+    -- `unavailable`, rather than vanishing -- the picker greys it out instead of hiding it.
+    it("marks the WeakAuras categories unavailable rather than dropping them", function()
+      local groups = Textures.libraryGroups()
       assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers",
-                    "weakauras", "powerauras" }, keysOf(Textures.libraryGroups()))
+                    "weakauras", "powerauras" }, keysOf(groups))
+      assert.equal("WeakAuras", groups[8].unavailable)
+      assert.equal("WeakAuras", groups[9].unavailable)
+      withAddons({ WeakAuras = true })
+      local loaded = Textures.libraryGroups()
+      assert.is_nil(loaded[8].unavailable)
+      assert.is_nil(loaded[9].unavailable)
     end)
 
     -- LibSharedMedia's category is LIVE -- whatever media packs this player runs -- so it is built
     -- here rather than listed in the library, and it is absent altogether when they run none.
     it("adds the player's own media packs, bar textures and backgrounds alike, once each", function()
-      assert.is_falsy(keysOf(Textures.libraryGroups())[8], "a media category with no media library")
+      -- TX1-D6: sharedmedia's own absence is what this line checks now -- the WeakAuras pair are
+      -- always present (marked unavailable), so the list length alone no longer says this.
+      local withoutMedia, found = Textures.libraryGroups(), false
+      for _, g in ipairs(withoutMedia) do if g.key == "sharedmedia" then found = true end end
+      assert.is_false(found, "a media category with no media library")
       local media = {
         List = function(_, kind)
           if kind == "statusbar" then return { "Smooth", "Shared" } end
@@ -1248,8 +1267,8 @@ describe("Display.Textures", function()
       }
       _G.LibStub = function(name) return name == "LibSharedMedia-3.0" and media or nil end
       local groups = Textures.libraryGroups()
-      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers", "sharedmedia" },
-        keysOf(groups))
+      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers", "sharedmedia",
+                    "weakauras", "powerauras" }, keysOf(groups))
       local entries = groups[8].textures
       assert.equal(3, #entries, "a file registered under both types was listed twice")
       assert.same({ path = "Interface\\Media\\Smooth", name = "Smooth" }, entries[1])

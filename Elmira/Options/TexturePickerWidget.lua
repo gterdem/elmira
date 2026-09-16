@@ -161,6 +161,10 @@ local function redraw(self)
     -- `tonumber` tells them apart, which is what lets Blizzard's own art (addressable only by id on
     -- this client) sit in the same grid as a file path.
     cell.elmiraIcon:SetTexture(tonumber(entry.path) or entry.path)
+    -- TX1-D2: `self.blendMode` already arrived as the client's own mode name ("ADD"/"BLEND") --
+    -- resolved by the window (Options/TexturePanel.lua) through Display/Textures.blendModeFor, the
+    -- one mapping this addon has, so this file still reads nothing from `ns`.
+    if cell.elmiraIcon.SetBlendMode then cell.elmiraIcon:SetBlendMode(self.blendMode or "BLEND") end
     cell:ClearAllPoints()
     cell:SetPoint("TOPLEFT", self.content, "TOPLEFT", column * (CELL + GAP), -y)
     cell:Show()
@@ -190,7 +194,8 @@ local methods = {
   -- its CONTENTS' state rather than the table, so an acquired picker starts from a pool of hidden,
   -- blank cells.
   ["OnAcquire"] = function(self)
-    self.textures, self.selected, self.onSelect, self.scrollOffset = nil, nil, nil, 0
+    self.textures, self.selected, self.onSelect, self.scrollOffset, self.blendMode =
+      nil, nil, nil, 0, nil
     if self.scroll.SetVerticalScroll then self.scroll:SetVerticalScroll(0) end
     redraw(self)
   end,
@@ -201,20 +206,22 @@ local methods = {
   -- cross-addon state and a release can happen without the cursor ever leaving a cell.
   ["OnRelease"] = function(self)
     hideTooltip()
-    self.textures, self.selected, self.onSelect = nil, nil, nil
+    self.textures, self.selected, self.onSelect, self.blendMode = nil, nil, nil, nil
     self.scrollOffset = 0
     if self.scroll.SetVerticalScroll then self.scroll:SetVerticalScroll(0) end
     redraw(self)
   end,
 
   -- `textures` is the finished, already-filtered list ({ path =, name = }); `selected` is the path
-  -- drawn with the gold border; `onSelect` is what a click calls. The window hands all three over
-  -- again whenever the category or the search text changes.
+  -- drawn with the gold border; `onSelect` is what a click calls; `blendMode` is the client's own
+  -- mode name (TX1-D2), already resolved by the window. The window hands all four over again
+  -- whenever the category, the search text or the Blend mode dropdown changes.
   ["SetCustomData"] = function(self, data)
     data = data or {}
     self.textures = data.textures
     self.selected = data.selected
     self.onSelect = data.onSelect
+    self.blendMode = data.blendMode
     -- Back to the top on a new list: the scroll offset from a 145-picture category would otherwise
     -- leave a 6-picture one showing nothing but empty space.
     if data.keepScroll ~= true and self.scroll.SetVerticalScroll then

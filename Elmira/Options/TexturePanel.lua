@@ -35,7 +35,10 @@ local WINDOW_W, WINDOW_H = 720, 560
 -- leaving it anchor-derived -- a frame that has only just been parented answers 0 to GetWidth, and
 -- a grid that measures 0 lays every texture in the category out in a single column.
 local WINDOW_INSET = 34
-local CONTROL_W = 260
+-- TX1-D3: 260 -> 200 so Category, Blend mode and Search all fit across the 686 px content width
+-- (WINDOW_W - WINDOW_INSET) in the same 50 px strip; the category and search anchors themselves do
+-- not move.
+local CONTROL_W = 200
 local CONTROLS_H = 50           -- the strip the dropdown and the search box sit in
 local BUTTONS_H = 30            -- the strip Okay and Cancel sit in
 local BUTTON_W = 100
@@ -48,7 +51,7 @@ local BUTTON_W = 100
 -- The rest is bookkeeping. One declaration for the lot: separately, deleting any of them only makes
 -- a global, which luacheck fails on and no test can see.
 local activeKey, groups, groupIndex, needle -- mutants: equivalent deletion only makes it a global; luacheck catches that
-local beforeSource, beforePath -- mutants: equivalent deletion only makes it a global; luacheck catches that
+local beforeSource, beforePath, beforeBlend -- mutants: equivalent deletion only makes it a global; luacheck catches that
 -- are WE releasing the window, or did the player press its X
 local closing = false -- mutants: equivalent deletion only makes it a global; luacheck catches that
 
@@ -73,6 +76,20 @@ end
 local function effective(key)
   local A = AS()
   return (A and A.effective(key, "texture")) or {}
+end
+
+-- TX1-D6. The window's own status line: normally which ability is being chosen for, but a stored
+-- path that needs an addon this character lacks (AT4-D3's own `Textures.missingAddon`) says so
+-- instead -- the one sentence a player staring at a picker full of pictures actually needs, rather
+-- than a title that repeats what the tab already told them.
+local function statusText(key)
+  local T = ns.Textures
+  local missing = T and T.missingAddon and T.missingAddon(effective(key))
+  if missing then
+    return string.format(L["This texture needs %s enabled on this character."], missing)
+  end
+  return string.format(L["Choosing a texture for %s"],
+    (ns.Display and ns.Display.spellName and ns.Display.spellName(key)) or key)
 end
 
 -- The path the ability is drawing right now, which is what the grid highlights. Never nil: an empty
@@ -110,6 +127,24 @@ local function applyPath(path)
   return true -- mutants: equivalent the one caller (fillGrid's onSelect) uses this as a bare statement
 end
 
+-- TX1-D3. The blend mode this ability's Texture tab is set to, the same field and the same "blend"
+-- fallback Options/Spells.lua's own select reads -- this window's dropdown is a second control on
+-- the SAME setting, not a setting of its own.
+local function currentBlend()
+  return effective(activeKey).blend or "blend"
+end
+
+-- Written straight into the ability, live, the same as a cell click: the on-screen texture repaints
+-- under the new mode and the grid (D2) redraws every preview under it too, so Runes stops looking
+-- like a wall of black squares the moment Glow is picked.
+local function applyBlend(v)
+  local A = AS()
+  if not (A and activeKey) then return false end
+  A.set(activeKey, "texture", "blend", v)
+  if ns.Textures then ns.Textures.Refresh() end
+  return true -- mutants: equivalent the one caller (the dropdown's OnValueChanged) uses this as a bare statement
+end
+
 -- The current category, filtered by whatever is typed in the search box. `matches` is the library's
 -- own plain-substring test -- never a Lua pattern, which would error the moment somebody typed `%`.
 local function visibleTextures()
@@ -128,9 +163,13 @@ local function fillGrid(keepScroll)
   -- mutants: `keepScroll` is equivalent -- every call site below passes literal `false`, which
   -- reads the same as the field being absent (the widget's own `data.keepScroll ~= true` check),
   -- so nobody currently distinguishes it from nil either way.
+  -- TX1-D2: resolved here, through the one mapping (Display/Textures.blendModeFor), rather than in
+  -- the widget -- ElmiraTexturePicker reads nothing from `ns`.
+  local T = ns.Textures
   grid:SetCustomData({
     textures = visibleTextures(),
     selected = currentPath(),
+    blendMode = (T and T.blendModeFor and T.blendModeFor(currentBlend())) or "BLEND",
     keepScroll = keepScroll == true, -- mutants: equivalent see above
     onSelect = function(path)
       applyPath(path)
@@ -143,31 +182,42 @@ local function fillGrid(keepScroll)
 end
 
 -- The dropdown's list, in the library's own order, with the category names taken through the locale
--- here rather than in Display/TextureLibrary.lua, which holds no `L` of its own.
+-- here rather than in Display/TextureLibrary.lua, which holds no `L` of its own. TX1-D6: a group
+-- the library marked `unavailable` (its addon is not running on this character) is still LISTED --
+-- its name grows the reason -- and its id comes back a third time, in `disabled`, so `Open` can grey
+-- it out in the dropdown rather than merely naming it oddly.
 local function categoryList()
-  local values, order = {}, {}
+  local values, order, disabled = {}, {}, {}
   for i, group in ipairs(groups or {}) do
     local id = tostring(i)
-    values[id] = L[group.name] or group.name
+    if group.unavailable then
+      values[id] = string.format(L["%s (needs %s)"], L[group.name] or group.name, group.unavailable)
+      disabled[#disabled + 1] = id
+    else
+      values[id] = L[group.name] or group.name
+    end
     order[#order + 1] = id
   end
-  return values, order
+  return values, order, disabled
 end
 
 -- Which category to open on: the one holding the texture this ability is already drawing, so a
 -- player who opens the picker to change their mind lands on what they chose last time. First
--- category otherwise.
+-- category otherwise -- and TX1-D6 never a group the addon it needs is missing for, which a grid
+-- opened straight onto would show as a disabled dropdown entry with nothing to change it to.
 local function indexOfCurrent()
   local path = currentPath()
   for i, group in ipairs(groups or {}) do
-    for _, entry in ipairs(group.textures) do
-      if entry.path == path then return i end
+    if not group.unavailable then
+      for _, entry in ipairs(group.textures) do
+        if entry.path == path then return i end
+      end
     end
   end
   return 1
 end
 
-local CHILDREN = { "grid", "categories", "search", "okay", "cancel" }
+local CHILDREN = { "grid", "categories", "blend", "search", "okay", "cancel" }
 
 local function releaseChildren()
   for _, field in ipairs(CHILDREN) do
@@ -188,6 +238,8 @@ function TexturePanel.Close(cancelled)
   if cancelled and activeKey and AS() then
     AS().set(activeKey, "texture", "source", beforeSource)
     AS().set(activeKey, "texture", "path", beforePath)
+    -- TX1-D4: the blend mode is part of what browsing changed, so Cancel puts it back too.
+    AS().set(activeKey, "texture", "blend", beforeBlend)
     if ns.Textures then ns.Textures.Refresh() end
   end
   closing = true
@@ -198,7 +250,7 @@ function TexturePanel.Close(cancelled)
   -- mutants: this clear is equivalent -- `Open` always overwrites both fields (below) before Close
   -- could ever read them again, and the guard above (`cancelled and activeKey and AS()`) already
   -- read them for THIS call before this line runs; nothing reads them while the window is shut.
-  beforeSource, beforePath = nil, nil -- mutants: equivalent see above
+  beforeSource, beforePath, beforeBlend = nil, nil, nil -- mutants: equivalent see above
   -- The Texture tab is showing the path in a text field; it is not rebuilt by a click in a window
   -- of ours, so say so. Through Rotation.notifyChange -- the addon's one NotifyChange call site --
   -- rather than a second LibStub lookup that could disagree with it.
@@ -218,7 +270,7 @@ function TexturePanel.Open(key)
 
   activeKey = key
   local e = A.effective(key, "texture")
-  beforeSource, beforePath = e.source or "icon", e.path or ""
+  beforeSource, beforePath, beforeBlend = e.source or "icon", e.path or "", e.blend or "blend"
   groups = ns.Textures.libraryGroups()
   -- mutants: this reset is equivalent -- Close (line 196 above) already nils `needle` before this
   -- runs, on every path that reaches here (a fresh session or the `Close(false)` just above), and
@@ -230,8 +282,7 @@ function TexturePanel.Open(key)
   if not window then activeKey = nil; return false end
   TexturePanel.window = window
   window:SetTitle(L["Elmira — Texture Picker"])
-  window:SetStatusText(string.format(L["Choosing a texture for %s"],
-    (ns.Display and ns.Display.spellName and ns.Display.spellName(key)) or key))
+  window:SetStatusText(statusText(key))
   window:SetWidth(WINDOW_W)
   window:SetHeight(WINDOW_H)
   -- The X, and anything else that hides the window, means Cancel -- the one exit that has not said
@@ -248,8 +299,13 @@ function TexturePanel.Open(key)
   categories.frame:SetParent(content)
   categories:SetLabel(L["Category"])
   categories:SetWidth(CONTROL_W)
-  local values, order = categoryList()
+  local values, order, disabledIds = categoryList()
   categories:SetList(values, order)
+  -- TX1-D6: greyed rather than gone -- a category the current character's addons cannot back is
+  -- still visible in the list, just not selectable.
+  for _, id in ipairs(disabledIds) do
+    if categories.SetItemDisabled then categories:SetItemDisabled(id, true) end
+  end
   categories:SetValue(tostring(groupIndex))
   categories:SetCallback("OnValueChanged", function(_, _, value)
     groupIndex = tonumber(value) or 1
@@ -262,6 +318,27 @@ function TexturePanel.Open(key)
   categories.frame:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
   categories.frame:Show()
   TexturePanel.categories = categories
+
+  -- TX1-D3: the same setting, same values, same order as the Texture tab's own select
+  -- (Options/Spells.lua) -- that control is UNCHANGED, this is a second way to reach it from
+  -- inside the picker, live like a cell click.
+  local blend = AceGUI:Create("Dropdown")
+  blend.frame:SetParent(content)
+  blend:SetLabel(L["Blend mode"])
+  blend:SetWidth(CONTROL_W)
+  blend:SetList({ blend = L["Opaque"], add = L["Glow"] }, { "blend", "add" })
+  blend:SetValue(currentBlend())
+  blend:SetCallback("OnValueChanged", function(_, _, value)
+    applyBlend(value)
+    fillGrid(false)
+  end)
+  -- mutants: this clear is equivalent -- AceGUI:Release already runs
+  -- `widget.frame:ClearAllPoints()` on every widget it hands back to the
+  -- pool (AceGUI-3.0.lua:196), before this file ever re-anchors one.
+  blend.frame:ClearAllPoints() -- mutants: equivalent see above
+  blend.frame:SetPoint("TOP", content, "TOP", 0, 0)
+  blend.frame:Show()
+  TexturePanel.blend = blend
 
   local search = AceGUI:Create("EditBox")
   search.frame:SetParent(content)

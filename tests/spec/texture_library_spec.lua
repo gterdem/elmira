@@ -113,15 +113,32 @@ describe("Display.TextureLibrary", function()
   end)
 
   describe("groups(isLoaded)", function()
-    it("drops the WeakAuras categories on a character that is not running it", function()
-      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers" },
-        keysOf(Library.groups(function() return false end)))
-      -- nil predicate is the same answer: a caller that cannot ask must not offer files that would
-      -- draw nothing.
-      assert.equal(7, #Library.groups(nil))
+    -- TX1-D6 (owner): a category whose addon is not loaded is LISTED, marked `unavailable`, rather
+    -- than dropped -- the picker greys it out with a reason instead of making it vanish.
+    it("marks the WeakAuras categories unavailable rather than dropping them", function()
+      local list = Library.groups(function() return false end)
+      assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers",
+                    "weakauras", "powerauras" }, keysOf(list))
+      local function byKey(key)
+        for _, g in ipairs(list) do if g.key == key then return g end end
+      end
+      assert.equal("WeakAuras", byKey("weakauras").unavailable)
+      assert.equal("WeakAuras", byKey("powerauras").unavailable)
+      -- Every other category is still fully available, and its texture list is untouched.
+      assert.is_nil(byKey("elmira").unavailable)
+      assert.equal(8, #byKey("elmira").textures)
+      assert.equal(35, #byKey("weakauras").textures, "the marked group must keep its own textures")
+      -- nil predicate is the same answer as false: a caller that cannot ask must not claim the
+      -- addon is loaded.
+      local nilList = Library.groups(nil)
+      for _, g in ipairs(nilList) do
+        if g.key == "weakauras" or g.key == "powerauras" then
+          assert.equal("WeakAuras", g.unavailable)
+        end
+      end
     end)
 
-    it("offers them to one that is", function()
+    it("offers them unmarked to one that is running WeakAuras", function()
       local asked = {}
       local list = Library.groups(function(name)
         asked[#asked + 1] = name
@@ -130,10 +147,19 @@ describe("Display.TextureLibrary", function()
       assert.same({ "elmira", "beams", "icons", "pvp", "runes", "sparks", "markers",
                     "weakauras", "powerauras" }, keysOf(list))
       assert.same({ "WeakAuras", "WeakAuras" }, asked, "the addon is named, not assumed")
+      for _, g in ipairs(list) do
+        assert.is_nil(g.unavailable, g.key .. " must carry no marker once its addon is loaded")
+      end
     end)
 
     it("hands back the same texture tables, never copies", function()
       assert.equal(group("elmira").textures, Library.groups(nil)[1].textures)
+      -- Marked or not, the WeakAuras group's own texture LIST is the shared one, not a copy --
+      -- only the wrapping group table is new, for the marker alone.
+      local marked = Library.groups(function() return false end)
+      for _, g in ipairs(marked) do
+        if g.key == "weakauras" then assert.equal(group("weakauras").textures, g.textures) end
+      end
     end)
   end)
 

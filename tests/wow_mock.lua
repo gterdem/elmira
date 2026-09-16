@@ -355,6 +355,11 @@ function CreateFrame(frameType, name, parent, template)
   function frame:SetFrameLevel(v) self.__level = v end
   -- Counted, not swallowed: "this window opened above the one that was already there" is the only
   -- difference between a button that works and one that looks like it did nothing.
+  -- TX1-D2: the texture picker's grid repaints every cell in the ability's blend mode, so the
+  -- picker's own additive art (Runes, Sparks...) previews the way it will actually draw rather
+  -- than under the client's default BLEND.
+  function r:SetBlendMode(v) self.__blendMode = v end
+  function r:GetBlendMode() return self.__blendMode end
   function frame:Raise() self.__raised = (self.__raised or 0) + 1 end
   function frame:GetFrameLevel() return self.__level or 1 end
   function frame:GetRegions() return unpack(self.__regions) end

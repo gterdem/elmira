@@ -69,9 +69,15 @@ Textures.FILLS = { "none", "cooldown", "buff" }
 -- The two blend modes WeakAuras exposes for aura art, under its names: "blend" = the client's
 -- BLEND (normal, the texture's pixels replace what is behind them -- "Opaque") and "add" = ADD
 -- (additive: black vanishes, bright parts glow and overlap brightens -- "Glow", what the
--- PowerAuras arcs were drawn for). Anything else falls back to "blend". The values live directly
--- in the `blend == "add"` check below and in Options/Spells.lua's own `values` list; nothing reads
--- a shared list of them, so there is no `Textures.BLENDS` any more.
+-- PowerAuras arcs were drawn for). Anything else falls back to "blend". The two setting VALUES
+-- ("blend"/"add") still live only in Options/Spells.lua's own `values` list; there is no
+-- `Textures.BLENDS`. What IS shared, since TX1-D1, is the one-line MAPPING from a setting to the
+-- client's own blend mode name, below -- both `paint` here and the texture picker window
+-- (Options/TexturePanel.lua, which resolves it before handing a picker its custom data) call it, so
+-- an additive category can never look transparent under one and opaque under the other.
+function Textures.blendModeFor(blend)
+  return blend == "add" and "ADD" or "BLEND"
+end
 
 local frames = {}               -- ability key -> the frame currently showing it
 local pool = {}                 -- frames nothing is using
@@ -208,8 +214,9 @@ local function sharedMediaTextures()
   return out
 end
 
--- The categories this character can actually see, in the order the picker's dropdown offers them:
--- the library's own fixed ones, with LibSharedMedia's live one before the two that need WeakAuras.
+-- Every category, in the order the picker's dropdown offers them: the library's own fixed ones,
+-- with LibSharedMedia's live one before the two that need WeakAuras -- present whether or not this
+-- character runs it (TX1-D6, `TextureLibrary.groups` marks rather than drops one it does not have).
 -- `Textures.addonLoaded` is itself the predicate the library asks with, so "is WeakAuras here" is
 -- answered in one place for the picker, the tab and the diagnostic alike.
 function Textures.libraryGroups()
@@ -217,16 +224,15 @@ function Textures.libraryGroups()
   if not lib then return {} end
   local out, media = {}, sharedMediaTextures()
   for _, group in ipairs(lib.groups(Textures.addonLoaded)) do
-    -- Before the WeakAuras pair, which are the last two the library declares; on a client without
-    -- WeakAuras that is simply the end of the list.
+    -- Before the WeakAuras pair, which are the last two the library declares -- and TX1-D6 means
+    -- they are ALWAYS in this list (marked `unavailable` rather than dropped when the addon is
+    -- not running), so a live media category always finds a `requires` group to land in front of;
+    -- there is no longer a case where the loop ends with media still unflushed.
     if group.requires and #media > 0 then
       out[#out + 1] = { key = "sharedmedia", name = "LibSharedMedia Textures", textures = media }
       media = {}
     end
     out[#out + 1] = group
-  end
-  if #media > 0 then
-    out[#out + 1] = { key = "sharedmedia", name = "LibSharedMedia Textures", textures = media }
   end
   return out
 end
@@ -440,7 +446,7 @@ local function paint(f, key, e)
   local file = Textures.texturePath(e, key) or (MEDIA .. "shape_ring")
   f.icon:SetTexture(ns.TextureLibrary and ns.TextureLibrary.drawable(file) or file)
   if f.icon.SetBlendMode then
-    f.icon:SetBlendMode(e.blend == "add" and "ADD" or "BLEND")
+    f.icon:SetBlendMode(Textures.blendModeFor(e.blend))
   end
   local c = e.color
   if type(c) == "table" then

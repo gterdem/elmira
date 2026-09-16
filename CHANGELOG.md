@@ -1,5 +1,9 @@
 # Changelog
 ## Unreleased
+- **Changed: the texture picker shows every texture in the blend mode the ability uses, and has its
+  own Blend mode control** — Blizzard's icons and runes are drawn for Glow, which is why they showed
+  a black square under Opaque; categories that need WeakAuras stay listed, greyed, instead of
+  vanishing.
 - **Added: Mage.** Fire, Frost (Spellfrost) and a Frost leveling playstyle from the Phase 8 sims and
   guides — Fire Blast (Overheat) into Hot Streak Pyroblasts and 5 stacks of Fire Vulnerability from
   Scorch; Frost's Deep Freeze and Ice Lance shatter combo off Fingers of Frost; a Frost leveling build

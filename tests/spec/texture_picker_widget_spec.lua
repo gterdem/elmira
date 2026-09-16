@@ -97,6 +97,32 @@ describe("Elmira/Options/TexturePickerWidget.lua (the picker grid)", function()
       assert.equal("b", picker.cells[2].elmiraIcon:GetTexture())
     end)
 
+    -- TX1-D2: the window resolves the ability's blend mode into the client's own name and hands it
+    -- through here; every visible cell draws under it, so Runes and other additive art no longer
+    -- previews as a black square while the picker's own mode is Opaque.
+    it("draws every shown cell in the blend mode it was handed", function()
+      local picker = newPicker()
+      picker:SetCustomData{
+        textures = { { path = "a" }, { path = "b" } }, blendMode = "ADD",
+      }
+      assert.equal("ADD", picker.cells[1].elmiraIcon:GetBlendMode())
+      assert.equal("ADD", picker.cells[2].elmiraIcon:GetBlendMode())
+    end)
+
+    it("falls back to BLEND when no blend mode is given", function()
+      local picker = newPicker()
+      picker:SetCustomData{ textures = { { path = "a" } } }
+      assert.equal("BLEND", picker.cells[1].elmiraIcon:GetBlendMode())
+    end)
+
+    it("redraws every cell under the new mode when the blend mode changes without the list changing",
+      function()
+      local picker = newPicker()
+      picker:SetCustomData{ textures = { { path = "a" } }, blendMode = "BLEND" }
+      picker:SetCustomData{ textures = { { path = "a" } }, blendMode = "ADD" }
+      assert.equal("ADD", picker.cells[1].elmiraIcon:GetBlendMode())
+    end)
+
     -- A Blizzard entry is a numeric file id and has to reach SetTexture as a NUMBER; a path arrives
     -- as a string -- the one thing that lets the same grid draw both kinds of entry.
     it("passes a numeric-looking path to SetTexture as an actual number", function()
@@ -358,6 +384,15 @@ describe("Elmira/Options/TexturePickerWidget.lua (the picker grid)", function()
       assert.is_false(cellBefore:IsShown(), "the old cell must not still be on screen")
       cellBefore:Click()
       assert.is_false(firedAfterRelease)
+    end)
+
+    -- The next addon to acquire this pooled widget must not draw ITS previews in the mode the
+    -- last window (ours) left behind.
+    it("forgets the blend mode on release", function()
+      local picker = newPicker()
+      picker:SetCustomData{ textures = { { path = "a" } }, blendMode = "ADD" }
+      AceGUI:Release(picker)
+      assert.is_nil(picker.blendMode)
     end)
 
     -- Read off the very table `AceGUI:Release` was just handed, before anything re-acquires it:
